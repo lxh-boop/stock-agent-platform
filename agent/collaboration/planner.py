@@ -560,6 +560,323 @@ class CoordinatorPlanner:
         )
         return normalized
 
+    def _plan_needs_with_bindings(
+        self,
+        *,
+        query: str,
+        effect_limit: str,
+        run_id: str,
+        language: str,
+        initial_context_names: set[str],
+        memory_summary: str,
+        worker_descriptions: list[dict[str, Any]],
+        context_binding: dict[str, Any] | None = None,
+        request_id: str = "",
+        request_target: dict[str, Any] | None = None,
+        request_constraints: list[str] | None = None,
+        reuse_candidates: list[dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        """合并规划：一次 LLM 调用同时生成 Need 清单并为每个 Need 声明 binding。
+
+        每个 Need 生成时直接二选一声明：
+        - worker_binding：走计算路线（选 Worker + 调用目标 + 计划产出名）
+        - reuse_binding：走复用路线（引用候选轮次显示编号 + 可选派生参数，不声明产出名）
+
+        返回 (full_need_contract, worker_need_contract, worker_call_plan, reuse_decisions)：
+        - full_need_contract：全部 Need（含复用满足的），供审计与静态节点生成
+        - worker_need_contract：仅计算路线的 Need，供 Worker DAG 确定性编译
+        - worker_call_plan：从 worker_binding 确定性归并出的 Worker 调用计划
+        - reuse_decisions：复用决策清单（need_id/turn_id/derive_args）
+        """
+
+        worker_by_id = {str(row["worker_id"]): row for row in worker_descriptions}
+        binding_context = dict(context_binding or {})
+        freshness = str(binding_context.get("freshness_expectation") or "unspecified")
+        # 允许的复用引用 = 规则层 1 精筛后实际注入的候选（LLM 只能引用看得见的）
+        allowed_turn_ids = {
+            str(item.get("turn_id") or "")
+            for item in list(reuse_candidates or [])
+            if str(item.get("turn_id") or "").strip()
+        }
+
+        def validate(payload: dict[str, Any]) -> None:
+            if not isinstance(payload, dict):
+                raise WorkerContractViolation("merged_planning_not_object", "$")
+            raw_needs = payload.get("needs")
+            if not isinstance(raw_needs, list) or not raw_needs:
+                raise WorkerContractViolation("request_needs_required", "$.needs")
+            proposal_output_seen = False
+            for index, row in enumerate(raw_needs):
+                path = f"$.needs[{index}]"
+                if not isinstance(row, dict) or not str(row.get("description") or "").strip():
+                    raise WorkerContractViolation("request_need_description_required", path)
+                normalized = self.need_compiler.normalize_need_requirements(
+                    need_id=f"N{index + 1:02d}",
+                    raw_requirements=row.get("requirements") or [],
+                    strict=True,
+                )
+                # binding 二选一必填：不能都空（悬空），不能都填（路线冲突）
+                binding = row.get("binding") if isinstance(row.get("binding"), dict) else {}
+                worker_binding = binding.get("worker_binding") if isinstance(binding.get("worker_binding"), dict) else None
+                reuse_binding = binding.get("reuse_binding") if isinstance(binding.get("reuse_binding"), dict) else None
+                if bool(worker_binding) == bool(reuse_binding):
+                    raise WorkerContractViolation("need_binding_exactly_one_required", f"{path}.binding")
+                if worker_binding:
+                    worker_id = str(worker_binding.get("worker_id") or "").strip().upper()
+                    if worker_id not in worker_by_id:
+                        raise WorkerContractViolation("unknown_worker_call", f"{path}.binding.worker_binding.worker_id", worker_id)
+                    desired_names = {str(item) for item in worker_binding.get("desired_output_data_names") or [] if str(item)}
+                    if not desired_names:
+                        raise WorkerContractViolation("worker_call_output_data_required", f"{path}.binding.worker_binding.desired_output_data_names")
+                    unsupported = {
+                        name for name in desired_names
+                        if not self._worker_supports_output(worker_by_id[worker_id], name)
+                    }
+                    if unsupported:
+                        raise WorkerContractViolation(
+                            "worker_call_output_outside_worker",
+                            f"{path}.binding.worker_binding.desired_output_data_names",
+                            self._worker_output_contract_error_detail(worker_by_id[worker_id], unsupported),
+                        )
+                    for requirement in normalized:
+                        if requirement.get("direction") != "output":
+                            continue
+                        if str(requirement.get("data_name") or "") in {"proposal", "rebalance"}:
+                            proposal_output_seen = True
+                if reuse_binding:
+                    turn_id = str(reuse_binding.get("turn_id") or "").strip()
+                    if turn_id not in allowed_turn_ids:
+                        # 复用引用必须来自注入候选（防幻觉）
+                        raise WorkerContractViolation("reuse_binding_unknown_turn", f"{path}.binding.reuse_binding.turn_id", turn_id)
+                    if freshness == "latest":
+                        # latest 意图禁任何复用绑定
+                        raise WorkerContractViolation("reuse_binding_forbidden_for_latest", f"{path}.binding.reuse_binding")
+                    if effect_limit == "proposal":
+                        # Proposal 请求必须真实计算产出方案，禁止复用
+                        raise WorkerContractViolation("reuse_binding_forbidden_for_proposal", f"{path}.binding.reuse_binding")
+            if effect_limit == "proposal" and not proposal_output_seen:
+                raise WorkerContractViolation(
+                    "proposal_request_missing_proposal_output_need",
+                    "$.needs",
+                    "proposal-capable READ Request must contain a Need whose output is a proposal/rebalance result",
+                )
+
+        semantic_catalog = self.registry.semantic_requirement_catalog()
+        authoritative_constraints = list(dict.fromkeys(
+            str(item).strip() for item in (request_constraints or []) if str(item).strip()
+        ))
+        authoritative_target = dict(request_target or {})
+        candidate_view = [
+            {
+                "turn_id": str(item.get("turn_id") or ""),
+                "trade_date": str(item.get("trade_date") or ""),
+                "answer_excerpt": str(item.get("answer_excerpt") or ""),
+            }
+            for item in list(reuse_candidates or [])
+        ]
+        payload = self.llm_service.generate_json(
+            stage="upfront_merged_need_worker_planning",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是MainAgent的合并规划阶段。Request Decomposer已经完成业务语义规范化；"
+                        "request_objective、request_target、request_constraints是当前Request的权威语义，禁止重新改写、概括、扩大或缩小。"
+                        "你的职责是一次性完成两件事：把完成该Request所必需的信息/分析/方案需求拆成少量、明确的needs；"
+                        "并在生成每个Need时直接声明它的执行方式binding。"
+                        "每个business Need必须至少包含一个direction=output的requirement。requirements只允许从semantic_requirement_catalog选择semantic_key；"
+                        "不得自行发明数据名称/参数名。direction=input表示完成本Need必须先具备的系统事实；direction=output表示本Need希望系统产生的业务结果；"
+                        "direction=parameter只用于用户必须明确决定、系统不可替用户决定的情景参数。"
+                        "用户问‘应该怎么调整/应该配多少’时，目标仓位通常是系统应产生的output，不是用户parameter。"
+                        "通用证券分析不得自行扩大用户要求。Business Request内部不要声明user_report/user_facing_report作为业务输出。"
+                        "binding二选一必填：走计算路线填worker_binding（worker_id必须来自worker_descriptions，"
+                        "desired_output_data_names必须字面匹配该Worker的produced_data_patterns硬命名合同，已有能力优先复用output_data_examples，"
+                        "private_tool_passthrough只能从private_tool_semantic_outputs选择）；"
+                        "走复用路线填reuse_binding（turn_id只能引用reuse_candidates中出现的编号，derive_args只声明派生方向如{\"top_n\":5}，"
+                        "不需要也不允许声明产出名，产出由系统从共享存储注册）。两者不能同时填，也不能同时空。"
+                        "reuse_candidates是历史轮次的完整回答裁剪版：只有当你确认某轮回答的内容确实满足该Need的分析方向时才允许reuse_binding；"
+                        "方向不同、内容不满足、或freshness_expectation=latest时禁止reuse_binding。"
+                        "多个Need可以绑定同一个Worker；一个Need只能有一个binding。"
+                        "不要选择Tool，不要生成DAG，不要输出私有Prompt。只输出JSON。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": compact_json_dumps({
+                        "request_id": str(request_id or ""),
+                        "request_objective": str(query or "").strip(),
+                        "request_target": authoritative_target,
+                        "request_constraints": authoritative_constraints,
+                        "effect_limit": effect_limit,
+                        "reply_language": language,
+                        "context_binding": binding_context,
+                        "available_context_kinds": sorted(initial_context_names),
+                        "authoritative_entity_refs_available": "authoritative_entity_refs" in initial_context_names,
+                        "session_summary": str(memory_summary or "")[:1400],
+                        "semantic_requirement_catalog": semantic_catalog,
+                        "worker_descriptions": worker_descriptions,
+                        "reuse_candidates": candidate_view,
+                        "required_output_shape": {
+                            "needs": [{
+                                "description": "完成当前Request所必需的一个信息/分析/方案需求",
+                                "required": True,
+                                "requirements": [{
+                                    "semantic_key": "must come from semantic_requirement_catalog",
+                                    "direction": "input|output|parameter",
+                                    "required": True,
+                                    "required_paths": [],
+                                }],
+                                "binding": {
+                                    "worker_binding": {
+                                        "worker_id": "Wxx from worker_descriptions",
+                                        "objective": "该Worker在本轮承担的业务目标",
+                                        "desired_output_data_names": ["符合该Worker produced_data_patterns 的稳定业务数据名称"],
+                                    },
+                                    "reuse_binding": None,
+                                },
+                            }],
+                            "selection_reason": "只解释每个Need为什么走计算或复用",
+                        },
+                    }),
+                },
+            ],
+            max_output_tokens=3000,
+            validator=validate,
+            operation=f"upfront_merged_planning:{effect_limit}",
+            disable_thinking=False,
+            repair_mode="targeted",
+            repair_guidance=(
+                "只修复Need、注册语义Requirement与binding。每个Need的binding二选一必填："
+                "worker_binding的worker_id必须来自worker_descriptions且产出名匹配produced_data_patterns；"
+                "reuse_binding的turn_id只能引用reuse_candidates中的编号，latest意图与proposal请求禁止reuse_binding；"
+                "不得重新解释用户请求，不得输出Tool或DAG。"
+            ),
+        )
+
+        # 归一化 Need 并沉淀 binding 注解
+        normalized_needs: list[dict[str, Any]] = []
+        reuse_decisions: list[dict[str, Any]] = []
+        for index, raw in enumerate(payload.get("needs") or [], start=1):
+            row = dict(raw or {})
+            need_id = self._normalize_need_id(index)
+            raw_requirements = [dict(item) for item in row.get("requirements") or [] if isinstance(item, dict)]
+            has_non_report_output = any(
+                str(item.get("direction") or "") == "output"
+                and str(item.get("semantic_key") or "") != "user_report"
+                for item in raw_requirements
+            )
+            if has_non_report_output:
+                raw_requirements = [
+                    item for item in raw_requirements
+                    if not (
+                        str(item.get("direction") or "") == "output"
+                        and str(item.get("semantic_key") or "") == "user_report"
+                    )
+                ]
+            binding = dict(row.get("binding") or {})
+            if isinstance(binding.get("worker_binding"), dict) and binding.get("worker_binding"):
+                worker_binding = dict(binding["worker_binding"])
+                binding_annotation = {
+                    "type": "worker",
+                    "worker_id": str(worker_binding.get("worker_id") or "").strip().upper(),
+                    "objective": str(worker_binding.get("objective") or "").strip(),
+                    "desired_output_data_names": list(dict.fromkeys(
+                        str(item) for item in worker_binding.get("desired_output_data_names") or [] if str(item)
+                    )),
+                }
+            else:
+                reuse_binding = dict(binding.get("reuse_binding") or {})
+                derive_args = reuse_binding.get("derive_args") if isinstance(reuse_binding.get("derive_args"), dict) else {}
+                binding_annotation = {
+                    "type": "reuse",
+                    "turn_id": str(reuse_binding.get("turn_id") or "").strip(),
+                    "derive_args": dict(derive_args),
+                }
+                reuse_decisions.append({
+                    "need_id": need_id,
+                    "turn_id": binding_annotation["turn_id"],
+                    "derive_args": dict(derive_args),
+                })
+            normalized_needs.append({
+                "need_id": need_id,
+                "request_id": str(request_id or ""),
+                "kind": "business",
+                "description": str(row.get("description") or "").strip(),
+                "required": bool(row.get("required", True)),
+                "requirements": self.need_compiler.normalize_need_requirements(
+                    need_id=need_id,
+                    raw_requirements=raw_requirements,
+                    strict=True,
+                ),
+                "binding": binding_annotation,
+            })
+
+        full_need_contract = {
+            "schema_version": "request_need_contract.v1",
+            "request_id": str(request_id or ""),
+            "request_objective": str(query or "").strip(),
+            "request_target": authoritative_target,
+            "requirement_contract_version": NeedRequirementCompiler.SCHEMA_VERSION,
+            "needs": normalized_needs,
+            "constraints": authoritative_constraints,
+            "effect_limit": "proposal" if effect_limit == "proposal" else "read",
+        }
+        worker_needs = [
+            dict(need) for need in normalized_needs
+            if str(dict(need.get("binding") or {}).get("type") or "") == "worker"
+        ]
+        worker_need_contract = {**full_need_contract, "needs": worker_needs}
+
+        # 从 worker_binding 确定性归并 Worker 调用计划（同 Worker 合并为一次调用）
+        calls: list[dict[str, Any]] = []
+        call_by_worker: dict[str, dict[str, Any]] = {}
+        for need in worker_needs:
+            binding = dict(need.get("binding") or {})
+            worker_id = str(binding.get("worker_id") or "")
+            call = call_by_worker.get(worker_id)
+            if call is None:
+                call = {
+                    "call_id": f"WC{len(calls) + 1:02d}",
+                    "worker_id": worker_id,
+                    "objective": str(binding.get("objective") or "").strip(),
+                    "covers_need_ids": [],
+                    "desired_output_data_names": [],
+                }
+                call_by_worker[worker_id] = call
+                calls.append(call)
+            need_id = str(need.get("need_id") or "")
+            if need_id and need_id not in call["covers_need_ids"]:
+                call["covers_need_ids"].append(need_id)
+            for name in binding.get("desired_output_data_names") or []:
+                if str(name) and str(name) not in call["desired_output_data_names"]:
+                    call["desired_output_data_names"].append(str(name))
+        worker_call_plan = {
+            "worker_calls": calls,
+            "selection_reason": str(payload.get("selection_reason") or "").strip(),
+        }
+        if calls:
+            # 计算路线 Need 的 required output 必须由覆盖它的 Worker 真实产出
+            self.need_compiler.validate_worker_call_need_outputs(
+                request_need_contract=worker_need_contract,
+                worker_calls=calls,
+            )
+
+        flow_event(
+            "MERGED_NEED_WORKER_PLANNING_COMPLETED",
+            {
+                "request_id": str(request_id or ""),
+                "need_count": len(normalized_needs),
+                "worker_bound_need_count": len(worker_needs),
+                "reuse_decisions": reuse_decisions,
+                "worker_call_count": len(calls),
+                "worker_ids": [row["worker_id"] for row in calls],
+                "selection_reason": worker_call_plan["selection_reason"][:1200],
+                "merged_planning_call": True,
+            },
+            run_id=run_id,
+        )
+        return full_need_contract, worker_need_contract, worker_call_plan, reuse_decisions
+
     def _normalize_task_ids(
         self, tasks: list[dict[str, Any]], *, task_id_prefix: str = ""
     ) -> list[dict[str, Any]]:
@@ -787,9 +1104,9 @@ class CoordinatorPlanner:
         meta = {
             "planner": "need_worker_assignment_runtime_compiler",
             "runtime_version": RUNTIME_VERSION,
-            "planning_mode": "request_need_then_worker_assignment_then_runtime_dependency_compile_then_private_tool_dag",
+            "planning_mode": "merged_need_binding_then_runtime_dependency_compile_then_private_tool_dag",
             "worker_selection_owner": "main_agent",
-            "main_agent_llm_planning_stages": ["upfront_request_need_planning", "upfront_worker_call_selection"],
+            "main_agent_llm_planning_stages": ["upfront_merged_need_worker_planning"],
             "worker_dag_build_owner": "runtime_deterministic_compiler",
             "worker_private_planning_owner": "specialist_worker",
             "business_data_owner": "context_bundle_working_memory",
@@ -829,6 +1146,7 @@ class CoordinatorPlanner:
         external_producers: dict[str, list[dict[str, str]]] | None = None,
         request_target: dict[str, Any] | None = None,
         request_constraints: list[str] | None = None,
+        reuse_candidates: list[dict[str, Any]] | None = None,
     ) -> tuple[list[GraphAgentTask], dict[str, Any]]:
         # Request dependencies are execution-order state, not Worker business-data inputs.
         del external_producers
@@ -841,53 +1159,85 @@ class CoordinatorPlanner:
             memory_summary=memory_summary,
         )
         try:
-            request_need_contract = self._plan_request_need_contract(
+            descriptions = self._load_worker_descriptions(effect_limit=request_effect_limit, run_id=run_id)
+            # 合并规划：一次 LLM 调用生成 Need 并声明 binding（替代原来的两次调用）
+            full_need_contract, worker_need_contract, worker_call_plan, reuse_decisions = self._plan_needs_with_bindings(
                 query=query,
                 effect_limit=request_effect_limit,
                 run_id=run_id,
                 language=language,
                 initial_context_names=initial_context_names,
                 memory_summary=memory_summary,
+                worker_descriptions=descriptions,
                 context_binding=context_binding,
                 request_id=request_id,
                 request_target=request_target,
                 request_constraints=request_constraints,
+                reuse_candidates=reuse_candidates,
             )
-            descriptions = self._load_worker_descriptions(effect_limit=request_effect_limit, run_id=run_id)
-            worker_call_plan = self._select_worker_calls(
-                request_need_contract=request_need_contract,
-                worker_descriptions=descriptions,
-                effect_limit=request_effect_limit,
-                run_id=run_id,
-                initial_context_names=initial_context_names,
-            )
-            payload, tasks = self._generate_worker_dag(
-                request_need_contract=request_need_contract,
-                worker_call_plan=worker_call_plan,
-                worker_descriptions=descriptions,
-                effect_limit=request_effect_limit,
-                run_id=run_id,
-                initial_context_names=initial_context_names,
-                task_id_prefix=task_id_prefix,
-            )
-            compiled, meta = self._compile(
-                payload=payload,
-                tasks=tasks,
-                effect_limit=request_effect_limit,
-                session_id=session_id,
-                run_id=run_id,
-                user_id=user_id,
-                focus_refs=focus_refs,
-                context_refs=context_refs,
-                as_of_time=as_of_time,
-                initial_context_names=initial_context_names,
-                planning_meta={
-                    "request_need_contract": request_need_contract,
-                    "worker_call_plan": worker_call_plan,
-                    "worker_description_count": len(descriptions),
+            if worker_call_plan["worker_calls"]:
+                payload, tasks = self._generate_worker_dag(
+                    request_need_contract=worker_need_contract,
+                    worker_call_plan=worker_call_plan,
+                    worker_descriptions=descriptions,
+                    effect_limit=request_effect_limit,
+                    run_id=run_id,
+                    initial_context_names=initial_context_names,
+                    task_id_prefix=task_id_prefix,
+                )
+                compiled, meta = self._compile(
+                    payload=payload,
+                    tasks=tasks,
+                    effect_limit=request_effect_limit,
+                    session_id=session_id,
+                    run_id=run_id,
+                    user_id=user_id,
+                    focus_refs=focus_refs,
+                    context_refs=context_refs,
+                    as_of_time=as_of_time,
+                    initial_context_names=initial_context_names,
+                    planning_meta={
+                        "request_need_contract": full_need_contract,
+                        "worker_call_plan": worker_call_plan,
+                        "worker_description_count": len(descriptions),
+                        "request_id": str(request_id or ""),
+                    },
+                )
+            else:
+                # 全复用零 Worker：所有 Need 均由复用满足，无 DAG 可编译
+                goal = {
+                    "goal_summary": str(full_need_contract.get("request_objective") or "").strip(),
+                    "desired_outputs": [],
+                    "required_context_names": [],
+                    "effect_limit": str(full_need_contract.get("effect_limit") or "read"),
+                    "request_need_ids": [str(row.get("need_id")) for row in full_need_contract.get("needs") or [] if row.get("need_id")],
+                }
+                compiled = []
+                meta = {
+                    "planner": "merged_need_binding_planner",
+                    "runtime_version": RUNTIME_VERSION,
+                    "planning_mode": "merged_need_binding_all_reuse",
+                    "worker_selection_owner": "main_agent",
+                    "main_agent_llm_planning_stages": ["upfront_merged_need_worker_planning"],
+                    "worker_dag_build_owner": "runtime_deterministic_compiler",
+                    "raw_request_semantic_owner": "request_bundle.objective",
                     "request_id": str(request_id or ""),
-                },
-            )
+                    "task_count": 0,
+                    "goal_contract": goal,
+                    "request_need_contract": full_need_contract,
+                    "worker_call_plan": worker_call_plan,
+                    "capability_plan": {"goal_contract": goal, "tasks": [], "contract_expansion_mode": "all_needs_reuse_satisfied"},
+                    "task_dependencies": {},
+                }
+                flow_event(
+                    "WORKER_DAG_SKIPPED_ALL_REUSE",
+                    {
+                        "request_id": str(request_id or ""),
+                        "reuse_decisions": reuse_decisions,
+                    },
+                    run_id=run_id,
+                )
+            meta["reuse_decisions"] = reuse_decisions
             meta["planning_gap_repair"] = {
                 "repair_count": 0,
                 "max_repairs": 0,

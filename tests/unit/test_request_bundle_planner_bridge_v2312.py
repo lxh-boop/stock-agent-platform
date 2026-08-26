@@ -25,7 +25,7 @@ class _BusinessNeedLLM:
     def generate_json(self, **kwargs):
         stage = kwargs["stage"]
         self.stages.append(stage)
-        if stage == "upfront_request_need_planning":
+        if stage == "upfront_merged_need_worker_planning":
             payload = {
                 "needs": [{
                     "description": "基于当前Request可见的工作记忆形成比较分析",
@@ -35,16 +35,13 @@ class _BusinessNeedLLM:
                         "direction": "output",
                         "required": True,
                     }],
-                }],
-            }
-        elif stage == "upfront_worker_call_selection":
-            payload = {
-                "worker_calls": [{
-                    "call_id": "WC01",
-                    "worker_id": "W09",
-                    "objective": "基于当前Request目标形成比较分析",
-                    "covers_need_ids": ["N01"],
-                    "desired_output_data_names": ["analysis"],
+                    "binding": {
+                        "worker_binding": {
+                            "worker_id": "W09",
+                            "objective": "基于当前Request目标形成比较分析",
+                            "desired_output_data_names": ["analysis"],
+                        },
+                    },
                 }],
                 "selection_reason": "W09负责形成结构化分析",
             }
@@ -79,7 +76,7 @@ def _plan(request_id: str = "R03"):
 def test_business_request_need_carries_authoritative_request_fields_and_no_per_request_final_worker() -> None:
     llm, tasks, meta = _plan()
 
-    assert llm.stages == ["upfront_request_need_planning", "upfront_worker_call_selection"]
+    assert llm.stages == ["upfront_merged_need_worker_planning"]
     assert len(tasks) == 1
     assert tasks[0].task_id == "R03-T01"
     assert tasks[0].worker_id == "W09"

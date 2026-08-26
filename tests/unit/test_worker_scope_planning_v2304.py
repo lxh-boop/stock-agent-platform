@@ -172,7 +172,8 @@ def test_portfolio_adjustment_uses_request_need_then_worker_assignment_without_t
         def generate_json(self, **kwargs):
             stage = kwargs["stage"]
             self.stages.append(stage)
-            if stage == "upfront_request_need_planning":
+            if stage == "upfront_merged_need_worker_planning":
+                # 合并规划：每个 Need 生成时直接声明 worker_binding
                 payload = {
                     "needs": [
                         {
@@ -184,6 +185,11 @@ def test_portfolio_adjustment_uses_request_need_then_worker_assignment_without_t
                                 {"semantic_key": "user_profile", "direction": "output", "required": True},
                                 {"semantic_key": "user_constraints", "direction": "output", "required": True},
                             ],
+                            "binding": {"worker_binding": {
+                                "worker_id": "W02",
+                                "objective": "读取当前持仓、用户画像和交易约束",
+                                "desired_output_data_names": ["portfolio", "positions", "user_profile", "user_constraints"],
+                            }},
                         },
                         {
                             "description": "评估当前组合风险",
@@ -194,6 +200,11 @@ def test_portfolio_adjustment_uses_request_need_then_worker_assignment_without_t
                                 {"semantic_key": "user_constraints", "direction": "input", "required": True},
                                 {"semantic_key": "portfolio_risk", "direction": "output", "required": True},
                             ],
+                            "binding": {"worker_binding": {
+                                "worker_id": "W04",
+                                "objective": "评估当前组合风险",
+                                "desired_output_data_names": ["risk"],
+                            }},
                         },
                         {
                             "description": "形成待审批持仓调整方案",
@@ -204,29 +215,11 @@ def test_portfolio_adjustment_uses_request_need_then_worker_assignment_without_t
                                 {"semantic_key": "rebalance_proposal", "direction": "output", "required": True},
                                 {"semantic_key": "rebalance_instructions", "direction": "output", "required": True},
                             ],
-                        },
-                    ]
-                }
-            elif stage == "upfront_worker_call_selection":
-                payload = {
-                    "worker_calls": [
-                        {
-                            "call_id": "WC01", "worker_id": "W02",
-                            "objective": "读取当前持仓、用户画像和交易约束",
-                            "covers_need_ids": ["N01"],
-                            "desired_output_data_names": ["portfolio", "positions", "user_profile", "user_constraints"],
-                        },
-                        {
-                            "call_id": "WC02", "worker_id": "W04",
-                            "objective": "评估当前组合风险",
-                            "covers_need_ids": ["N02"],
-                            "desired_output_data_names": ["risk"],
-                        },
-                        {
-                            "call_id": "WC03", "worker_id": "W05",
-                            "objective": "形成待审批持仓调整方案",
-                            "covers_need_ids": ["N03"],
-                            "desired_output_data_names": ["proposal", "rebalance"],
+                            "binding": {"worker_binding": {
+                                "worker_id": "W05",
+                                "objective": "形成待审批持仓调整方案",
+                                "desired_output_data_names": ["proposal", "rebalance"],
+                            }},
                         },
                     ],
                     "selection_reason": "W02提供组合与用户事实，W04评估风险，W05形成Proposal。",
@@ -248,7 +241,7 @@ def test_portfolio_adjustment_uses_request_need_then_worker_assignment_without_t
         request_id="R01", request_target={"portfolio": "current"},
     )
 
-    assert llm.stages == ["upfront_request_need_planning", "upfront_worker_call_selection"]
+    assert llm.stages == ["upfront_merged_need_worker_planning"]
     assert [task.worker_id for task in tasks] == ["W02", "W04", "W05"]
     assert tasks[0].dependency_task_ids == []
     assert tasks[1].dependency_task_ids == ["T01"]

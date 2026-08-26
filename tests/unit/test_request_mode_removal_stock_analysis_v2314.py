@@ -41,56 +41,77 @@ class _StockLLM:
     def generate_json(self, **kwargs):
         stage = kwargs["stage"]
         self.stages.append(stage)
-        if stage == "upfront_request_need_planning":
+        if stage == "upfront_merged_need_worker_planning":
+            # 合并规划：每个 Need 生成时直接声明 worker_binding
             if self.ranked:
-                requirements = [
-                    {"semantic_key": "market_ranking", "direction": "output", "required": True},
-                    {"semantic_key": "entity_model_signals", "direction": "output", "required": True},
-                    {"semantic_key": "entity_analysis", "direction": "output", "required": True},
-                ]
-                description = "定位模型排名第一的股票并形成实体分析"
-            else:
-                requirements = [
-                    {"semantic_key": "external_evidence", "direction": "output", "required": True},
-                    {"semantic_key": "entity_model_signals", "direction": "output", "required": True},
-                    {"semantic_key": "entity_analysis", "direction": "output", "required": True},
-                    {"semantic_key": "entity_uncertainty", "direction": "output", "required": True},
-                ]
-                description = "形成目标证券分析"
-            payload = {
-                "needs": [{"description": description, "required": True, "requirements": requirements}],
-            }
-        elif stage == "upfront_worker_call_selection":
-            if self.ranked:
-                calls = [
+                needs = [
                     {
-                        "call_id": "WC01", "worker_id": "W02",
-                        "objective": "定位排名第一实体并查询内部数据",
-                        "covers_need_ids": ["N01"],
-                        "desired_output_data_names": ["ranking", "prediction"],
+                        "description": "定位模型排名第一的股票并查询内部数据",
+                        "required": True,
+                        "requirements": [
+                            {"semantic_key": "market_ranking", "direction": "output", "required": True},
+                            {"semantic_key": "entity_model_signals", "direction": "output", "required": True},
+                        ],
+                        "binding": {"worker_binding": {
+                            "worker_id": "W02",
+                            "objective": "定位排名第一实体并查询内部数据",
+                            "desired_output_data_names": ["ranking", "prediction"],
+                        }},
                     },
                     {
-                        "call_id": "WC02", "worker_id": "W09",
-                        "objective": "分析已定位股票", "covers_need_ids": ["N01"],
-                        "desired_output_data_names": ["analysis"],
+                        "description": "分析已定位股票",
+                        "required": True,
+                        "requirements": [
+                            {"semantic_key": "entity_analysis", "direction": "output", "required": True},
+                        ],
+                        "binding": {"worker_binding": {
+                            "worker_id": "W09",
+                            "objective": "分析已定位股票",
+                            "desired_output_data_names": ["analysis"],
+                        }},
                     },
                 ]
             else:
-                calls = [
+                needs = [
                     {
-                        "call_id": "WC01", "worker_id": "W01", "objective": "查询外部证据",
-                        "covers_need_ids": ["N01"], "desired_output_data_names": ["evidence"],
+                        "description": "查询外部证据",
+                        "required": True,
+                        "requirements": [
+                            {"semantic_key": "external_evidence", "direction": "output", "required": True},
+                        ],
+                        "binding": {"worker_binding": {
+                            "worker_id": "W01",
+                            "objective": "查询外部证据",
+                            "desired_output_data_names": ["evidence"],
+                        }},
                     },
                     {
-                        "call_id": "WC02", "worker_id": "W02", "objective": "查询内部预测",
-                        "covers_need_ids": ["N01"], "desired_output_data_names": ["prediction"],
+                        "description": "查询内部预测",
+                        "required": True,
+                        "requirements": [
+                            {"semantic_key": "entity_model_signals", "direction": "output", "required": True},
+                        ],
+                        "binding": {"worker_binding": {
+                            "worker_id": "W02",
+                            "objective": "查询内部预测",
+                            "desired_output_data_names": ["prediction"],
+                        }},
                     },
                     {
-                        "call_id": "WC03", "worker_id": "W09", "objective": "分析目标证券",
-                        "covers_need_ids": ["N01"], "desired_output_data_names": ["analysis", "analysis_uncertainty"],
+                        "description": "分析目标证券",
+                        "required": True,
+                        "requirements": [
+                            {"semantic_key": "entity_analysis", "direction": "output", "required": True},
+                            {"semantic_key": "entity_uncertainty", "direction": "output", "required": True},
+                        ],
+                        "binding": {"worker_binding": {
+                            "worker_id": "W09",
+                            "objective": "分析目标证券",
+                            "desired_output_data_names": ["analysis", "analysis_uncertainty"],
+                        }},
                     },
                 ]
-            payload = {"worker_calls": calls, "selection_reason": "查询Worker写ContextBundle，W09只分析。"}
+            payload = {"needs": needs, "selection_reason": "查询Worker写ContextBundle，W09只分析。"}
         else:
             raise AssertionError(stage)
         kwargs["validator"](payload)
@@ -161,7 +182,7 @@ def test_generic_stock_analysis_compiles_providers_then_w09_without_business_inp
         focus_refs=[SimpleNamespace(role="focus")], context_refs=[], memory_summary="",
         request_id="R01", task_id_prefix="R01-",
     )
-    assert llm.stages == ["upfront_request_need_planning", "upfront_worker_call_selection"]
+    assert llm.stages == ["upfront_merged_need_worker_planning"]
     assert [task.worker_id for task in tasks] == ["W01", "W02", "W09"]
     assert {name for task in tasks for name in task.expected_data_names} == {
         "evidence", "prediction", "analysis", "analysis_uncertainty"

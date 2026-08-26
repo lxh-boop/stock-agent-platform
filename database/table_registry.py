@@ -54,6 +54,7 @@ TABLE_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
     "memory_links": ("link_id",),
     "user_feedback": ("feedback_id",),
     "artifacts": ("artifact_id",),
+    "agent_turn_summaries": ("turn_id",),
     "strategy_registry": ("strategy_id", "version"),
     "strategy_proposals": ("proposal_id",),
     "strategy_proposal_versions": ("proposal_id", "version"),

@@ -8,7 +8,11 @@ from typing import Any
 from core.llm import LLMService
 from core.llm.prompt_compaction import compact_json_dumps
 
-from .context_binding import ContextBinding, EntityScope, ReferenceEntityType
+from .context_binding import ContextBinding, EntityScope, FreshnessExpectation, ReferenceEntityType
+
+
+# 实体提及角色六枚举（decompose 吸收实体提取后的合法角色集）
+MENTION_ROLES = {"focus", "comparison", "cause", "impact_target", "context", "event"}
 
 
 class RequestCategory(str, Enum):
@@ -78,6 +82,7 @@ class RequestItem:
     action_type: str = ""
     presentation: PresentationRequest | None = None
     context_binding: ContextBinding = field(default_factory=ContextBinding)
+    mentions: list[dict[str, Any]] = field(default_factory=list)  # 金融实体提及（decompose 吸收实体提取，元素为 {"text","role"}）
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,6 +101,7 @@ class RequestItem:
             "action_type": self.action_type,
             "presentation": self.presentation.to_dict() if self.presentation else None,
             "context_binding": self.context_binding.to_dict(),
+            "mentions": [dict(item) for item in self.mentions],
         }
 
 
@@ -105,6 +111,7 @@ class RequestBundle:
     raw_message: str
     schema_version: str = "request_bundle.v2"
     decomposition_source: str = "deterministic_structure+llm_semantics+program_validator"
+    reuse_guards: dict[str, Any] = field(default_factory=dict)  # 复用校验保护面（按显示编号映射真实轮次，仅服务端持有，不进 prompt）
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -265,9 +272,25 @@ class RequestDecomposer:
         execution_context: dict[str, Any] | None,
         language: str,
         run_id: str,
+        reuse_candidates: dict[str, Any] | None = None,
     ) -> RequestBundle:
         structural = deterministic_structure_parse(query)
         relation = _relation_type(execution_context)
+        # 复用候选显示编号集（校验 reuse_reference 防幻觉引用的依据）
+        candidate_turn_ids = {
+            str(item.get("turn_id") or "")
+            for item in list((reuse_candidates or {}).get("items") or [])
+            if str(item.get("turn_id") or "").strip()
+        }
+        candidate_lines = [
+            "- {turn_id} [{freshness}] 用户: {user_summary} | 回答: {assistant_summary}".format(
+                turn_id=str(item.get("turn_id") or ""),
+                freshness=str(item.get("freshness") or "non_trade"),
+                user_summary=str(item.get("user_summary") or ""),
+                assistant_summary=str(item.get("assistant_summary") or ""),
+            )
+            for item in list((reuse_candidates or {}).get("items") or [])
+        ]
 
         def validate_payload(payload: dict[str, Any]) -> None:
             rows = payload.get("requests")
@@ -315,6 +338,36 @@ class RequestDecomposer:
                     raise RequestBundleError(f"invalid_request_entity_scope:{index}")
                 if str(binding.get("reference_entity_type") or "none") not in {item.value for item in ReferenceEntityType}:
                     raise RequestBundleError(f"invalid_request_reference_type:{index}")
+                # 复用字段校验（新增三条 + 写请求拦截）
+                freshness = str(binding.get("freshness_expectation") or FreshnessExpectation.UNSPECIFIED.value)
+                if freshness not in {item.value for item in FreshnessExpectation}:
+                    raise RequestBundleError(f"invalid_freshness_expectation:{index}:{freshness}")
+                reuse_reference = binding.get("reuse_reference")
+                if reuse_reference is not None and not isinstance(reuse_reference, list):
+                    raise RequestBundleError(f"reuse_reference_must_be_array:{index}")
+                reuse_ids = [str(value or "").strip() for value in (reuse_reference or []) if str(value or "").strip()]
+                if freshness in {FreshnessExpectation.LATEST.value, FreshnessExpectation.UNSPECIFIED.value} and reuse_ids:
+                    # 交叉一致性：latest/unspecified 意图下禁止标记复用引用
+                    raise RequestBundleError(f"reuse_reference_forbidden_for_freshness:{index}:{freshness}")
+                unknown_reuse = sorted(set(reuse_ids) - candidate_turn_ids)
+                if unknown_reuse:
+                    # 防幻觉：reuse_reference 必须来自注入的候选集
+                    raise RequestBundleError(f"reuse_reference_unknown_turn:{index}:{','.join(unknown_reuse)}")
+                if category == RequestCategory.BUSINESS.value and str(raw.get("request_type") or "read").lower() == "write" and reuse_ids:
+                    # 写请求永不复用
+                    raise RequestBundleError(f"write_request_cannot_reuse:{index}")
+                # 实体提及校验（decompose 吸收实体提取）
+                mentions = raw.get("mentions")
+                if mentions is not None:
+                    if not isinstance(mentions, list):
+                        raise RequestBundleError(f"request_mentions_must_be_array:{index}")
+                    if len(mentions) > 20:
+                        raise RequestBundleError(f"too_many_entity_mentions:{index}")
+                    for mention in mentions:
+                        if not isinstance(mention, dict) or not str(mention.get("text") or "").strip():
+                            raise RequestBundleError(f"invalid_entity_mention:{index}")
+                        if str(mention.get("role") or "focus") not in MENTION_ROLES:
+                            raise RequestBundleError(f"invalid_entity_role:{index}")
 
         payload = self.llm_service.generate_json(
             stage="request_bundle_decomposition",
@@ -346,6 +399,16 @@ class RequestDecomposer:
                         "PRESENTATION一般不作为业务执行依赖节点，depends_on只用于真正的执行先后关系；如果作用于整轮回答，使用whole_bundle或current_turn。"
                         "context_binding继续用于GraphRef解析：直接点名证券用explicit_entities/security；‘刚刚那只股票’用conversation_focus、"
                         "inherit_previous_focus=true、security；完整持仓用portfolio/portfolio；无金融实体可用none。"
+                        "你还要在同一调用中为每个business Request提取金融实体提及mentions：只提取用户明确指向、且需要进入金融图解析的现实金融对象、新闻/公告/研报或事件。"
+                        "portfolio、account、global、none是业务范围，不能把‘我的持仓’、‘当前账户’等范围词误当成单只证券实体；"
+                        "只有请求中明确出现具体证券、公司、行业、事件或已命名组合对象时才输出mention；不要从常识补充对象，不要决定最终实体ID；"
+                        "没有需要GraphRef解析的明确对象时输出空数组mentions=[]。mention角色只能是focus、comparison、cause、impact_target、context、event。"
+                        "reuse_candidates是历史对话轮次摘要清单。你只能根据摘要判断某轮回答‘可能’满足当前Request，"
+                        "在context_binding.reuse_reference中标记候选turn编号（可多个），这只是粗筛标记，不是最终复用决定，最终由后续规划确认。"
+                        "context_binding.freshness_expectation四态：latest=必须最新数据（此时reuse_reference必须为空）；"
+                        "reusable=旧结果可能直接复用；reference=旧结果作为新计算的参考输入；unspecified=未明确（默认值，此时reuse_reference必须为空）。"
+                        "reuse_reference只能引用reuse_candidates中出现过的turn_id，禁止编造；write类型Request禁止标记reuse_reference；"
+                        "reuse_candidates为空时不得标记任何reuse_reference。"
                         "严格输出JSON，不得输出Worker ID、Need ID、Tool、Capability或实现步骤。"
                     ),
                 },
@@ -356,6 +419,7 @@ class RequestDecomposer:
                         "deterministic_segments": structural,
                         "protocol_relation": relation,
                         "session_summary": str(memory_summary or "")[:3000],
+                        "reuse_candidates": candidate_lines,
                         "current_reply_language": language,
                         "required_output_shape": {
                             "requests": [{
@@ -371,6 +435,7 @@ class RequestDecomposer:
                                 "status": "pending|unsupported",
                                 "reason": "",
                                 "action_type": "confirm_execute|reject|cancel|",
+                                "mentions": [{"text": "具体金融对象", "role": "focus|comparison|cause|impact_target|context|event"}],
                                 "presentation": {
                                     "language": "zh|en|",
                                     "style": "",
@@ -384,6 +449,8 @@ class RequestDecomposer:
                                     "inherit_previous_focus": False,
                                     "reference_entity_type": "security|portfolio|account|event|unknown|none",
                                     "reason": "",
+                                    "freshness_expectation": "latest|reusable|reference|unspecified",
+                                    "reuse_reference": ["turn_01"],
                                 },
                             }]
                         },
@@ -398,6 +465,9 @@ class RequestDecomposer:
             repair_guidance=(
                 "只修复Request清单协议。category只能business/presentation；Business request_type只能read/write；depends_on使用数组位置；"
                 "objective必须是规范化业务目标，target/constraints/presentation必须分离；不得输出Worker、Need、Tool、Capability、Task或执行步骤。"
+                "mentions必须是数组且角色只能focus/comparison/cause/impact_target/context/event；"
+                "freshness_expectation只能latest/reusable/reference/unspecified，latest或unspecified时reuse_reference必须为空；"
+                "reuse_reference只能引用reuse_candidates中的turn_id；write类型Request禁止reuse_reference。"
             ),
         )
 
@@ -445,7 +515,24 @@ class RequestDecomposer:
                     str(raw_binding.get("reference_entity_type") or ReferenceEntityType.NONE.value)
                 ),
                 reason=str(raw_binding.get("reason") or "")[:500],
+                freshness_expectation=FreshnessExpectation(
+                    str(raw_binding.get("freshness_expectation") or FreshnessExpectation.UNSPECIFIED.value)
+                ),
+                reuse_reference=tuple(
+                    str(value).strip()
+                    for value in raw_binding.get("reuse_reference") or []
+                    if str(value or "").strip()
+                )[:10],
             )
+            # 实体提及（decompose 吸收实体提取）：只保留 text 非空的合法条目
+            mentions = [
+                {
+                    "text": str(mention.get("text") or "").strip(),
+                    "role": str(mention.get("role") or "focus").strip(),
+                }
+                for mention in raw.get("mentions") or []
+                if isinstance(mention, dict) and str(mention.get("text") or "").strip()
+            ][:20]
             presentation = None
             if category == RequestCategory.PRESENTATION:
                 p = dict(raw.get("presentation") or {})
@@ -483,6 +570,7 @@ class RequestDecomposer:
                 ),
                 presentation=presentation,
                 context_binding=binding,
+                mentions=mentions,
             ))
 
         # Positional dependency IDs are intentionally normalized by program.
@@ -573,6 +661,8 @@ class RequestDecomposer:
                 ))
 
         bundle = RequestBundle(requests=items, raw_message=str(query or ""))
+        # 复用校验保护面随 bundle 传递（仅服务端使用，不进任何 prompt）
+        bundle.reuse_guards = dict((reuse_candidates or {}).get("guards") or {})
         return self.validator.validate(bundle)
 
 

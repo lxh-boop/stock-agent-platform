@@ -18,6 +18,8 @@ from agent.react.react_context_bridge import (
 from agent.runtime import load_run_snapshot
 from agent.proposals import ProposalStore
 from agent.services.strategy_proposal_service import StrategyProposalService
+from agent.artifacts import ArtifactStore
+from agent.collaboration.turn_inventory import record_turn_summary
 
 
 COMPLIANCE_NOTE = "本项目仅用于机器学习、金融数据分析和项目展示，不构成投资建议，不用于实盘交易。"
@@ -536,12 +538,69 @@ class WebAgentApplicationService:
                 "metadata": {**metadata, "last_run_id": run_id, "last_task_id": task_id},
             }
         )
+        if status == "succeeded" and str(answer or "").strip():
+            # 沉淀轮次摘要（ConversationInventory 数据源）；沉淀失败不阻断主链路
+            try:
+                self._record_turn_summary(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    answer=answer,
+                )
+            except Exception:
+                pass
         return {
             **self._message(dict(row or {})),
             "run_id": run_id,
             "task_id": task_id,
             "result_summary": summary,
         }
+
+    def _record_turn_summary(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        run_id: str,
+        answer: str,
+    ) -> None:
+        # 汇总本轮沉淀所需材料并写入轮次摘要：
+        # 用户提问取最近一条 user 消息；artifact 引用按 run_id 从共享存储回收
+        user_message = ""
+        recent = self.agent.list_recent_messages(conversation_id, user_id, limit=20)
+        for message in reversed(list(recent or [])):
+            if str(message.get("role") or "") == "user":
+                user_message = str(message.get("content") or "")
+                break
+        artifact_refs: list[dict[str, Any]] = []
+        if run_id:
+            rows = ArtifactStore(db_path=self.db_path).list_readable(
+                user_id=user_id,
+                run_id=str(run_id),
+                artifact_type="tool_result",
+                limit=50,
+            )
+            for artifact_row in rows:
+                # 只保留数据级保护所需的最小字段集
+                artifact_refs.append(
+                    {
+                        "artifact_id": str(artifact_row.get("artifact_id") or ""),
+                        "producer_id": str(artifact_row.get("producer_id") or ""),
+                        "produced_outputs": list(artifact_row.get("produced_outputs") or []),
+                        "trade_date": str(artifact_row.get("trade_date") or ""),
+                        "content_hash": str(artifact_row.get("content_hash") or ""),
+                        "expires_at": str(artifact_row.get("expires_at") or ""),
+                    }
+                )
+        record_turn_summary(
+            self.db_path,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            run_id=str(run_id or ""),
+            user_message=user_message,
+            assistant_answer=answer,
+            artifact_refs=artifact_refs,
+        )
 
     def _require_run(self, user_id: str, run_id: str) -> dict[str, Any]:
         user_id = self._user_id(user_id)

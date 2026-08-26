@@ -382,6 +382,7 @@ class ToolExecutor:
                             "agent_type": str(agent_type or ""),
                             **provider_metadata,
                         },
+                        trade_date=str(context.get("trade_date") or ""),
                     )
                     artifact_id = str(artifact_ref.get("artifact_id") or "")
                 except Exception as exc:

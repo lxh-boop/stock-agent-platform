@@ -38,6 +38,7 @@ class Artifact:
     conversation_id: str = ""
     run_id: str = ""
     task_id: str = ""
+    trade_date: str = ""
     producer_type: str = "tool"
     producer_id: str = ""
     content: dict[str, Any] = field(default_factory=dict)
@@ -112,6 +113,16 @@ def artifact_cache_key(intent: str, arguments: dict[str, Any] | None) -> str:
     return _hash(payload)
 
 
+def resolve_current_trade_date() -> str:
+    # 解析当前所属交易日（YYYY-MM-DD）：优先用交易日历取最近交易日，失败时退化为当天日期
+    try:
+        from scheduler.trading_calendar import get_latest_trading_day
+
+        return get_latest_trading_day(datetime.now()).isoformat()
+    except Exception:
+        return datetime.now().strftime("%Y-%m-%d")
+
+
 def infer_artifact_outputs(
     intent: str,
     result: dict[str, Any] | None = None,
@@ -152,9 +163,11 @@ def build_artifact_from_result(
     ttl_minutes: int = 180,
     output_contracts: list[Any] | tuple[Any, ...] | None = None,
     provenance: dict[str, Any] | None = None,
+    trade_date: str = "",
 ) -> Artifact:
     result = _redact(dict(result or {}))
     created_at = _now_text()
+    trade_date = str(trade_date or "") or resolve_current_trade_date()
     expires_at = (datetime.now() + timedelta(minutes=max(1, int(ttl_minutes or 180)))).strftime("%Y-%m-%d %H:%M:%S")
     contract_rows: list[dict[str, Any]] = []
     for item in output_contracts or []:
@@ -214,6 +227,7 @@ def build_artifact_from_result(
         conversation_id=str(conversation_id or ""),
         run_id=str(run_id or ""),
         task_id=str(task_id or ""),
+        trade_date=trade_date,
         producer_type=producer_type,
         producer_id=str(producer_id or ""),
         content=content,
@@ -270,6 +284,7 @@ class ArtifactStore:
                     "project_id": artifact.project_id,
                     "conversation_id": artifact.conversation_id,
                     "task_id": artifact.task_id,
+                    "trade_date": artifact.trade_date,
                     "producer_type": artifact.producer_type,
                     "producer_id": artifact.producer_id,
                     "content_summary": artifact.content_summary,
@@ -412,6 +427,7 @@ def save_tool_result_artifact(
     sources: list[dict[str, Any]] | None = None,
     output_contracts: list[Any] | tuple[Any, ...] | None = None,
     provenance: dict[str, Any] | None = None,
+    trade_date: str = "",
 ) -> dict[str, Any]:
     artifact = build_artifact_from_result(
         user_id=user_id,
@@ -425,5 +441,6 @@ def save_tool_result_artifact(
         sources=sources,
         output_contracts=output_contracts,
         provenance=provenance,
+        trade_date=trade_date,
     )
     return ArtifactStore(db_path=db_path, output_dir=output_dir).save(artifact)

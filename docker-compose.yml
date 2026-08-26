@@ -110,5 +110,4 @@ services:
     stop_grace_period: 10s
 
 volumes:
-  task_runtime_data:
-    name: stock_daily_app_task_runtime
+  task_runtime_data: {name: stock_daily_app_task_runtime}

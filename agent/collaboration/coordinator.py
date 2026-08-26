@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from core.llm import LLMService
-from core.llm.prompt_compaction import compact_json_dumps
 
 from agent.console_trace import flow_event, trace_exception
 from agent.context.context_hydrator import ContextHydrator, ContextRequirement
@@ -32,6 +30,7 @@ from agent.graph.impact_service import GraphImpactService
 from .completion import evaluate_need_completion, flow_decision, non_success_completion_report, validate_completion_report
 from .worker_directory import CapabilityWorkerDirectory, REPORT_WRITER
 from .context_binding import ContextBinding
+from .turn_inventory import build_conversation_inventory, load_candidate_answers
 from .models import GraphAgentTask, GraphWorkerResult, MissingContextItem, ResultStatus
 from .planner import CoordinatorPlanner
 from .presentation_policy import PresentationPolicy, PresentationPolicyResolver, PresentationValidator
@@ -269,67 +268,6 @@ class AgentCollaborationCoordinator:
         item = self.session_state.get(session_id, "active_graph_refs")
         return refs_from(item.value if item is not None else [])
 
-    def _extract_mentions(
-        self,
-        query: str,
-        language: str,
-        context_binding: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        lexical_candidates = self.identity.extract_candidate_mentions(query)
-
-        def validate(payload: dict[str, Any]) -> None:
-            mentions = payload.get("mentions")
-            if not isinstance(mentions, list):
-                raise RuntimeError("entity_mentions_not_list")
-            if len(mentions) > 20:
-                raise RuntimeError("too_many_entity_mentions")
-            for item in mentions:
-                if not isinstance(item, dict) or not str(item.get("text") or "").strip():
-                    raise RuntimeError("invalid_entity_mention")
-                if str(item.get("role") or "focus") not in {
-                    "focus", "comparison", "cause", "impact_target", "context", "event"
-                }:
-                    raise RuntimeError("invalid_entity_role")
-
-        payload = self.llm_service.generate_json(
-            stage="graph_entity_candidate_extraction",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "只从用户当前请求中提取用户明确指向、且需要进入金融图解析的现实金融对象、新闻/公告/研报或事件。"
-                        "context_binding 是 MainAgent 对当前业务范围的语义判断；portfolio、account、global、none 是业务范围，"
-                        "不能把‘我的持仓’、‘当前账户’等范围词误当成单只证券实体。只有请求中明确出现具体证券、公司、行业、事件或已命名组合对象时才输出 mention。"
-                        "lexical_candidates 只是字符串候选，不是权威结论；你必须根据用户目标决定是否保留。"
-                        "不要从常识补充对象，不要生成代码，不要决定最终实体 ID。当前请求中没有需要 GraphRef 解析的明确对象时，"
-                        "仍必须返回顶层 JSON 对象 {\"mentions\":[]}，不得返回顶层数组 []。"
-                        "角色只能是 focus、comparison、cause、impact_target、context、event。"
-                        "严格输出且只能输出一个顶层 JSON 对象，唯一允许的顶层字段为 mentions。"
-                        "有候选时输出 {\"mentions\":[{\"text\":\"具体对象\",\"role\":\"focus\"}]}；"
-                        "无候选时输出 {\"mentions\":[]}。不要输出 Markdown、解释或顶层数组。"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": compact_json_dumps({
-                        "request": query,
-                        "language": language,
-                        "context_binding": dict(context_binding or {}),
-                        "lexical_candidates": list(lexical_candidates or []),
-                    }),
-                },
-            ],
-            max_output_tokens=500,
-            validator=validate,
-            operation="extract_graph_entity_candidates",
-            disable_thinking=True,
-        )
-        return [
-            dict(item)
-            for item in payload.get("mentions") or []
-            if isinstance(item, dict)
-        ][:20]
-
     def _resolve_request_refs(
         self,
         *,
@@ -340,17 +278,15 @@ class AgentCollaborationCoordinator:
         as_of_time: str,
         language: str,
         context_binding: dict[str, Any] | None = None,
+        mentions: list[dict[str, Any]] | None = None,
     ) -> tuple[list[GraphRef], list[MissingContextItem], dict[str, Any]]:
-        extractor = self._extract_mentions
-        try:
-            parameter_count = len(inspect.signature(extractor).parameters)
-        except (TypeError, ValueError):
-            parameter_count = 3
-        mentions = (
-            extractor(query, language, context_binding)
-            if parameter_count >= 3
-            else extractor(query, language)
-        )
+        # 实体提及由 decompose 一次调用产出（实体提取已并入拆请求），
+        # 这里只消费 mentions 做确定性图解析，不再单独调用 LLM
+        mentions = [
+            dict(item)
+            for item in list(mentions or [])
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ][:20]
         explicit_resolved: list[GraphRef] = []
         missing: list[MissingContextItem] = []
         audit: list[dict[str, Any]] = []
@@ -747,12 +683,19 @@ class AgentCollaborationCoordinator:
             },
             run_id=run_id,
         )
+        # 构建复用候选清单（ConversationInventory 唯一入口）；清单不可用时按空候选降级，
+        # 不影响主链路（无候选 = 无复用，一切照常计算）
+        try:
+            reuse_inventory = build_conversation_inventory(self.db_path, user_id=user_id)
+        except Exception:
+            reuse_inventory = {"items": [], "guards": {}}
         bundle = self.request_decomposer.decompose(
             query=query,
             memory_summary=memory_summary,
             execution_context=context,
             language=language,
             run_id=run_id,
+            reuse_candidates=reuse_inventory,
         )
         flow_event("REQUEST_BUNDLE_CREATED", bundle.to_dict(), run_id=run_id)
         for item in bundle.requests:
@@ -895,6 +838,7 @@ class AgentCollaborationCoordinator:
                 request_context["shared_run_context"] = shared_run_context.for_request()
                 request_context["current_user_request"] = item.objective
                 request_context["request_item"] = item.to_dict()
+                request_context["reuse_guards"] = dict(bundle.reuse_guards or {})
                 request_context["dependency_request_ids"] = sorted(dependency_payload)
                 request_context["request_presentation_policy"] = presentation_policy.for_request(item.request_id)
                 flow_event(
@@ -931,6 +875,7 @@ class AgentCollaborationCoordinator:
                         persist_user_turn=False,
                         defer_session_mutations=True,
                         request_source_index=item.source_index,
+                        mentions=list(item.mentions),
                     )
                     status = self._classify_request_result(business_result)
                     business_result["status"] = status.value
@@ -1454,6 +1399,7 @@ class AgentCollaborationCoordinator:
         persist_user_turn: bool = True,
         defer_session_mutations: bool = False,
         request_source_index: int = 0,
+        mentions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         del decomposition
         if self.runtime_services is not None:
@@ -1577,6 +1523,7 @@ class AgentCollaborationCoordinator:
             as_of_time=explicit_as_of,
             language=language,
             context_binding=context_binding.to_dict(),
+            mentions=mentions,
         )
         flow_event(
             "GRAPH_REF_RESOLUTION_COMPLETED",
@@ -1700,6 +1647,23 @@ class AgentCollaborationCoordinator:
             run_id=run_id,
         )
         try:
+            # 规则层 1：对 decompose 粗筛标记的复用候选做精筛（去重截断取完整回答裁剪版）。
+            # 候选加载失败按无候选降级，不影响正常计算路线。
+            reuse_candidates: list[dict[str, Any]] = []
+            reuse_guards = dict(context.get("reuse_guards") or {})
+            marked_turn_ids = [
+                str(turn_id) for turn_id in (context_binding.reuse_reference or ())
+                if str(turn_id) in reuse_guards
+            ]
+            if marked_turn_ids:
+                try:
+                    reuse_candidates = load_candidate_answers(
+                        self.db_path,
+                        guards=reuse_guards,
+                        display_ids=marked_turn_ids,
+                    )
+                except Exception:
+                    reuse_candidates = []
             tasks, plan_meta = self.planner.plan(
                 query=query,
                 effect_limit=read_goal,
@@ -1723,6 +1687,7 @@ class AgentCollaborationCoordinator:
                     str(item) for item in dict(context.get("request_item") or {}).get("constraints") or []
                     if str(item)
                 ],
+                reuse_candidates=reuse_candidates,
             )
         except Exception as exc:
             flow_event(
