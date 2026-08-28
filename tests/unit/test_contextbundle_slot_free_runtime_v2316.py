@@ -52,7 +52,7 @@ def test_contextbundle_carries_unified_artifact_contract_and_provenance():
         provenance={"producer_id": "RISK_ANALYST", "task_id": "T04"},
     )
     view = bundle.business_data_context(entity_refs=[_ref().to_dict()])
-    assert view["schema_version"] == "context_bundle_business_data.v2"
+    assert view["schema_version"] == "run_context_business_data.v1"
     assert view["entities"][0]["contracts"]["portfolio_risk"] == {
         "contract": "portfolio.risk",
         "version": "1.0",
@@ -106,7 +106,7 @@ def test_w09_reads_contextbundle_without_producer_identity():
                 "analysis":[{"claim_id":"A1","statement":"可形成分析"}],
                 "uncertainties":[],"conclusion":"完成"}, ensure_ascii=False)
     task=_task("W09","ENTITY_ANALYST","entity_analysis",["analysis","analysis_uncertainty"])
-    context={"schema_version":"context_bundle_business_data.v1","run_id":"run",
+    context={"schema_version":"run_context_business_data.v1","run_id":"run",
              "entities":[{"entity_ref":_ref().to_dict(),"data":{"prediction":{"rank":229},"evidence":[]}}],
              "global_data":{},"available_names":["evidence","prediction"]}
     result=run_entity_analysis(LLM(),task,working_memory_context=context,language="zh")

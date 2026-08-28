@@ -8,7 +8,9 @@ from typing import Any
 
 from core.llm import LLMService
 
-from agent.console_trace import flow_event, trace_exception
+from agent.console_trace import flow_event, runtime_debug_event, trace_exception
+from agent.artifacts import ArtifactStore
+from agent.capabilities.data_names import LEGACY_OUTPUT_NAME_MAP, normalize_data_name
 from agent.context.context_hydrator import ContextHydrator, ContextRequirement
 from agent.context.context_types import ContextBundle
 from agent.context.context_sufficiency_gate import ContextAndEntitySufficiencyGate
@@ -28,7 +30,7 @@ from agent.graph.provider_adapter import GraphProviderAdapter
 from agent.graph.impact_service import GraphImpactService
 
 from .completion import evaluate_need_completion, flow_decision, non_success_completion_report, validate_completion_report
-from .worker_directory import CapabilityWorkerDirectory, REPORT_WRITER
+from .worker_directory import CapabilityWorkerDirectory, ENTITY_ANALYST, REPORT_WRITER
 from .context_binding import ContextBinding
 from .turn_inventory import build_conversation_inventory, load_candidate_answers
 from .models import GraphAgentTask, GraphWorkerResult, MissingContextItem, ResultStatus
@@ -42,6 +44,54 @@ from .runtime_services import CollaborationRuntimeServices
 from .session_state import SessionStateStore
 from .specialist_runtime import SpecialistRuntime
 from .write_runtime import WriteRequestExecutor
+from .workers.common import execution_safe_value
+
+
+def _canonical_business_name(value: str) -> str:
+    raw = str(value or "").strip()
+    mapped = LEGACY_OUTPUT_NAME_MAP.get(raw, raw)
+    try:
+        return normalize_data_name(mapped)
+    except Exception:
+        return mapped
+
+
+def _artifact_business_values(artifact: dict[str, Any], wanted_outputs: set[str]) -> dict[str, Any]:
+    """Extract canonical reusable BusinessData values from one stored Tool artifact."""
+    content = dict(artifact.get("content") or {}) if isinstance(artifact, dict) else {}
+    result = dict(content.get("result") or {}) if isinstance(content.get("result"), dict) else {}
+    data = dict(result.get("data") or {}) if isinstance(result.get("data"), dict) else {}
+    business_data = dict(data.get("business_data") or {}) if isinstance(data.get("business_data"), dict) else {}
+    slots = dict(data.get("slots") or {}) if isinstance(data.get("slots"), dict) else {}
+    produced_outputs = [
+        _canonical_business_name(value)
+        for value in content.get("produced_outputs") or []
+        if str(value).strip()
+    ]
+    values: dict[str, Any] = {}
+    for wanted in sorted(wanted_outputs):
+        canonical = _canonical_business_name(wanted)
+        if canonical in business_data:
+            values[canonical] = business_data[canonical]
+            continue
+        raw_matches = [
+            key for key in list(business_data) + list(slots) + list(data)
+            if _canonical_business_name(key) == canonical
+        ]
+        if raw_matches:
+            key = raw_matches[0]
+            if key in business_data:
+                values[canonical] = business_data[key]
+            elif key in slots:
+                values[canonical] = slots[key]
+            else:
+                values[canonical] = data[key]
+            continue
+        if canonical in produced_outputs and len(produced_outputs) == 1 and data:
+            # Tool contracts often expose one semantic output slot whose value is the
+            # whole structured data payload rather than a nested key.
+            values[canonical] = data
+    return values
 
 
 def _dedupe_refs(refs: list[GraphRef]) -> list[GraphRef]:
@@ -278,21 +328,48 @@ class AgentCollaborationCoordinator:
         as_of_time: str,
         language: str,
         context_binding: dict[str, Any] | None = None,
-        mentions: list[dict[str, Any]] | None = None,
+        semantic_target: dict[str, Any] | None = None,
+        semantic_entities: list[dict[str, Any]] | None = None,
     ) -> tuple[list[GraphRef], list[MissingContextItem], dict[str, Any]]:
-        # 实体提及由 decompose 一次调用产出（实体提取已并入拆请求），
-        # 这里只消费 mentions 做确定性图解析，不再单独调用 LLM
-        mentions = [
+        """Convert semantic entities into authoritative GraphRefs deterministically.
+
+        LLM output is treated only as natural-language identity evidence.  Node IDs,
+        security codes and canonical GraphRefs are produced exclusively by code +
+        the authoritative graph/session state.
+        """
+
+        target = dict(semantic_target or {})
+        entities = [
             dict(item)
-            for item in list(mentions or [])
+            for item in list(semantic_entities or [])
             if isinstance(item, dict) and str(item.get("text") or "").strip()
         ][:20]
-        explicit_resolved: list[GraphRef] = []
+        target_text = str(target.get("display_text") or "").strip()
+        if str(target.get("status") or "") == "identified" and target_text:
+            if not any(str(item.get("text") or "").strip() == target_text for item in entities):
+                entities.insert(0, {
+                    "text": target_text,
+                    "entity_type": str(target.get("entity_type") or "unknown"),
+                    "role": "focus",
+                    "source": str(target.get("source") or "explicit"),
+                })
+
+        # 先读取本 Request 的上下文绑定。conversation_context 产生的语义实体只是
+        # LLM 的自然语言判断；如果 Session 已存在类型焦点 GraphRef，则类型焦点才是
+        # 指代解析的权威来源，LLM 不能覆盖它。
+        binding = dict(context_binding or {})
+        inherit_previous = bool(binding.get("inherit_previous_focus"))
+        reference_type = str(binding.get("reference_entity_type") or "none").strip().lower()
+        typed_refs = _refs_for_semantic_type(list(typed_inherited_refs or []), reference_type)
+        previous_refs = _refs_for_semantic_type(list(inherited_refs or []), reference_type)
+
+        semantic_resolved: list[GraphRef] = []
         missing: list[MissingContextItem] = []
         audit: list[dict[str, Any]] = []
-        for mention in mentions:
-            text = str(mention.get("text") or "").strip()
-            role = str(mention.get("role") or "focus")
+        for entity in entities:
+            text = str(entity.get("text") or "").strip()
+            role = str(entity.get("role") or "focus")
+            source = str(entity.get("source") or "explicit").strip().lower()
             resolution = self.identity.resolve_request(
                 query,
                 inherited_refs=[],
@@ -300,13 +377,53 @@ class AgentCollaborationCoordinator:
                 as_of_time=as_of_time,
                 explicit_mentions=[text],
             )
-            audit.append({"mention": text, "role": role, "resolution": resolution.to_dict()})
+            audit_row = {
+                "semantic_entity": dict(entity),
+                "resolution": resolution.to_dict(),
+            }
+
+            # 对“它/刚才那只股票”等会话指代，类型焦点是代码侧权威事实。
+            # 语义名称若能解析，必须与该 GraphRef 一致；冲突时阻塞而不是让 LLM 覆盖。
+            conversation_focus_authority = (
+                source == "conversation_context" and role == "focus" and bool(typed_refs)
+            )
+            if conversation_focus_authority:
+                typed_by_id = {ref.node_id: ref for ref in typed_refs}
+                resolved_ids = {ref.node_id for ref in resolution.refs}
+                if resolution.refs and resolved_ids.intersection(typed_by_id):
+                    matched = [typed_by_id[node_id] for node_id in resolved_ids if node_id in typed_by_id]
+                    semantic_resolved.extend(matched)
+                    audit_row["authority_decision"] = "semantic_hint_confirmed_by_typed_focus"
+                    audit.append(audit_row)
+                    continue
+                if resolution.refs and not resolved_ids.intersection(typed_by_id):
+                    missing.append(MissingContextItem(
+                        key="conversation_focus_semantic_conflict",
+                        description=(
+                            f"会话摘要推断出的“{text}”与当前已确认的{reference_type or '实体'}焦点不一致，需要确认具体对象。"
+                            if language != "en" else
+                            "The semantic entity inferred from conversation history conflicts with the authoritative session focus."
+                        ),
+                        expected_format="明确名称、代码或确认沿用当前会话焦点",
+                        reason="conversation-context semantic entity conflicts with authoritative typed session GraphRef",
+                        searched_sources=["session typed GraphRef", "Neo4j identity", "conversation semantic entity"],
+                    ))
+                    audit_row["authority_decision"] = "semantic_hint_conflicts_with_typed_focus"
+                    audit.append(audit_row)
+                    continue
+                # 语义名称本身无法落到图实体时，不让 LLM 的字符串阻塞已有的权威类型焦点。
+                semantic_resolved.extend(typed_refs)
+                audit_row["authority_decision"] = "typed_focus_used_when_semantic_hint_unresolved"
+                audit.append(audit_row)
+                continue
+
+            audit.append(audit_row)
             if resolution.ambiguous_mentions:
                 missing.append(MissingContextItem(
                     key="ambiguous_graph_entity",
                     description=f"“{text}”对应多个金融对象，需要选择具体对象。",
                     expected_format="从候选对象中选择一个",
-                    reason="不能由 LLM 自行决定权威实体。",
+                    reason="语义实体不能替代权威实体解析。",
                     searched_sources=["Neo4j identity", "Neo4j aliases", "Neo4j fulltext candidates"],
                 ))
             elif resolution.unresolved_mentions:
@@ -314,23 +431,17 @@ class AgentCollaborationCoordinator:
                     key="unresolved_graph_entity",
                     description=f"无法在权威金融图中确认“{text}”。",
                     expected_format="明确名称、交易所代码或已导入的 GraphRef",
-                    reason="权威实体不存在或证券主数据尚未导入。",
+                    reason="语义实体存在，但权威实体不存在或证券主数据尚未导入。",
                     searched_sources=["Neo4j identity", "Neo4j aliases"],
                 ))
             else:
-                explicit_resolved.extend(resolution.refs)
-
-        # Current explicit user mentions always win. Whether previous focus is
-        # inherited is a structured MainAgent semantic decision, not a keyword
-        # rule. Account, portfolio, global and entity-free requests therefore do
-        # not accidentally retain a prior single-security focus.
-        binding = dict(context_binding or {})
-        inherit_previous = bool(binding.get("inherit_previous_focus"))
-        reference_type = str(binding.get("reference_entity_type") or "none").strip().lower()
-        typed_refs = _refs_for_semantic_type(list(typed_inherited_refs or []), reference_type)
-        previous_refs = _refs_for_semantic_type(list(inherited_refs or []), reference_type)
-        if explicit_resolved:
-            focus = explicit_resolved
+                semantic_resolved.extend(resolution.refs)
+        if semantic_resolved:
+            focus = semantic_resolved
+        elif missing:
+            # 语义实体已经进入权威解析但发生歧义/冲突/未解析时，禁止偷偷回退到
+            # 上一轮焦点，否则会把“需要用户确认”误变成旧实体继续执行。
+            focus = []
         elif context_refs:
             focus = [
                 ref for ref in context_refs
@@ -340,13 +451,14 @@ class AgentCollaborationCoordinator:
         elif inherit_previous and previous_refs:
             focus = previous_refs
         elif reference_type not in {"", "none", "unknown"} and typed_refs:
-            # Typed focus is a durable per-entity-class conversation pointer. It
-            # survives unrelated portfolio/account turns and is used only when
-            # RequestBundle ContextBinding says the current request refers to that class.
             focus = typed_refs
             audit.append({
-                "mention": "<typed_conversation_focus>",
-                "role": "focus",
+                "semantic_entity": {
+                    "text": "<typed_conversation_focus>",
+                    "entity_type": reference_type,
+                    "role": "focus",
+                    "source": "session_authority",
+                },
                 "resolution": {
                     "source": f"typed_graph_focus:{reference_type}",
                     "ref_count": len(typed_refs),
@@ -356,6 +468,19 @@ class AgentCollaborationCoordinator:
             focus = []
 
         entity_scope = str(binding.get("entity_scope") or "none").strip().lower()
+        target_status = str(target.get("status") or "not_required").strip().lower()
+        if not focus and not missing and target_status == "missing":
+            missing.append(MissingContextItem(
+                key=f"missing_semantic_target:{str(target.get('entity_type') or reference_type or 'unknown')}",
+                description=(
+                    "当前业务需要具体目标对象，但从本轮问题和会话摘要中仍无法确定。"
+                    if language != "en" else
+                    "This request needs a concrete target, but it cannot be identified from the current message and conversation summary."
+                ),
+                expected_format="明确目标名称、代码或可唯一识别的对象描述",
+                reason="semantic_target.status=missing; authority resolution must not invent a target",
+                searched_sources=["current user message", "session summary", f"typed_graph_focus:{reference_type}"],
+            ))
         if (
             not focus
             and reference_type not in {"", "none", "unknown"}
@@ -372,17 +497,18 @@ class AgentCollaborationCoordinator:
                 expected_format="明确名称、代码或已解析GraphRef",
                 reason=(
                     "typed entity reference requested but no authoritative current/typed focus is available; "
-                    "planning must not invent the referenced entity"
+                    "authority resolution must not invent the referenced entity"
                 ),
                 searched_sources=[
-                    "current explicit GraphRef resolution",
+                    "semantic entity GraphRef resolution",
                     "runtime context GraphRefs",
                     "previous active GraphRefs",
                     f"typed_graph_focus:{reference_type}",
                 ],
             ))
         return _dedupe_refs(focus), missing, {
-            "mentions": mentions,
+            "semantic_target": target,
+            "semantic_entities": entities,
             "items": audit,
             "context_binding": binding,
             "typed_focus_source_count": len(typed_refs),
@@ -399,42 +525,169 @@ class AgentCollaborationCoordinator:
 
     @staticmethod
     def _classify_request_result(result: dict[str, Any]) -> RequestStatus:
-        task_results = [
-            dict(item) for item in dict(result.get("task_results") or {}).values()
+        worker_results = [
+            dict(item) for item in dict(result.get("worker_results") or {}).values()
             if isinstance(item, dict)
         ]
         # Proposal creation completes a READ Request. Proposal lifecycle stays
         # independently PENDING_APPROVAL in the canonical ProposalStore.
-        if any(str(item.get("status") or "") == ResultStatus.PROPOSAL_READY.value for item in task_results):
+        if any(str(item.get("status") or "") == ResultStatus.PROPOSAL_READY.value for item in worker_results):
             return RequestStatus.COMPLETED
         failure_kinds = {
             str((item.get("completion") or {}).get("failure_kind") or "")
-            for item in task_results
+            for item in worker_results
             if isinstance(item.get("completion"), dict)
         }
         failure_kinds.update(
             str((item.get("error") or {}).get("error_id") or (item.get("error") or {}).get("code") or "")
-            for item in task_results
+            for item in worker_results
             if isinstance(item.get("error"), dict)
         )
         if "user_input_required" in failure_kinds:
             return RequestStatus.WAITING_USER_INPUT
         if str(result.get("execution_status") or "") == "waiting_context":
             return RequestStatus.WAITING_CONTEXT
+        # A failed provider must not erase useful downstream analysis. If at least
+        # one branch completed and the request is explicitly partial, preserve the
+        # partial result instead of collapsing the whole Request into TOOL_FAILED.
+        if str(result.get("execution_status") or "") == "partially_completed":
+            return RequestStatus.PARTIALLY_COMPLETED
         if any(kind in {"tool_execution_failure", "worker_execution_failure", "structured_output_failure"} or "tool" in kind for kind in failure_kinds if kind):
             return RequestStatus.TOOL_FAILED
         business_statuses = {
             str((item.get("completion") or {}).get("business_status") or "")
-            for item in task_results
+            for item in worker_results
             if isinstance(item.get("completion"), dict)
         }
         if business_statuses and business_statuses <= {"empty", "business_empty"}:
             return RequestStatus.BUSINESS_EMPTY
         if bool(result.get("success")):
             return RequestStatus.COMPLETED
-        if str(result.get("execution_status") or "") == "partially_completed":
-            return RequestStatus.PARTIALLY_COMPLETED
         return RequestStatus.FAILED
+
+    def _materialize_reuse_decisions(
+        self,
+        *,
+        reuse_decisions: list[dict[str, Any]],
+        reuse_candidates: list[dict[str, Any]],
+        request_need_contract: dict[str, Any],
+        user_id: str,
+        session_id: str,
+        run_id: str,
+        focus_refs: list[GraphRef],
+    ) -> dict[str, Any]:
+        """Publish verified historical Artifact values into this RunContextStore.
+
+        Reuse is Need-level. A failed parent Request does not invalidate a successful
+        Tool Artifact; only artifacts whose declared produced_outputs cover the reused
+        Need are materialized.
+        """
+        bundle = self.specialist.context_bundle
+        if bundle is None or not reuse_decisions:
+            return {"materialized": [], "rejected": [], "count": 0}
+
+        candidate_by_turn = {
+            str(item.get("turn_id") or ""): dict(item)
+            for item in reuse_candidates or []
+            if str(item.get("turn_id") or "")
+        }
+        need_by_id = {
+            str(item.get("need_id") or ""): dict(item)
+            for item in request_need_contract.get("needs") or []
+            if isinstance(item, dict) and str(item.get("need_id") or "")
+        }
+        store = ArtifactStore(db_path=self.db_path, output_dir=self.output_dir)
+        entity_ref = focus_refs[0].to_dict() if focus_refs else None
+        materialized: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
+
+        for decision in reuse_decisions:
+            need_id = str(decision.get("need_id") or "")
+            turn_id = str(decision.get("turn_id") or "")
+            candidate = dict(candidate_by_turn.get(turn_id) or {})
+            need = dict(need_by_id.get(need_id) or {})
+            wanted = {
+                str(req.get("data_name") or "")
+                for req in need.get("requirements") or []
+                if req.get("direction") == "output"
+                and req.get("kind") == "data"
+                and req.get("necessity") == "required"
+                and str(req.get("data_name") or "")
+            }
+            if not candidate:
+                rejected.append({"need_id": need_id, "turn_id": turn_id, "reason": "candidate_not_loaded"})
+                continue
+            remaining = set(wanted)
+            for artifact_ref in candidate.get("artifact_refs") or []:
+                if not isinstance(artifact_ref, dict) or not remaining:
+                    continue
+                declared = {
+                    _canonical_business_name(name)
+                    for name in artifact_ref.get("produced_outputs") or []
+                    if str(name).strip()
+                }
+                relevant = remaining.intersection(declared)
+                if not relevant:
+                    continue
+                artifact_id = str(artifact_ref.get("artifact_id") or "")
+                artifact = store.read(
+                    artifact_id,
+                    user_id=user_id,
+                    conversation_id=session_id,
+                ) if artifact_id else None
+                if not artifact:
+                    rejected.append({
+                        "need_id": need_id, "turn_id": turn_id,
+                        "artifact_id": artifact_id, "reason": "artifact_unreadable",
+                    })
+                    continue
+                values = _artifact_business_values(artifact, relevant)
+                for name, value in values.items():
+                    target_ref = None if name == "ranking" else entity_ref
+                    bundle.put_business_data(
+                        entity_ref=target_ref,
+                        name=name,
+                        value=value,
+                        data_time=str(artifact_ref.get("trade_date") or candidate.get("trade_date") or ""),
+                        contract=str(artifact.get("contract") or name),
+                        version=str(artifact.get("version") or "1.0"),
+                        schema_id=str(artifact.get("schema_id") or ""),
+                        provenance={
+                            "producer_type": "historical_artifact",
+                            "artifact_id": artifact_id,
+                            "source_turn_id": turn_id,
+                            "source_run_id": str(candidate.get("source_run_id") or ""),
+                            "reused_for_need_id": need_id,
+                            "reused_into_run_id": run_id,
+                        },
+                    )
+                    remaining.discard(name)
+                    materialized.append({
+                        "need_id": need_id,
+                        "turn_id": turn_id,
+                        "artifact_id": artifact_id,
+                        "data_name": name,
+                    })
+            if remaining:
+                rejected.append({
+                    "need_id": need_id,
+                    "turn_id": turn_id,
+                    "reason": "required_reuse_output_not_materialized",
+                    "missing_data_names": sorted(remaining),
+                })
+
+        payload = {
+            "materialized": materialized,
+            "rejected": rejected,
+            "count": len(materialized),
+        }
+        runtime_debug_event(
+            "REUSE_BUSINESS_DATA_MATERIALIZED",
+            payload,
+            run_id=run_id,
+            level="WARNING" if rejected else "DEBUG",
+        )
+        return payload
 
     def _materialize_request_payload(
         self,
@@ -446,7 +699,7 @@ class AgentCollaborationCoordinator:
         """Build the verified Request payload without a point-to-point data bus."""
         del run_id
         business_data: dict[str, list[Any]] = {}
-        for row in dict(result.get("task_results") or {}).values():
+        for row in dict(result.get("worker_results") or {}).values():
             if not isinstance(row, dict):
                 continue
             data = row.get("data") if isinstance(row.get("data"), dict) else {}
@@ -454,7 +707,7 @@ class AgentCollaborationCoordinator:
             for name, value in values.items():
                 business_data.setdefault(str(name), []).append(value)
         proposal_meta: dict[str, Any] = {}
-        for row in dict(result.get("task_results") or {}).values():
+        for row in dict(result.get("worker_results") or {}).values():
             if not isinstance(row, dict):
                 continue
             metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
@@ -514,7 +767,10 @@ class AgentCollaborationCoordinator:
                 RequestStatus.WAITING_APPROVAL.value,
                 RequestStatus.UNSUPPORTED.value,
                 RequestStatus.PRESENTATION_APPLIED.value,
-                    RequestStatus.BUSINESS_EMPTY.value,
+                RequestStatus.BUSINESS_EMPTY.value,
+                RequestStatus.TOOL_FAILED.value,
+                RequestStatus.FAILED.value,
+                RequestStatus.BLOCKED.value,
             }
         ]
         return {
@@ -634,7 +890,21 @@ class AgentCollaborationCoordinator:
 
     @staticmethod
     def _report_content(result: GraphWorkerResult | None) -> str:
-        if result is None or not isinstance(result.data, dict):
+        """Return W06 content only after the existing FinalReport contract completed.
+
+        W06 validity is decided once, here in Coordinator. Web/API layers must not
+        reinterpret ``success`` or rescan Worker results to decide whether the answer
+        exists.
+        """
+        if result is None or result.status != ResultStatus.COMPLETED:
+            return ""
+        if str(result.output_type or "") != "FinalReport" or not isinstance(result.data, dict):
+            return ""
+        completion = dict(result.completion or {})
+        if not (
+            completion.get("expected_task_completed")
+            and str(completion.get("completion_status") or "") == "completed"
+        ):
             return ""
         content = str(result.data.get("content") or "").strip()
         if content:
@@ -686,7 +956,7 @@ class AgentCollaborationCoordinator:
         # 构建复用候选清单（ConversationInventory 唯一入口）；清单不可用时按空候选降级，
         # 不影响主链路（无候选 = 无复用，一切照常计算）
         try:
-            reuse_inventory = build_conversation_inventory(self.db_path, user_id=user_id)
+            reuse_inventory = build_conversation_inventory(self.db_path, user_id=user_id, debug_run_id=run_id)
         except Exception:
             reuse_inventory = {"items": [], "guards": {}}
         bundle = self.request_decomposer.decompose(
@@ -875,7 +1145,8 @@ class AgentCollaborationCoordinator:
                         persist_user_turn=False,
                         defer_session_mutations=True,
                         request_source_index=item.source_index,
-                        mentions=list(item.mentions),
+                        semantic_target=item.semantic_target.to_dict(),
+                        semantic_entities=[entity.to_dict() for entity in item.semantic_entities],
                     )
                     status = self._classify_request_result(business_result)
                     business_result["status"] = status.value
@@ -1127,6 +1398,31 @@ class AgentCollaborationCoordinator:
             ))
 
         coverage = self._request_coverage(bundle, request_results)
+        runtime_debug_event(
+            "REQUEST_STATE_MACHINE_SNAPSHOT",
+            {
+                "coverage": coverage,
+                "request_results": {
+                    request_id: {
+                        "status": str(result.get("status") or ""),
+                        "reason": str(result.get("reason") or ""),
+                    }
+                    for request_id, result in request_results.items()
+                },
+                "terminal_statuses": [
+                    RequestStatus.COMPLETED.value,
+                    RequestStatus.PARTIALLY_COMPLETED.value,
+                    RequestStatus.WAITING_APPROVAL.value,
+                    RequestStatus.UNSUPPORTED.value,
+                    RequestStatus.PRESENTATION_APPLIED.value,
+                    RequestStatus.BUSINESS_EMPTY.value,
+                    RequestStatus.TOOL_FAILED.value,
+                    RequestStatus.FAILED.value,
+                    RequestStatus.BLOCKED.value,
+                ],
+            },
+            run_id=run_id,
+        )
         flow_event("REQUEST_COVERAGE_COMPLETED", coverage, run_id=run_id)
 
         bundle_results_payload = {
@@ -1264,23 +1560,24 @@ class AgentCollaborationCoordinator:
             task_states={
                 task_id: str((payload or {}).get("status") or "")
                 for request_result in request_results.values()
-                for task_id, payload in dict(request_result.get("task_results") or {}).items()
+                for task_id, payload in dict(request_result.get("worker_results") or {}).items()
                 if isinstance(payload, dict)
             },
             data_refs=[],
+            working_memory_snapshot=run_context_bundle.snapshot_working_memory(),
             missing_parameters=waiting_user,
             missing_context=waiting_context,
             replan_count=sum(int(result.get("replan_count") or 0) for result in request_results.values()),
         ))
 
-        all_task_results: dict[str, Any] = {}
+        all_worker_results: dict[str, Any] = {}
         all_timeline: list[dict[str, Any]] = []
         all_batches: list[dict[str, Any]] = []
         for request_result in request_results.values():
-            all_task_results.update(dict(request_result.get("task_results") or {}))
+            all_worker_results.update(dict(request_result.get("worker_results") or {}))
             all_timeline.extend(list(request_result.get("agent_timeline") or []))
             all_batches.extend(list(request_result.get("execution_batches") or []))
-        all_task_results.update({task_id: result.safe_for_coordinator() for task_id, result in final_results.items()})
+        all_worker_results.update({task_id: result.handoff_view() for task_id, result in final_results.items()})
         all_timeline.extend(final_timeline)
         all_batches.extend(final_batches)
 
@@ -1293,13 +1590,8 @@ class AgentCollaborationCoordinator:
             "request_results": request_results,
             "presentation_policy": presentation_policy.to_dict(),
             "presentation_validation": validation.to_dict(),
-            "task_results": all_task_results,
-            "graph_worker_results": {
-                "contract_version": "graph_worker_results.v1",
-                "items": list(all_task_results.values()),
-                "task_count": len(all_task_results),
-                "request_count": len(bundle.requests),
-            },
+            "worker_results": all_worker_results,
+            "business_outputs": run_context_bundle.business_data_context(),
             "tool_calls": [],
             "internal_tool_call_count": len([row for row in all_timeline if row.get("status") != "not_executed"]),
             "execution_order": [str(row.get("task_id") or "") for row in all_timeline if str(row.get("task_id") or "")],
@@ -1343,12 +1635,11 @@ class AgentCollaborationCoordinator:
             "replan_count": sum(int(result.get("replan_count") or 0) for result in request_results.values()),
             "invalid_replan_block_count": sum(int(result.get("invalid_replan_block_count") or 0) for result in request_results.values()),
             "replan_limits": {"request_scoped": True, "worker_forward_replan_preserved": True},
-            "agent_outputs": all_task_results,
             "agent_timeline": all_timeline,
             "handoff": {
-                "handoff_available": bool(all_task_results),
-                "handoff_count": len(all_task_results),
-                "handoff_refs": [f"worker_result:{task_id}" for task_id in all_task_results],
+                "handoff_available": bool(all_worker_results),
+                "handoff_count": len(all_worker_results),
+                "handoff_refs": [f"worker_result:{task_id}" for task_id in all_worker_results],
                 "safety": {
                     "worker_private_tools": True,
                     "coordinator_tool_visibility": "none",
@@ -1399,7 +1690,8 @@ class AgentCollaborationCoordinator:
         persist_user_turn: bool = True,
         defer_session_mutations: bool = False,
         request_source_index: int = 0,
-        mentions: list[dict[str, Any]] | None = None,
+        semantic_target: dict[str, Any] | None = None,
+        semantic_entities: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         del decomposition
         if self.runtime_services is not None:
@@ -1523,7 +1815,8 @@ class AgentCollaborationCoordinator:
             as_of_time=explicit_as_of,
             language=language,
             context_binding=context_binding.to_dict(),
-            mentions=mentions,
+            semantic_target=semantic_target,
+            semantic_entities=semantic_entities,
         )
         flow_event(
             "GRAPH_REF_RESOLUTION_COMPLETED",
@@ -1661,9 +1954,38 @@ class AgentCollaborationCoordinator:
                         self.db_path,
                         guards=reuse_guards,
                         display_ids=marked_turn_ids,
+                        debug_run_id=run_id,
                     )
-                except Exception:
+                except Exception as exc:
+                    runtime_debug_event(
+                        "REUSE_CANDIDATE_LOAD_FAILED",
+                        {
+                            "marked_turn_ids": marked_turn_ids,
+                            "exception_type": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                        run_id=run_id,
+                        level="ERROR",
+                    )
                     reuse_candidates = []
+            runtime_debug_event(
+                "REUSE_CANDIDATE_SELECTION_FOR_PLANNER",
+                {
+                    "rough_reuse_reference": list(context_binding.reuse_reference or ()),
+                    "guard_turn_ids": sorted(reuse_guards),
+                    "marked_turn_ids": marked_turn_ids,
+                    "loaded_candidates": [
+                        {
+                            "turn_id": row.get("turn_id"),
+                            "freshness": row.get("freshness"),
+                            "reusable_outputs": row.get("reusable_outputs"),
+                            "artifact_count": len(row.get("artifact_refs") or []),
+                        }
+                        for row in reuse_candidates
+                    ],
+                },
+                run_id=run_id,
+            )
             tasks, plan_meta = self.planner.plan(
                 query=query,
                 effect_limit=read_goal,
@@ -1678,17 +2000,26 @@ class AgentCollaborationCoordinator:
                 context_binding=context_binding.to_dict(),
                 request_id=str(request_id or ""),
                 task_id_prefix=str(task_id_prefix or ""),
-                request_target=(
-                    dict(dict(context.get("request_item") or {}).get("target") or {})
-                    if isinstance(dict(context.get("request_item") or {}).get("target"), dict)
-                    else {}
-                ),
+                authoritative_target={
+                    "semantic_target": dict(dict(context.get("request_item") or {}).get("semantic_target") or {}),
+                    "graph_refs": [ref.to_dict() for ref in focus_refs],
+                },
                 request_constraints=[
                     str(item) for item in dict(context.get("request_item") or {}).get("constraints") or []
                     if str(item)
                 ],
                 reuse_candidates=reuse_candidates,
             )
+            reuse_materialization = self._materialize_reuse_decisions(
+                reuse_decisions=list(plan_meta.get("reuse_decisions") or []),
+                reuse_candidates=reuse_candidates,
+                request_need_contract=dict(plan_meta.get("request_need_contract") or {}),
+                user_id=user_id,
+                session_id=session_id,
+                run_id=run_id,
+                focus_refs=focus_refs,
+            )
+            plan_meta["reuse_materialization"] = reuse_materialization
         except Exception as exc:
             flow_event(
                 "WORKER_PLANNING_FAILED",
@@ -1762,6 +2093,7 @@ class AgentCollaborationCoordinator:
         # and side-effect boundary.
         active_tasks = list(tasks)
         replan_audit: list[dict[str, Any]] = []
+        recovery_error_history: list[dict[str, Any]] = []
         invalid_replan_block_count = 0
         max_replan_rounds = 2
         for replan_round in range(1, max_replan_rounds + 1):
@@ -1799,7 +2131,7 @@ class AgentCollaborationCoordinator:
             try:
                 full_tasks, new_tasks, replan_meta = self.planner.replan_forward(
                     query=query,
-                    effect_limit=effect_limit,
+                    effect_limit=read_goal,
                     session_id=session_id,
                     run_id=run_id,
                     user_id=user_id,
@@ -1812,6 +2144,7 @@ class AgentCollaborationCoordinator:
                     current_results=results,
                     observations=observations,
                     replan_round=replan_round,
+                    error_history=recovery_error_history,
                 )
             except Exception as exc:
                 invalid_replan_block_count += 1
@@ -1830,6 +2163,11 @@ class AgentCollaborationCoordinator:
                     level="ERROR",
                 )
                 break
+            recovery_error_history = [
+                dict(item)
+                for item in replan_meta.get("recovery_error_history") or recovery_error_history
+                if isinstance(item, dict)
+            ]
             if not new_tasks:
                 replan_audit.append(
                     {
@@ -1919,8 +2257,10 @@ class AgentCollaborationCoordinator:
                 run_id=run_id,
                 level="INFO" if execution_progress else "WARNING",
             )
-            if not execution_progress:
-                break
+            # Do not stop solely because the first Recovery round made no
+            # execution progress. The next LLM Recovery round receives the new
+            # error result plus prior error history and may choose a different
+            # Worker route. max_replan_rounds=2 is the hard bound.
 
         tasks = active_tasks
         final_observations = self._build_task_observations(tasks, results)
@@ -1938,6 +2278,7 @@ class AgentCollaborationCoordinator:
                 "need_completion": need_completion,
                 "replan_count": len([item for item in replan_audit if item.get("status") == "executed"]),
                 "replan_audit": replan_audit,
+                "recovery_error_history_count": len(recovery_error_history),
             },
             run_id=run_id,
         )
@@ -1955,7 +2296,7 @@ class AgentCollaborationCoordinator:
                 else:
                     self.session_state.put(**memory_put)
 
-        public_results = {task_id: result.safe_for_coordinator() for task_id, result in results.items()}
+        worker_results = {task_id: result.handoff_view() for task_id, result in results.items()}
         report = next(
             (
                 results.get(task.task_id)
@@ -2063,6 +2404,10 @@ class AgentCollaborationCoordinator:
                 task_states={task.task_id: (results[task.task_id].status.value if task.task_id in results else "not_executed") for task in tasks},
                 resolved_entity_refs=[ref.to_dict() for ref in focus_refs],
                 data_refs=[],
+                working_memory_snapshot=(
+                    self.specialist.context_bundle.snapshot_working_memory()
+                    if self.specialist.context_bundle is not None else {}
+                ),
                 missing_parameters=list(final_sufficiency.missing_parameters) if final_sufficiency else [],
                 missing_context=(
                     [*final_sufficiency.missing_context, *final_sufficiency.unresolved_entities]
@@ -2075,15 +2420,13 @@ class AgentCollaborationCoordinator:
             "session_mutation_proposal": session_mutation_proposal.to_dict(),
             "success": success,
             "answer": question if question else context_wait_message if context_wait_message else answer,
-            "task_results": public_results,
-            "graph_worker_results": {
-                "contract_version": "graph_worker_results.v1",
-                "items": list(public_results.values()),
-                "task_count": len(public_results),
-                "completed_count": completed,
-                "failed_count": failed,
-                "waiting_context_count": len(need_context),
-            },
+            "worker_results": worker_results,
+            "business_outputs": (
+                self.specialist.context_bundle.business_data_context(
+                    entity_refs=[ref.to_dict() for ref in focus_refs]
+                )
+                if self.specialist.context_bundle is not None else {}
+            ),
             "tool_calls": [],
             "internal_tool_call_count": internal_count,
             "execution_order": [item.task_id for item in tasks if item.task_id in results],
@@ -2101,12 +2444,12 @@ class AgentCollaborationCoordinator:
             "replan_count": len([item for item in replan_audit if item.get("status") == "executed"]),
             "invalid_replan_block_count": invalid_replan_block_count,
             "replan_limits": {"max_rounds": max_replan_rounds, "delegation_preserved": True},
-            "agent_outputs": public_results,
+            "recovery_error_history_count": len(recovery_error_history),
             "agent_timeline": timeline,
             "handoff": {
-                "handoff_available": bool(public_results),
-                "handoff_count": len(public_results),
-                "handoff_refs": [f"worker_result:{task_id}" for task_id in public_results],
+                "handoff_available": bool(worker_results),
+                "handoff_count": len(worker_results),
+                "handoff_refs": [f"worker_result:{task_id}" for task_id in worker_results],
                 "safety": {"worker_private_tools": True, "coordinator_tool_visibility": "none"},
             },
             "graph_runtime": {
@@ -2259,6 +2602,80 @@ class AgentCollaborationCoordinator:
             and result.status in {ResultStatus.COMPLETED, ResultStatus.PROPOSAL_READY}
         )
 
+    def _task_input_data_gate(self, task: GraphAgentTask) -> dict[str, Any]:
+        """Evaluate data necessity after all order dependencies reach a terminal result."""
+        requirements = [
+            dict(item)
+            for item in task.metadata.get("input_requirements") or []
+            if isinstance(item, dict) and item.get("kind") == "data" and str(item.get("data_name") or "")
+        ]
+        bundle = self.specialist.context_bundle
+        focus_entity_ids = [str(ref.node_id or "") for ref in task.focus_refs if str(ref.node_id or "")]
+
+        def available(name: str) -> bool:
+            if bundle is None:
+                return False
+            if bundle.has_business_data(entity_id="__run__", name=name):
+                return True
+            if not focus_entity_ids:
+                return False
+            return all(bundle.has_business_data(entity_id=entity_id, name=name) for entity_id in focus_entity_ids)
+
+        missing = {"required": [], "preferred": [], "optional": []}
+        available_names: list[str] = []
+        for requirement in requirements:
+            name = str(requirement.get("data_name") or "")
+            necessity = str(requirement.get("necessity") or "required")
+            if available(name):
+                available_names.append(name)
+            else:
+                missing.setdefault(necessity, []).append(name)
+        return {
+            "task_id": task.task_id,
+            "worker_id": task.worker_id,
+            "dependency_semantics": "completion_order_only",
+            "dependency_states": {},
+            "requirements": requirements,
+            "available_input_data_names": sorted(set(available_names)),
+            "missing_required_data_names": sorted(set(missing.get("required") or [])),
+            "missing_preferred_data_names": sorted(set(missing.get("preferred") or [])),
+            "missing_optional_data_names": sorted(set(missing.get("optional") or [])),
+        }
+
+    @staticmethod
+    def _worker_results_context_for_consumer(
+        task: GraphAgentTask,
+        results: dict[str, GraphWorkerResult],
+    ) -> dict[str, Any]:
+        """Build W09's only business-data input from already completed Worker results.
+
+        This reuses the Coordinator's existing ``results`` dictionary. No new Store
+        is introduced. The projection preserves concrete Worker business payloads
+        (unlike audit/handoff summaries) while filtering execution-private keys.
+        """
+        items: dict[str, Any] = {}
+        for task_id, result in results.items():
+            if str(task_id) == str(task.task_id):
+                continue
+            items[str(task_id)] = execution_safe_value({
+                "task_id": result.task_id,
+                "agent_id": result.agent_id,
+                "status": result.status.value,
+                "output_type": result.output_type,
+                "data": result.data,
+                "summary": result.summary,
+                "completion": result.completion,
+                "error": result.error,
+                "warnings": result.warnings,
+                "focus_refs": [ref.to_dict() for ref in result.focus_refs],
+            })
+        return {
+            "schema_version": "other_worker_results.v1",
+            "current_task_id": task.task_id,
+            "result_count": len(items),
+            "items": items,
+        }
+
     def _run_dag(
         self,
         tasks: list[GraphAgentTask],
@@ -2278,28 +2695,129 @@ class AgentCollaborationCoordinator:
         timeline: list[dict[str, Any]] = []
         batch_index = 0
         while pending:
-            # A failed dependency pauses the downstream branch. The blocked
-            # Workers are not executed with invalid/empty upstream results; their
-            # structured BLOCKED results are reported to MainAgent for replan.
-            blocked_rows: list[dict[str, Any]] = []
-            propagated = True
-            while propagated:
-                propagated = False
-                for task_id, task in list(pending.items()):
-                    blocked_by = [
-                        dependency_id
-                        for dependency_id in task.dependency_task_ids
-                        if dependency_id in results
-                        and not self._worker_result_usable(results.get(dependency_id))
-                    ]
-                    if not blocked_by:
-                        continue
-                    upstream_repairable = any(
-                        bool((results.get(dependency_id).metadata or {}).get("replan_recommended"))
-                        or bool((results.get(dependency_id).error or {}).get("retryable"))
-                        for dependency_id in blocked_by
-                        if results.get(dependency_id) is not None
+            # dependency_task_ids are completion-order edges only. A downstream
+            # Worker waits for providers to finish, but provider failure alone does
+            # not block it. Required/preferred/optional data necessity is checked
+            # separately against RunContextStore below.
+            runtime_debug_event(
+                "WORKER_DAG_PENDING_SNAPSHOT",
+                {
+                    "pending_task_ids": sorted(pending),
+                    "completed_result_ids": sorted(results),
+                    "dependency_states": {
+                        task_id: {
+                            dep: (results[dep].status.value if dep in results else "pending")
+                            for dep in task.dependency_task_ids
+                        }
+                        for task_id, task in pending.items()
+                    },
+                },
+                run_id=str(tasks[0].run_id if tasks else ""),
+            )
+            if not pending:
+                break
+
+            ready = [
+                task
+                for task in pending.values()
+                if all(dependency_id in results for dependency_id in task.dependency_task_ids)
+            ]
+
+            # Runtime may enforce objective engineering gates for ordinary Workers,
+            # but W09 business-data sufficiency is owned by W09 itself. W09 receives
+            # the already completed sibling Worker results and decides whether those
+            # results are enough for the requested analysis.
+            gated_ready: list[GraphAgentTask] = []
+            for task in list(ready):
+                if task.assigned_agent == ENTITY_ANALYST:
+                    gate = {
+                        "task_id": task.task_id,
+                        "worker_id": task.worker_id,
+                        "dependency_semantics": "completion_order_only",
+                        "dependency_states": {
+                            dependency_id: results[dependency_id].status.value
+                            for dependency_id in task.dependency_task_ids
+                            if dependency_id in results
+                        },
+                        "decision": "worker_judges_sufficiency",
+                        "business_sufficiency_owner": "W09",
+                    }
+                    task.metadata["input_gate"] = gate
+                    task.metadata["degraded_execution"] = False
+                    task.metadata["missing_preferred_data_names"] = []
+                    task.metadata["missing_optional_data_names"] = []
+                    runtime_debug_event(
+                        "WORKER_EXECUTION_GATE_DECISION", gate,
+                        run_id=task.run_id, task_id=task.task_id, level="DEBUG",
                     )
+                    gated_ready.append(task)
+                    continue
+                gate = self._task_input_data_gate(task)
+                gate["dependency_states"] = {
+                    dependency_id: results[dependency_id].status.value
+                    for dependency_id in task.dependency_task_ids
+                    if dependency_id in results
+                }
+                missing_required = list(gate.get("missing_required_data_names") or [])
+                missing_preferred = list(gate.get("missing_preferred_data_names") or [])
+                missing_optional = list(gate.get("missing_optional_data_names") or [])
+
+                # Even when the MainAgent did not explicitly list a provider output as
+                # an input Requirement, a deliberately scheduled provider that terminates
+                # without its promised data is still useful limitation information for
+                # downstream analytical Workers. Treat these undeclared provider gaps as
+                # preferred (never hard-blocking) inputs. Explicit required Requirements
+                # above still win and remain blocking.
+                dependency_missing_outputs: set[str] = set()
+                dependency_details: dict[str, dict[str, Any]] = {}
+                declared_input_names = {
+                    str(item.get("data_name") or "")
+                    for item in gate.get("requirements") or []
+                    if str(item.get("data_name") or "")
+                }
+                for dependency_id in task.dependency_task_ids:
+                    dependency_result = results.get(dependency_id)
+                    if dependency_result is None:
+                        continue
+                    completion = dict(dependency_result.completion or {})
+                    produced_names = {
+                        str(name) for name in completion.get("produced_data_names") or [] if str(name)
+                    }
+                    missing_names = {
+                        str(name) for name in completion.get("missing_data_names") or [] if str(name)
+                    }
+                    if not missing_names and not bool(completion.get("expected_task_completed")):
+                        # Completion report may be minimal on an execution failure.
+                        missing_names.update(
+                            str(name) for name in (dependency_result.error or {}).get("missing_data_names") or [] if str(name)
+                        )
+                    dependency_missing_outputs.update(missing_names)
+                    dependency_details[dependency_id] = {
+                        "status": dependency_result.status.value,
+                        "produced_data_names": sorted(produced_names),
+                        "missing_data_names": sorted(missing_names),
+                        "failure_kind": str(completion.get("failure_kind") or ""),
+                    }
+                implicit_preferred = sorted(
+                    dependency_missing_outputs
+                    - set(missing_required)
+                    - declared_input_names
+                )
+                missing_preferred = sorted(set(missing_preferred).union(implicit_preferred))
+                gate["dependency_output_observations"] = dependency_details
+                gate["implicit_provider_gaps_as_preferred"] = implicit_preferred
+                gate["missing_preferred_data_names"] = missing_preferred
+                decision = "block" if missing_required else "degraded_run" if (missing_preferred or missing_optional) else "run"
+                gate["decision"] = decision
+                runtime_debug_event(
+                    "WORKER_EXECUTION_GATE_DECISION",
+                    gate,
+                    run_id=task.run_id,
+                    task_id=task.task_id,
+                    level="WARNING" if decision != "run" else "DEBUG",
+                )
+                if missing_required:
+                    task.metadata["input_gate"] = gate
                     task.metadata.setdefault(
                         "dependency_wait_ms",
                         round((time.perf_counter() - dag_wait_started) * 1000.0, 3),
@@ -2311,24 +2829,36 @@ class AgentCollaborationCoordinator:
                         output_type=task.expected_output_type,
                         data=None,
                         error={
-                            "code": "upstream_worker_failed",
-                            "message": "上游 Worker 执行失败，当前任务已暂停并等待 MainAgent 重规划。",
-                            "component": "worker_dag_executor",
-                            "retryable": upstream_repairable,
-                            "blocked_by_task_ids": sorted(blocked_by),
+                            "code": "required_business_data_missing",
+                            "message": "Required business data is unavailable after upstream completion.",
+                            "component": "worker_execution_gate",
+                            "retryable": True,
+                            "missing_data_names": missing_required,
                         },
                         focus_refs=task.focus_refs,
-                        summary="上游 Worker 执行失败，当前 Worker 未执行并等待重规划。",
-                        warnings=["blocked_by_upstream_worker_failure"],
+                        summary="必需业务数据缺失，当前 Worker 未执行并交由 MainAgent 决定是否重规划。",
+                        warnings=["required_business_data_missing"],
+                        missing_items=[
+                            MissingContextItem(
+                                key=name,
+                                description=f"缺少必需业务数据：{name}",
+                                expected_format="RunContextStore BusinessData",
+                                reason="required_business_data_missing_after_provider_completion",
+                                searched_sources=["RunContextStore"],
+                                blocking=True,
+                            )
+                            for name in missing_required
+                        ],
                         completion=non_success_completion_report(
                             task,
                             execution_status="blocked",
-                            reason="Upstream Worker failed; this Worker was not executed.",
-                            failure_kind="upstream_worker_failed",
+                            reason="required business data missing after dependency completion",
+                            failure_kind="required_business_data_missing",
                         ),
                         metadata={
-                            "blocked_by_task_ids": sorted(blocked_by),
-                            "replan_required": upstream_repairable,
+                            "input_gate": gate,
+                            "replan_recommended": True,
+                            "degraded_execution": False,
                         },
                     )
                     results[task.task_id] = result
@@ -2348,39 +2878,19 @@ class AgentCollaborationCoordinator:
                         "evidence_count": 0,
                         "artifact_count": 0,
                         "error": result.error,
+                        "input_gate": gate,
                     })
-                    pending.pop(task_id, None)
-                    blocked_rows.append({
-                        "task_id": task_id,
-                        "blocked_by_task_ids": sorted(blocked_by),
-                    })
-                    propagated = True
-            if blocked_rows:
-                flow_event(
-                    "WORKER_DAG_PAUSED_FOR_REPLAN",
-                    {
-                        "blocked_tasks": blocked_rows,
-                        "reason": "upstream_worker_failed",
-                    },
-                    run_id=str(tasks[0].run_id if tasks else ""),
-                    level="WARNING",
-                )
-            if not pending:
-                break
-
-            ready = [
-                task
-                for task in pending.values()
-                if all(
-                    dependency_id in results
-                    and self._worker_result_usable(results.get(dependency_id))
-                    for dependency_id in task.dependency_task_ids
-                )
-            ]
-            # V23.0.16: W09 consumes the run ContextBundle working memory, not sibling task outputs.
-            # When data-provider Workers are ready in the same layer, execute them first
-            # so their completed (including empty) query results are tagged before W09
-            # evaluates entity-context quality.  This is role metadata, not Worker-ID wiring.
+                    pending.pop(task.task_id, None)
+                    continue
+                task.metadata["input_gate"] = gate
+                task.metadata["degraded_execution"] = decision == "degraded_run"
+                task.metadata["missing_preferred_data_names"] = missing_preferred
+                task.metadata["missing_optional_data_names"] = missing_optional
+                gated_ready.append(task)
+            ready = gated_ready
+            # W09 consumes already completed sibling Worker results. When provider
+            # Workers and a consumer become ready in the same layer, execute providers
+            # first so W09 can inspect their real GraphWorkerResult payloads.
             if ready:
                 provider_ready = [
                     task for task in ready
@@ -2397,7 +2907,7 @@ class AgentCollaborationCoordinator:
                             {
                                 "provider_task_ids": [task.task_id for task in provider_ready],
                                 "consumer_task_ids": deferred_consumers,
-                                "reason": "publish_query_tags_before_entity_analysis",
+                                "reason": "make_provider_worker_results_available_before_entity_analysis",
                             },
                             run_id=str(tasks[0].run_id if tasks else ""),
                         )
@@ -2405,6 +2915,13 @@ class AgentCollaborationCoordinator:
                             task for task in ready
                             if str(getattr(self.directory.get(task.worker_id or task.assigned_agent), "working_memory_mode", "none")) != "consumer"
                         ]
+            if not ready and pending and any(
+                all(dependency_id in results for dependency_id in task.dependency_task_ids)
+                for task in pending.values()
+            ):
+                # A gate may have just created a terminal BLOCKED result; allow the
+                # next loop to evaluate downstream tasks against actual data necessity.
+                continue
             if not ready:
                 for task in list(pending.values()):
                     task.metadata.setdefault(
@@ -2450,12 +2967,28 @@ class AgentCollaborationCoordinator:
                 for task in ready:
                     self.runtime_services.mark_ready(task)
                     self.runtime_services.mark_running(task)
+            results_snapshot = dict(results)
+
             def run_specialist(task: GraphAgentTask) -> GraphWorkerResult:
+                task_execution_context = dict(execution_context or {})
+                if task.assigned_agent == ENTITY_ANALYST:
+                    worker_results_context = self._worker_results_context_for_consumer(task, results_snapshot)
+                    task_execution_context["worker_results_context"] = worker_results_context
+                    runtime_debug_event(
+                        "W09_WORKER_RESULTS_INPUT_READY",
+                        {
+                            "task_id": task.task_id,
+                            "worker_id": task.worker_id,
+                            "result_count": worker_results_context.get("result_count", 0),
+                            "source_task_ids": sorted((worker_results_context.get("items") or {}).keys()),
+                        },
+                        run_id=task.run_id, task_id=task.task_id,
+                    )
                 with self.resource_budget.worker_slot():
                     return self.specialist.run(
                         task, current_user_request=query, output_dir=output_dir,
                         db_path=db_path, default_top_k=default_top_k, language=language,
-                        execution_context=execution_context,
+                        execution_context=task_execution_context,
                     )
 
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -2514,8 +3047,7 @@ class AgentCollaborationCoordinator:
         return {
             "success": success,
             "answer": answer,
-            "task_results": {},
-            "graph_worker_results": {"contract_version": "graph_worker_results.v1", "items": [], "task_count": 0, "completed_count": 0, "failed_count": 0, "waiting_context_count": 0},
+            "worker_results": {},
             "tool_calls": [],
             "internal_tool_call_count": 0,
             "execution_order": [],
@@ -2531,7 +3063,6 @@ class AgentCollaborationCoordinator:
             "replan_count": 0,
             "invalid_replan_block_count": 0,
             "replan_limits": {"max_rounds": 0},
-            "agent_outputs": {},
             "agent_timeline": [],
             "handoff": {"handoff_available": False, "handoff_count": 0, "handoff_refs": []},
         }

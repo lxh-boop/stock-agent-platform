@@ -271,6 +271,13 @@ def _result_run_id(result: dict[str, Any] | None) -> str:
 
 
 def _normalise_answer(result: dict[str, Any] | None, *, failure_message: str = "") -> str:
+    """Forward the Coordinator-selected user-facing answer without reinterpreting run success.
+
+    Coordinator is the single authority that validates W06 FinalReport. A partial
+    or failed sub-request may make ``success`` false while W06 still has a valid,
+    bounded answer. Only fall back to task failure/unavailable text when the
+    Coordinator supplied no answer at all.
+    """
     data = result if isinstance(result, dict) else {}
     answer = str(
         data.get("answer")
@@ -278,11 +285,8 @@ def _normalise_answer(result: dict[str, Any] | None, *, failure_message: str = "
         or data.get("response")
         or ""
     ).strip()
-    success = data.get("success")
-    if failure_message:
-        answer = f"Agent 任务未完成：{failure_message}"
-    elif success is False or not answer:
-        answer = UNAVAILABLE_MESSAGE
+    if not answer:
+        answer = f"Agent 任务未完成：{failure_message}" if failure_message else UNAVAILABLE_MESSAGE
     if "不构成投资建议" not in answer:
         answer = f"{answer}\n\n{COMPLIANCE_NOTE}".strip()
     return answer
@@ -538,8 +542,9 @@ class WebAgentApplicationService:
                 "metadata": {**metadata, "last_run_id": run_id, "last_task_id": task_id},
             }
         )
-        if status == "succeeded" and str(answer or "").strip():
-            # 沉淀轮次摘要（ConversationInventory 数据源）；沉淀失败不阻断主链路
+        if str(answer or "").strip():
+            # 只要本轮产生了可见回答就沉淀轮次摘要。父 Run 即使部分失败，
+            # 其中已成功并落成 Artifact 的 BusinessData 仍可在后续 Need 级复用。
             try:
                 self._record_turn_summary(
                     user_id=user_id,

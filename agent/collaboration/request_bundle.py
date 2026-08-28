@@ -11,8 +11,10 @@ from core.llm.prompt_compaction import compact_json_dumps
 from .context_binding import ContextBinding, EntityScope, FreshnessExpectation, ReferenceEntityType
 
 
-# 实体提及角色六枚举（decompose 吸收实体提取后的合法角色集）
-MENTION_ROLES = {"focus", "comparison", "cause", "impact_target", "context", "event"}
+SEMANTIC_ENTITY_ROLES = {"focus", "comparison", "cause", "impact_target", "context", "event"}
+SEMANTIC_ENTITY_SOURCES = {"explicit", "conversation_context"}
+SEMANTIC_TARGET_STATUSES = {"identified", "missing", "not_required"}
+SEMANTIC_TARGET_SOURCES = {"explicit", "conversation_context", "none"}
 
 
 class RequestCategory(str, Enum):
@@ -45,6 +47,42 @@ class RequestBundleError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class SemanticEntity:
+    """LLM 产生的语义实体；这里只保存自然语言身份，不是权威 GraphRef。"""
+
+    text: str
+    entity_type: str = "unknown"
+    role: str = "focus"
+    source: str = "explicit"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "entity_type": self.entity_type,
+            "role": self.role,
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True)
+class SemanticTarget:
+    """进入代码侧权威实体解析之前的语义目标。"""
+
+    entity_type: str = "none"
+    display_text: str = ""
+    source: str = "none"
+    status: str = "not_required"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entity_type": self.entity_type,
+            "display_text": self.display_text,
+            "source": self.source,
+            "status": self.status,
+        }
+
+
 @dataclass
 class PresentationRequest:
     language: str = ""
@@ -53,6 +91,7 @@ class PresentationRequest:
     format: str = ""
     scope: str = "current_turn"
     persist: bool = False
+    request_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -62,6 +101,7 @@ class PresentationRequest:
             "format": self.format,
             "scope": self.scope,
             "persist": bool(self.persist),
+            "request_ids": list(self.request_ids),
         }
 
 
@@ -73,7 +113,8 @@ class RequestItem:
     objective: str
     request_type: RequestType = RequestType.READ
     proposal_required: bool = False
-    target: dict[str, Any] = field(default_factory=dict)
+    semantic_target: SemanticTarget = field(default_factory=SemanticTarget)
+    semantic_entities: list[SemanticEntity] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
     depends_on: list[str] = field(default_factory=list)
     scope: str = "current_turn"
@@ -82,7 +123,6 @@ class RequestItem:
     action_type: str = ""
     presentation: PresentationRequest | None = None
     context_binding: ContextBinding = field(default_factory=ContextBinding)
-    mentions: list[dict[str, Any]] = field(default_factory=list)  # 金融实体提及（decompose 吸收实体提取，元素为 {"text","role"}）
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -92,7 +132,8 @@ class RequestItem:
             "objective": self.objective,
             "request_type": self.request_type.value if self.category == RequestCategory.BUSINESS else "",
             "proposal_required": bool(self.proposal_required),
-            "target": dict(self.target),
+            "semantic_target": self.semantic_target.to_dict(),
+            "semantic_entities": [item.to_dict() for item in self.semantic_entities],
             "constraints": list(self.constraints),
             "depends_on": list(self.depends_on),
             "scope": self.scope,
@@ -101,7 +142,6 @@ class RequestItem:
             "action_type": self.action_type,
             "presentation": self.presentation.to_dict() if self.presentation else None,
             "context_binding": self.context_binding.to_dict(),
-            "mentions": [dict(item) for item in self.mentions],
         }
 
 
@@ -109,9 +149,9 @@ class RequestItem:
 class RequestBundle:
     requests: list[RequestItem]
     raw_message: str
-    schema_version: str = "request_bundle.v2"
-    decomposition_source: str = "deterministic_structure+llm_semantics+program_validator"
-    reuse_guards: dict[str, Any] = field(default_factory=dict)  # 复用校验保护面（按显示编号映射真实轮次，仅服务端持有，不进 prompt）
+    schema_version: str = "request_bundle.v3"
+    decomposition_source: str = "explicit_boundaries+llm_semantics+program_validator"
+    reuse_guards: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -145,10 +185,11 @@ _NUMBERED_RE = re.compile(r"^\s*(\d{1,3})\s*[\.、\)）:]\s*(.+?)\s*$")
 _BULLET_RE = re.compile(r"^\s*[-*•]\s+(.+?)\s*$")
 
 
-def deterministic_structure_parse(query: str) -> list[dict[str, Any]]:
-    """Preserve explicit user task boundaries without interpreting semantics."""
+def explicit_request_boundaries(query: str) -> dict[str, Any]:
+    """只返回用户显式任务边界事实，不重复传入分段原文。"""
 
-    rows: list[dict[str, Any]] = []
+    indexes: list[int] = []
+    types: set[str] = set()
     auto_index = 1
     for raw_line in str(query or "").splitlines():
         line = raw_line.strip()
@@ -156,24 +197,30 @@ def deterministic_structure_parse(query: str) -> list[dict[str, Any]]:
             continue
         numbered = _NUMBERED_RE.match(line)
         if numbered:
-            rows.append({
-                "source_index": int(numbered.group(1)),
-                "text": numbered.group(2).strip(),
-                "boundary_source": "explicit_number",
-            })
-            auto_index = max(auto_index, int(numbered.group(1)) + 1)
+            index = int(numbered.group(1))
+            indexes.append(index)
+            types.add("numbered")
+            auto_index = max(auto_index, index + 1)
             continue
         bullet = _BULLET_RE.match(line)
         if bullet:
-            rows.append({
-                "source_index": auto_index,
-                "text": bullet.group(1).strip(),
-                "boundary_source": "explicit_bullet",
-            })
+            indexes.append(auto_index)
+            types.add("bullet")
             auto_index += 1
-    if rows:
-        return rows
-    return [{"source_index": 1, "text": str(query or "").strip(), "boundary_source": "whole_message"}]
+    unique_indexes = list(dict.fromkeys(indexes))
+    boundary_type = "none"
+    if types == {"numbered"}:
+        boundary_type = "numbered"
+    elif types == {"bullet"}:
+        boundary_type = "bullet"
+    elif types:
+        boundary_type = "mixed"
+    return {
+        "has_explicit_boundaries": bool(unique_indexes),
+        "boundary_type": boundary_type,
+        "boundary_count": len(unique_indexes),
+        "source_indexes": unique_indexes,
+    }
 
 
 def _relation_type(context: dict[str, Any] | None) -> str:
@@ -253,11 +300,10 @@ class RequestBundleValidator:
 
 
 class RequestDecomposer:
-    """Decompose one message into a validated RequestBundle.
+    """把一次用户消息转换成唯一生效的语义 RequestBundle。
 
-    Structure comes from deterministic parsing, semantics from one LLM call, and
-    protocol legality from program validation. The LLM never creates Worker,
-    Need, Tool or Capability identifiers here.
+    第一次 LLM 只负责当前轮语义理解：它可以根据会话摘要补出自然语言实体名称，
+    但绝不能生成权威 ID；GraphRef 始终由后续代码确定性解析。
     """
 
     def __init__(self, *, llm_service: LLMService) -> None:
@@ -274,22 +320,23 @@ class RequestDecomposer:
         run_id: str,
         reuse_candidates: dict[str, Any] | None = None,
     ) -> RequestBundle:
-        structural = deterministic_structure_parse(query)
+        del run_id
+        boundaries = explicit_request_boundaries(query)
         relation = _relation_type(execution_context)
-        # 复用候选显示编号集（校验 reuse_reference 防幻觉引用的依据）
         candidate_turn_ids = {
             str(item.get("turn_id") or "")
             for item in list((reuse_candidates or {}).get("items") or [])
             if str(item.get("turn_id") or "").strip()
         }
-        candidate_lines = [
-            "- {turn_id} [{freshness}] 用户: {user_summary} | 回答: {assistant_summary}".format(
-                turn_id=str(item.get("turn_id") or ""),
-                freshness=str(item.get("freshness") or "non_trade"),
-                user_summary=str(item.get("user_summary") or ""),
-                assistant_summary=str(item.get("assistant_summary") or ""),
-            )
+        candidate_view = [
+            {
+                "turn_id": str(item.get("turn_id") or ""),
+                "freshness": str(item.get("freshness") or "non_trade"),
+                "user_summary": str(item.get("user_summary") or "")[:500],
+                "assistant_summary": str(item.get("assistant_summary") or "")[:700],
+            }
             for item in list((reuse_candidates or {}).get("items") or [])
+            if str(item.get("turn_id") or "").strip()
         ]
 
         def validate_payload(payload: dict[str, Any]) -> None:
@@ -302,13 +349,16 @@ class RequestDecomposer:
             for index, raw in enumerate(rows):
                 if not isinstance(raw, dict):
                     raise RequestBundleError(f"request_item_not_object:{index}")
+                old_fields = {"target", "mentions"}.intersection(raw)
+                if old_fields:
+                    raise RequestBundleError(
+                        f"legacy_request_semantic_fields_forbidden:{index}:{','.join(sorted(old_fields))}"
+                    )
                 category = str(raw.get("category") or "").strip().lower()
                 if category not in allowed_categories:
                     raise RequestBundleError(f"invalid_request_category:{index}:{category}")
                 if category == RequestCategory.BUSINESS.value and not str(raw.get("objective") or "").strip():
                     raise RequestBundleError(f"request_objective_required:{index}")
-                if raw.get("target") is not None and not isinstance(raw.get("target"), dict):
-                    raise RequestBundleError(f"request_target_must_be_object:{index}")
                 if raw.get("constraints") is not None and not isinstance(raw.get("constraints"), list):
                     raise RequestBundleError(f"request_constraints_must_be_array:{index}")
                 if raw.get("depends_on") is not None and not isinstance(raw.get("depends_on"), list):
@@ -331,6 +381,40 @@ class RequestDecomposer:
                         raise RequestBundleError(f"invalid_write_action:{index}")
                     if request_type == "read" and action_type:
                         raise RequestBundleError(f"read_request_has_write_action:{index}")
+                    semantic_target = raw.get("semantic_target")
+                    if not isinstance(semantic_target, dict):
+                        raise RequestBundleError(f"semantic_target_required:{index}")
+                    target_status = str(semantic_target.get("status") or "").strip().lower()
+                    target_source = str(semantic_target.get("source") or "").strip().lower()
+                    target_text = str(semantic_target.get("display_text") or "").strip()
+                    if target_status not in SEMANTIC_TARGET_STATUSES:
+                        raise RequestBundleError(f"invalid_semantic_target_status:{index}:{target_status}")
+                    if target_source not in SEMANTIC_TARGET_SOURCES:
+                        raise RequestBundleError(f"invalid_semantic_target_source:{index}:{target_source}")
+                    if target_status == "identified" and not target_text:
+                        raise RequestBundleError(f"identified_semantic_target_requires_text:{index}")
+                    if target_status == "missing" and target_source != "none":
+                        raise RequestBundleError(f"missing_semantic_target_source_must_be_none:{index}")
+                    entities = raw.get("semantic_entities")
+                    if not isinstance(entities, list):
+                        raise RequestBundleError(f"semantic_entities_must_be_array:{index}")
+                    if len(entities) > 20:
+                        raise RequestBundleError(f"too_many_semantic_entities:{index}")
+                    for entity in entities:
+                        if not isinstance(entity, dict) or not str(entity.get("text") or "").strip():
+                            raise RequestBundleError(f"invalid_semantic_entity:{index}")
+                        if str(entity.get("role") or "focus") not in SEMANTIC_ENTITY_ROLES:
+                            raise RequestBundleError(f"invalid_semantic_entity_role:{index}")
+                        if str(entity.get("source") or "") not in SEMANTIC_ENTITY_SOURCES:
+                            raise RequestBundleError(f"invalid_semantic_entity_source:{index}")
+                presentation = raw.get("presentation")
+                if category == RequestCategory.PRESENTATION.value:
+                    if not isinstance(presentation, dict):
+                        raise RequestBundleError(f"presentation_fields_required:{index}")
+                    if presentation.get("request_indexes") is not None and not isinstance(
+                        presentation.get("request_indexes"), list
+                    ):
+                        raise RequestBundleError(f"presentation_request_indexes_must_be_array:{index}")
                 binding = raw.get("context_binding")
                 if not isinstance(binding, dict):
                     raise RequestBundleError(f"request_context_binding_required:{index}")
@@ -338,7 +422,6 @@ class RequestDecomposer:
                     raise RequestBundleError(f"invalid_request_entity_scope:{index}")
                 if str(binding.get("reference_entity_type") or "none") not in {item.value for item in ReferenceEntityType}:
                     raise RequestBundleError(f"invalid_request_reference_type:{index}")
-                # 复用字段校验（新增三条 + 写请求拦截）
                 freshness = str(binding.get("freshness_expectation") or FreshnessExpectation.UNSPECIFIED.value)
                 if freshness not in {item.value for item in FreshnessExpectation}:
                     raise RequestBundleError(f"invalid_freshness_expectation:{index}:{freshness}")
@@ -347,27 +430,12 @@ class RequestDecomposer:
                     raise RequestBundleError(f"reuse_reference_must_be_array:{index}")
                 reuse_ids = [str(value or "").strip() for value in (reuse_reference or []) if str(value or "").strip()]
                 if freshness in {FreshnessExpectation.LATEST.value, FreshnessExpectation.UNSPECIFIED.value} and reuse_ids:
-                    # 交叉一致性：latest/unspecified 意图下禁止标记复用引用
                     raise RequestBundleError(f"reuse_reference_forbidden_for_freshness:{index}:{freshness}")
                 unknown_reuse = sorted(set(reuse_ids) - candidate_turn_ids)
                 if unknown_reuse:
-                    # 防幻觉：reuse_reference 必须来自注入的候选集
                     raise RequestBundleError(f"reuse_reference_unknown_turn:{index}:{','.join(unknown_reuse)}")
                 if category == RequestCategory.BUSINESS.value and str(raw.get("request_type") or "read").lower() == "write" and reuse_ids:
-                    # 写请求永不复用
                     raise RequestBundleError(f"write_request_cannot_reuse:{index}")
-                # 实体提及校验（decompose 吸收实体提取）
-                mentions = raw.get("mentions")
-                if mentions is not None:
-                    if not isinstance(mentions, list):
-                        raise RequestBundleError(f"request_mentions_must_be_array:{index}")
-                    if len(mentions) > 20:
-                        raise RequestBundleError(f"too_many_entity_mentions:{index}")
-                    for mention in mentions:
-                        if not isinstance(mention, dict) or not str(mention.get("text") or "").strip():
-                            raise RequestBundleError(f"invalid_entity_mention:{index}")
-                        if str(mention.get("role") or "focus") not in MENTION_ROLES:
-                            raise RequestBundleError(f"invalid_entity_role:{index}")
 
         payload = self.llm_service.generate_json(
             stage="request_bundle_decomposition",
@@ -375,67 +443,63 @@ class RequestDecomposer:
                 {
                     "role": "system",
                     "content": (
-                        "你是MainAgent入口的Request Decomposer。你的唯一职责是把一次用户消息拆成用户真正要求完成的Request清单，"
-                        "不是拆Need、不是选择Worker、不是规划Tool。一个输入可以包含多个同类BUSINESS Request；Request不等于Worker Task。"
-                        "category只能是business、presentation。Business Request顶层request_type只能是read或write。"
-                        "查询、分析、比较、风险判断、生成建议、生成或修订待审批Proposal全部属于READ；"
-                        "即使用户说‘加入/减仓/修改持仓’，只要本轮还没有明确确认已有Proposal，就仍是READ，并设置proposal_required=true。"
-                        "只有用户明确确认/授权执行一个已有Proposal时才是WRITE，action_type=confirm_execute；"
-                        "拒绝或取消已有Proposal也走确定性WRITE控制动作，action_type=reject|cancel。语言、风格、长度、格式属于presentation。"
-                        "unsupported不是category；若某一项明显超出金融Agent能力，可把status写unsupported并给reason，其余Request仍保留。"
-                        "如果用户明确分条，必须尊重deterministic_segments的source_index和原始边界；未显式分条时可以按语义拆成多个Request。"
-                        "你必须在这一次拆分调用中直接完成objective业务语义规范化：objective应是明确、稳定、无歧义、可直接交给MainAgent做Need Decomposition的业务目标。"
-                        "去除‘帮我看看/给我瞅瞅/最近咋样/我感觉有点危险’等口语或无业务价值表达，转换为分析、查询、评估、比较、获取、生成等明确业务动作，但绝不能改变或扩大用户真实目标。"
-                        "objective只描述‘要完成什么’，不要把target、constraints、presentation、Worker、Tool、Need、Capability或执行步骤塞进objective。"
-                        "例如‘分析贵州茅台最近一个月的风险，只看最近一个月’应拆为objective=‘分析目标股票风险’，target中保存贵州茅台，constraints中保存最近一个月；"
-                        "不能扩写成‘获取行情、新闻、持仓并分析贵州茅台最近一个月风险’，因为那已经提前规划执行步骤。"
-                        "用户只要求‘分析持仓集中度风险’时，objective不能扩展为市场风险、流动性风险、行业风险等额外目标。完成该目标所需的内部Need由后续MainAgent决定。"
-                        "显式编号/项目符号只决定Request边界和source_index；原始segment不是最终objective。你返回的规范化objective将作为该Request后续语义权威。"
-                        "target只保存用户目标对象/业务对象，不保存执行步骤；constraints只保存用户明确约束。展示语言、风格、长度、格式只进入presentation。"
-                        "depends_on使用当前输出requests数组中的1-based位置编号，例如第3项依赖第1、2项则写[1,2]；没有依赖写[]。"
-                        "proposal_id/token属于Runtime协议状态，不能由你编造；protocol_relation若明确是confirmation/cancellation，request_type/action_type必须服从该协议事实。"
-                        "PRESENTATION字段仅允许language/style/length/format/scope/persist；同一句里‘先中文，改成英文’按后一个明确要求为准。"
-                        "如果呈现要求只作用于某一个Request，scope=request并在target.request_indexes中用当前requests数组的1-based位置指向目标Request；"
-                        "PRESENTATION一般不作为业务执行依赖节点，depends_on只用于真正的执行先后关系；如果作用于整轮回答，使用whole_bundle或current_turn。"
-                        "context_binding继续用于GraphRef解析：直接点名证券用explicit_entities/security；‘刚刚那只股票’用conversation_focus、"
-                        "inherit_previous_focus=true、security；完整持仓用portfolio/portfolio；无金融实体可用none。"
-                        "你还要在同一调用中为每个business Request提取金融实体提及mentions：只提取用户明确指向、且需要进入金融图解析的现实金融对象、新闻/公告/研报或事件。"
-                        "portfolio、account、global、none是业务范围，不能把‘我的持仓’、‘当前账户’等范围词误当成单只证券实体；"
-                        "只有请求中明确出现具体证券、公司、行业、事件或已命名组合对象时才输出mention；不要从常识补充对象，不要决定最终实体ID；"
-                        "没有需要GraphRef解析的明确对象时输出空数组mentions=[]。mention角色只能是focus、comparison、cause、impact_target、context、event。"
-                        "reuse_candidates是历史对话轮次摘要清单。你只能根据摘要判断某轮回答‘可能’满足当前Request，"
-                        "在context_binding.reuse_reference中标记候选turn编号（可多个），这只是粗筛标记，不是最终复用决定，最终由后续规划确认。"
-                        "context_binding.freshness_expectation四态：latest=必须最新数据（此时reuse_reference必须为空）；"
-                        "reusable=旧结果可能直接复用；reference=旧结果作为新计算的参考输入；unspecified=未明确（默认值，此时reuse_reference必须为空）。"
-                        "reuse_reference只能引用reuse_candidates中出现过的turn_id，禁止编造；write类型Request禁止标记reuse_reference；"
-                        "reuse_candidates为空时不得标记任何reuse_reference。"
-                        "严格输出JSON，不得输出Worker ID、Need ID、Tool、Capability或实现步骤。"
+                        "你是MainAgent入口唯一的Request语义理解器。你只把当前用户消息变成RequestBundle语义合同；"
+                        "禁止拆Need、选择Worker、规划Tool或生成任何权威实体ID。"
+                        "显式编号/项目符号只由explicit_request_boundaries保护；如果没有显式边界，你自行按语义决定是否拆成多个Request。"
+                        "objective只描述用户要完成什么，不得塞入目标对象、约束或执行步骤。"
+                        "semantic_target表示当前Request在自然语言层面针对什么对象。它允许三种status："
+                        "identified=已经从本轮原文或session_summary识别出具体语义对象；missing=业务需要具体对象但当前上下文仍无法知道；"
+                        "not_required=该业务本身不要求一个具体对象。identified必须提供display_text。"
+                        "semantic_target.source只能explicit、conversation_context或none。"
+                        "当用户说‘它/刚才那只股票/继续看那个事件’时，你可以根据session_summary补出自然语言实体名，"
+                        "并把source标记conversation_context；这只是语义实体补全，不得生成证券代码、node_id、GraphRef或其他权威身份。"
+                        "semantic_entities记录需要进入后续权威图解析的现实金融对象；每项包含text/entity_type/role/source。"
+                        "不要把portfolio/account/global等范围词伪造为具体证券实体。"
+                        "context_binding只声明实体范围、是否允许继承焦点、指代类型和新鲜度。"
+                        "reuse_candidates是历史回答摘要候选；你只做粗筛，把‘大概可能有用’的turn_id写入reuse_reference，"
+                        "最终是否复用由后续Need规划决定。latest或unspecified时reuse_reference必须为空。"
+                        "category只能business/presentation。READ包括查询、分析、比较、建议、生成/修订待审批Proposal；"
+                        "WRITE只允许明确确认执行已有Proposal或拒绝/取消已有Proposal。"
+                        "PRESENTATION的request_indexes放在presentation内部，不得再通过业务target表达展示作用范围。"
+                        "depends_on只使用当前requests数组1-based位置。严格只输出JSON。"
                     ),
                 },
                 {
                     "role": "user",
                     "content": compact_json_dumps({
                         "user_message": str(query or ""),
-                        "deterministic_segments": structural,
+                        "conversation_context": {
+                            "session_summary": str(memory_summary or "")[:3000],
+                            "reuse_candidates": candidate_view,
+                        },
                         "protocol_relation": relation,
-                        "session_summary": str(memory_summary or "")[:3000],
-                        "reuse_candidates": candidate_lines,
+                        "explicit_request_boundaries": boundaries,
                         "current_reply_language": language,
                         "required_output_shape": {
                             "requests": [{
                                 "source_index": 1,
                                 "category": "business|presentation",
-                                "objective": "已规范化、只描述要完成什么的业务目标",
+                                "objective": "只描述要完成什么的规范化业务目标",
                                 "request_type": "read|write",
                                 "proposal_required": False,
-                                "target": {"business_object": "用户明确目标对象；展示Request可使用request_indexes"},
+                                "semantic_target": {
+                                    "entity_type": "security|portfolio|account|event|global_market|none|unknown",
+                                    "display_text": "自然语言对象名；未知时为空",
+                                    "source": "explicit|conversation_context|none",
+                                    "status": "identified|missing|not_required",
+                                },
+                                "semantic_entities": [{
+                                    "text": "自然语言实体名",
+                                    "entity_type": "security|portfolio|account|event|industry|company|unknown",
+                                    "role": "focus|comparison|cause|impact_target|context|event",
+                                    "source": "explicit|conversation_context",
+                                }],
                                 "constraints": ["仅用户明确提出的约束"],
                                 "depends_on": [1],
                                 "scope": "current_turn",
                                 "status": "pending|unsupported",
                                 "reason": "",
                                 "action_type": "confirm_execute|reject|cancel|",
-                                "mentions": [{"text": "具体金融对象", "role": "focus|comparison|cause|impact_target|context|event"}],
                                 "presentation": {
                                     "language": "zh|en|",
                                     "style": "",
@@ -443,6 +507,7 @@ class RequestDecomposer:
                                     "format": "",
                                     "scope": "request|whole_bundle|current_turn|session",
                                     "persist": False,
+                                    "request_indexes": [1],
                                 },
                                 "context_binding": {
                                     "entity_scope": "explicit_entities|conversation_focus|portfolio|account|global|none",
@@ -463,48 +528,39 @@ class RequestDecomposer:
             disable_thinking=False,
             repair_mode="targeted",
             repair_guidance=(
-                "只修复Request清单协议。category只能business/presentation；Business request_type只能read/write；depends_on使用数组位置；"
-                "objective必须是规范化业务目标，target/constraints/presentation必须分离；不得输出Worker、Need、Tool、Capability、Task或执行步骤。"
-                "mentions必须是数组且角色只能focus/comparison/cause/impact_target/context/event；"
-                "freshness_expectation只能latest/reusable/reference/unspecified，latest或unspecified时reuse_reference必须为空；"
-                "reuse_reference只能引用reuse_candidates中的turn_id；write类型Request禁止reuse_reference。"
+                "只修复Request语义合同。禁止旧字段target/mentions；必须使用semantic_target/semantic_entities。"
+                "semantic_target.status只能identified/missing/not_required；identified必须有display_text；"
+                "semantic_entities只能输出自然语言语义实体，绝不能生成GraphRef/node_id/证券代码作为权威身份。"
+                "reuse_reference只能引用conversation_context.reuse_candidates中的turn_id；不得输出Worker/Need/Tool。"
             ),
         )
 
         raw_rows = [dict(item) for item in payload.get("requests") or [] if isinstance(item, dict)]
         if not raw_rows:
             raise RequestBundleError("request_bundle_empty_after_llm")
-        explicit_source_indexes = {
-            int(item["source_index"])
-            for item in structural
-            if str(item.get("boundary_source") or "").startswith("explicit_")
-        }
+        explicit_source_indexes = set(boundaries.get("source_indexes") or [])
         if explicit_source_indexes:
-            returned_indexes = set()
+            returned_indexes: set[int] = set()
             for index, raw in enumerate(raw_rows, start=1):
                 try:
                     returned_indexes.add(int(raw.get("source_index", index)))
                 except (TypeError, ValueError):
                     returned_indexes.add(index)
-            missing_structural = sorted(explicit_source_indexes - returned_indexes)
-            if missing_structural:
+            missing = sorted(explicit_source_indexes - returned_indexes)
+            if missing:
                 raise RequestBundleError(
-                    "explicit_request_boundary_lost:" + ",".join(str(item) for item in missing_structural)
+                    "explicit_request_boundary_lost:" + ",".join(str(item) for item in missing)
                 )
 
-        # Runtime owns stable request IDs. Dependencies returned as positional
-        # indexes are mapped only after IDs are allocated. Explicit numbered/bullet
-        # segments remain authoritative only for Request boundaries/source_index;
-        # the single decomposition LLM owns the normalized business objective.
         items: list[RequestItem] = []
+        raw_presentation_indexes: dict[str, list[int]] = {}
         for index, raw in enumerate(raw_rows, start=1):
             request_id = f"R{index:02d}"
             category = RequestCategory(str(raw.get("category") or "business").strip().lower())
             status_text = str(raw.get("status") or "pending").strip().lower()
             status = RequestStatus.UNSUPPORTED if status_text == "unsupported" else RequestStatus.PENDING
-            source_index = raw.get("source_index", index)
             try:
-                source_index = max(1, int(source_index))
+                source_index = max(1, int(raw.get("source_index", index)))
             except (TypeError, ValueError):
                 source_index = index
             raw_binding = dict(raw.get("context_binding") or {})
@@ -524,14 +580,22 @@ class RequestDecomposer:
                     if str(value or "").strip()
                 )[:10],
             )
-            # 实体提及（decompose 吸收实体提取）：只保留 text 非空的合法条目
-            mentions = [
-                {
-                    "text": str(mention.get("text") or "").strip(),
-                    "role": str(mention.get("role") or "focus").strip(),
-                }
-                for mention in raw.get("mentions") or []
-                if isinstance(mention, dict) and str(mention.get("text") or "").strip()
+            raw_target = dict(raw.get("semantic_target") or {})
+            semantic_target = SemanticTarget(
+                entity_type=str(raw_target.get("entity_type") or "none").strip().lower(),
+                display_text=str(raw_target.get("display_text") or "").strip(),
+                source=str(raw_target.get("source") or "none").strip().lower(),
+                status=str(raw_target.get("status") or "not_required").strip().lower(),
+            )
+            semantic_entities = [
+                SemanticEntity(
+                    text=str(entity.get("text") or "").strip(),
+                    entity_type=str(entity.get("entity_type") or "unknown").strip().lower(),
+                    role=str(entity.get("role") or "focus").strip().lower(),
+                    source=str(entity.get("source") or "explicit").strip().lower(),
+                )
+                for entity in raw.get("semantic_entities") or []
+                if isinstance(entity, dict) and str(entity.get("text") or "").strip()
             ][:20]
             presentation = None
             if category == RequestCategory.PRESENTATION:
@@ -544,22 +608,23 @@ class RequestDecomposer:
                     scope=str(p.get("scope") or raw.get("scope") or "current_turn").strip().lower(),
                     persist=bool(p.get("persist")),
                 )
-            objective = str(raw.get("objective") or "").strip()
+                raw_presentation_indexes[request_id] = [
+                    int(value) for value in p.get("request_indexes") or []
+                    if str(value).strip().isdigit()
+                ]
             items.append(RequestItem(
                 request_id=request_id,
                 source_index=source_index,
                 category=category,
-                objective=objective,
+                objective=str(raw.get("objective") or "").strip(),
                 request_type=(
                     RequestType(str(raw.get("request_type") or "read").strip().lower())
                     if category == RequestCategory.BUSINESS else RequestType.READ
                 ),
-                proposal_required=(
-                    bool(raw.get("proposal_required"))
-                    if category == RequestCategory.BUSINESS else False
-                ),
-                target=dict(raw.get("target") or {}) if isinstance(raw.get("target"), dict) else {},
-                constraints=[str(item).strip() for item in raw.get("constraints") or [] if str(item).strip()],
+                proposal_required=bool(raw.get("proposal_required")) if category == RequestCategory.BUSINESS else False,
+                semantic_target=semantic_target,
+                semantic_entities=semantic_entities,
+                constraints=[str(value).strip() for value in raw.get("constraints") or [] if str(value).strip()],
                 depends_on=[],
                 scope=str(raw.get("scope") or "current_turn").strip().lower(),
                 status=status,
@@ -570,10 +635,8 @@ class RequestDecomposer:
                 ),
                 presentation=presentation,
                 context_binding=binding,
-                mentions=mentions,
             ))
 
-        # Positional dependency IDs are intentionally normalized by program.
         for index, (item, raw) in enumerate(zip(items, raw_rows), start=1):
             deps: list[str] = []
             for value in raw.get("depends_on") or []:
@@ -586,38 +649,15 @@ class RequestDecomposer:
                     if dep_id not in deps:
                         deps.append(dep_id)
             item.depends_on = deps
+            if item.presentation is not None:
+                ids: list[str] = []
+                for position in raw_presentation_indexes.get(item.request_id, []):
+                    if 1 <= position <= len(items) and position != index:
+                        candidate = items[position - 1].request_id
+                        if candidate not in ids:
+                            ids.append(candidate)
+                item.presentation.request_ids = ids
 
-            # Request-scoped presentation targeting is not an execution
-            # dependency.  The LLM uses positional indexes; Runtime converts
-            # them to stable Request IDs after allocation.
-            raw_target = dict(raw.get("target") or {}) if isinstance(raw.get("target"), dict) else {}
-            target_ids: list[str] = []
-            for value in raw_target.get("request_indexes") or []:
-                try:
-                    position = int(value)
-                except (TypeError, ValueError):
-                    continue
-                if 1 <= position <= len(items) and position != index:
-                    request_target_id = items[position - 1].request_id
-                    if request_target_id not in target_ids:
-                        target_ids.append(request_target_id)
-            # Compatibility for callers that already provide stable Request IDs.
-            for value in raw_target.get("request_ids") or []:
-                request_target_id = str(value or "").strip()
-                if request_target_id in {row.request_id for row in items} and request_target_id != item.request_id:
-                    if request_target_id not in target_ids:
-                        target_ids.append(request_target_id)
-            single_target_id = str(raw_target.get("request_id") or "").strip()
-            if single_target_id in {row.request_id for row in items} and single_target_id != item.request_id:
-                if single_target_id not in target_ids:
-                    target_ids.append(single_target_id)
-            if target_ids:
-                raw_target["request_ids"] = target_ids
-            raw_target.pop("request_indexes", None)
-            item.target = raw_target
-
-        # Protocol relation is a hard fact. Confirmation never re-enters READ
-        # planning: Runtime creates one deterministic WRITE request.
         hard_action = (
             "confirm_execute" if relation == "confirmation"
             else "cancel" if relation == "cancellation"
@@ -641,11 +681,17 @@ class RequestDecomposer:
                 target.request_type = RequestType.WRITE
                 target.proposal_required = False
                 target.action_type = hard_action
+                target.semantic_target = SemanticTarget()
+                target.semantic_entities = []
                 target.context_binding = ContextBinding()
             else:
                 for item in items:
                     item.request_id = f"R{int(item.request_id[1:]) + 1:02d}"
                     item.depends_on = [f"R{int(dep[1:]) + 1:02d}" for dep in item.depends_on]
+                    if item.presentation:
+                        item.presentation.request_ids = [
+                            f"R{int(dep[1:]) + 1:02d}" for dep in item.presentation.request_ids
+                        ]
                 items.insert(0, RequestItem(
                     request_id="R01",
                     source_index=0,
@@ -657,11 +703,12 @@ class RequestDecomposer:
                     request_type=RequestType.WRITE,
                     proposal_required=False,
                     action_type=hard_action,
+                    semantic_target=SemanticTarget(),
+                    semantic_entities=[],
                     context_binding=ContextBinding(),
                 ))
 
         bundle = RequestBundle(requests=items, raw_message=str(query or ""))
-        # 复用校验保护面随 bundle 传递（仅服务端使用，不进任何 prompt）
         bundle.reuse_guards = dict((reuse_candidates or {}).get("guards") or {})
         return self.validator.validate(bundle)
 
@@ -676,5 +723,7 @@ __all__ = [
     "RequestDecomposer",
     "RequestItem",
     "RequestStatus",
-    "deterministic_structure_parse",
+    "SemanticEntity",
+    "SemanticTarget",
+    "explicit_request_boundaries",
 ]

@@ -119,7 +119,7 @@ _BULK_ENTITY_KEYS = {
     "ranking_candidates",
     "candidate_stocks",
     "target_positions",
-    "task_results",
+    "worker_results",
     "tool_calls",
     "observations",
     "execution_batches",

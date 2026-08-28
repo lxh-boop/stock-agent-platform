@@ -190,15 +190,7 @@ def _empty_failure(
             "success": False,
             "answer": failure["message"],
             "execution_status": "failed",
-            "task_results": {},
-            "graph_worker_results": {
-                "contract_version": "graph_worker_results.v1",
-                "items": [],
-                "task_count": 0,
-                "completed_count": 0,
-                "failed_count": 1,
-                "waiting_context_count": 0,
-            },
+            "worker_results": {},
             "execution_batches": [],
             "agent_timeline": [],
             "internal_tool_call_count": 0,
@@ -377,7 +369,7 @@ def run_agent_request(
 
     execution_status = str(execution.get("execution_status") or "failed")
     proposal_id = ""
-    for payload in (execution.get("task_results") or {}).values():
+    for payload in (execution.get("worker_results") or {}).values():
         if not isinstance(payload, dict):
             continue
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
@@ -398,7 +390,7 @@ def run_agent_request(
     except Exception:
         pass
 
-    task_results = dict(execution.get("task_results") or {})
+    worker_results = dict(execution.get("worker_results") or {})
     agent_tasks = [
         {
             "task_id": str(task_id),
@@ -410,7 +402,7 @@ def run_agent_request(
             "confidence": float(payload.get("confidence") or 0.0) if isinstance(payload, dict) else 0.0,
             "capability_status": str(payload.get("status") or "unknown") if isinstance(payload, dict) else "unknown",
         }
-        for task_id, payload in task_results.items()
+        for task_id, payload in worker_results.items()
     ]
     decomposition = {
         "query": raw_query,
@@ -427,7 +419,7 @@ def run_agent_request(
             "action": "coordinate_graph_workers",
             "objects": [],
             "constraints": [],
-            "expected_outputs": ["graph_worker_results"],
+            "expected_outputs": ["worker_results", "business_outputs"],
             "requires_write": requires_confirmation,
         },
         "task_plan": {
@@ -447,8 +439,8 @@ def run_agent_request(
         "success": bool(execution.get("success")),
         "run_total_duration_ms": round((time.perf_counter() - run_started) * 1000.0, 3),
         "answer": str(execution.get("answer") or ""),
-        "task_results": task_results,
-        "graph_worker_results": dict(execution.get("graph_worker_results") or {}),
+        "worker_results": worker_results,
+        "business_outputs": dict(execution.get("business_outputs") or {}),
         "tool_calls": [],
         "internal_tool_call_count": int(execution.get("internal_tool_call_count") or 0),
         "execution_order": list(execution.get("execution_order") or []),
@@ -461,16 +453,14 @@ def run_agent_request(
         "replan_count": int(execution.get("replan_count") or 0),
         "invalid_replan_block_count": int(execution.get("invalid_replan_block_count") or 0),
         "replan_limits": dict(execution.get("replan_limits") or {}),
-        "agent_outputs": dict(execution.get("agent_outputs") or {}),
         "agent_timeline": list(execution.get("agent_timeline") or []),
         "handoff": dict(execution.get("handoff") or {}),
         "graph_runtime": dict(execution.get("graph_runtime") or {}),
     }
     result_data = {
         "graph_runtime": dict(execution.get("graph_runtime") or {}),
-        "graph_worker_results": dict(execution.get("graph_worker_results") or {}),
-        "task_results": task_results,
-        "agent_outputs": dict(execution.get("agent_outputs") or {}),
+        "worker_results": worker_results,
+        "business_outputs": dict(execution.get("business_outputs") or {}),
         "missing_context": list(execution.get("missing_context") or []),
         "need_clarification": bool(execution.get("need_clarification")),
         "clarification_question": str(execution.get("clarification_question") or ""),

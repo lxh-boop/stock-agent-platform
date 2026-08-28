@@ -546,7 +546,7 @@ class GraphWorkerResult:
     def to_dict(self) -> dict[str, Any]:
         return _plain(self)
 
-    def handoff_contract(self) -> dict[str, Any]:
+    def handoff_view(self) -> dict[str, Any]:
         safe_metadata = {
             key: value
             for key, value in self.metadata.items()
@@ -583,8 +583,20 @@ class GraphWorkerResult:
             "completion": _compact(self.completion, max_depth=6),
         }
 
-    def safe_for_coordinator(self) -> dict[str, Any]:
-        return self.handoff_contract()
+    def audit_view(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "worker_id": self.agent_id,
+            "status": self.status.value,
+            "confidence": self.confidence,
+            "warning_count": len(self.warnings),
+            "missing_context_count": len(self.missing_items),
+            "evidence_ref_count": len(self.evidence_refs),
+            "artifact_ref_count": len(self.artifact_refs),
+            "error": _compact(self.error, max_depth=3),
+            "attempt": int(self.metadata.get("attempt") or 0),
+            "duration_ms": self.metadata.get("duration_ms"),
+        }
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "GraphWorkerResult":

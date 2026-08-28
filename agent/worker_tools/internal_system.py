@@ -487,9 +487,9 @@ def build_internal_system_tool_definitions(
             "handler": get_prediction,
             "required": ["security_node_id"],
             "outputs": ["entity_model_signals"],
-            "function": "Read model prediction and ranking facts for one already-resolved security.",
-            "applies": "W02 has an authoritative security_node_id from initial context or an upstream private Tool.",
-            "not_for": "Discovering which security should be analyzed when no identity has been resolved yet.",
+            "function": "Read model prediction and score facts for one already-resolved security. The returned record may contain that security's own rank field, but this Tool does not provide the stock-universe ranking list or TopK market ranking.",
+            "applies": "W02 has an authoritative security_node_id and needs entity-specific prediction/score signals.",
+            "not_for": "Stock-universe ranking or TopK ranking retrieval; use internal.ranking.get_latest for market ranking. Also not for discovering a security when no identity has been resolved yet.",
         },
         {
             "name": INTERNAL_RANKING_GET_LATEST,
@@ -607,7 +607,7 @@ def build_internal_system_tool_definitions(
                     slot_id="entity_model_signals",
                     schema_id="EntityModelSignals.v1",
                     source_path="data",
-                    description="Model prediction and ranking facts for one authoritative security.",
+                    description="Entity-specific model prediction/score facts for one authoritative security. This slot is not the stock-universe market ranking list.",
                     contract="model.stock-signals",
                     version="1.0",
                 )

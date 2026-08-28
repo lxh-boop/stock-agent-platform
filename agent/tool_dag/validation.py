@@ -124,9 +124,11 @@ def _artifact_contract_compatible(producer: Any | None, consumer: Any | None) ->
     return producer_version in set(accepted)
 
 class ToolDagValidator:
-    """Validate private Tool selection, schemas, dependencies and goal coverage.
+    """Validate whether a Worker-private Tool DAG is safe and executable.
 
-    The validator never inserts, deletes, replaces, or reorders Tool tasks.
+    This validator deliberately does not judge business-goal coverage or result
+    sufficiency.  It only enforces registered Tool availability/permission,
+    argument/input contracts, dependency references and DAG structure.
     """
 
     def __init__(self, registry: ToolRegistry, directory: WorkerToolDirectory) -> None:
@@ -156,16 +158,6 @@ class ToolDagValidator:
             raise ToolDagContractViolation("tool_dag_tasks_required", "$.tasks")
         if not isinstance(finals, list) or not finals:
             raise ToolDagContractViolation("tool_dag_final_outputs_required", "$.final_output_task_ids")
-
-        required_goal_keys = {
-            str(item).strip()
-            for item in goal.get("required_output_keys") or []
-            if str(item or "").strip()
-        }
-        if not str(goal.get("goal_summary") or "").strip():
-            raise ToolDagContractViolation("tool_dag_goal_summary_required", "$.goal_contract.goal_summary")
-        if not required_goal_keys:
-            raise ToolDagContractViolation("tool_dag_required_output_keys_required", "$.goal_contract.required_output_keys")
 
         allowed = set(allowed_tool_names or self.directory.allowed_tool_names(worker_role))
         task_ids: list[str] = []
@@ -356,29 +348,6 @@ class ToolDagValidator:
             raise ToolDagContractViolation("final_tool_task_not_found", "$.final_output_task_ids", ",".join(missing_finals))
 
         self._validate_acyclic(tasks, externally_satisfied=frozen_ids)
-        self._validate_contribution(tasks, final_ids, external_ids=frozen_ids)
-        final_outputs: set[str] = set()
-        for task_id in final_ids:
-            if task_id in task_by_id:
-                final_outputs.update(task_by_id[task_id].expected_output_keys)
-                final_outputs.update(
-                    str(item.slot_id) for item in output_contracts_for(definitions[task_id]) if str(item.slot_id)
-                )
-            else:
-                signature = signatures.get(task_id) or {}
-                final_outputs.update(str(item) for item in signature.get("expected_output_keys") or [] if str(item))
-                frozen_definition = self.registry.get(str(signature.get("tool_name") or ""))
-                if frozen_definition is not None:
-                    final_outputs.update(
-                        str(item.slot_id) for item in output_contracts_for(frozen_definition) if str(item.slot_id)
-                    )
-        missing_goal_outputs = sorted(required_goal_keys - final_outputs)
-        if missing_goal_outputs:
-            raise ToolDagContractViolation(
-                "tool_dag_goal_output_not_produced",
-                "$.goal_contract.required_output_keys",
-                ",".join(missing_goal_outputs),
-            )
 
         return ToolDagPlan(
             worker_task_id=str(worker_task_id),

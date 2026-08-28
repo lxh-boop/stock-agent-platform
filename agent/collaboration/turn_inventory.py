@@ -20,6 +20,8 @@ from typing import Any
 from uuid import uuid4
 
 from agent.artifacts import resolve_current_trade_date
+from agent.capabilities.data_names import LEGACY_OUTPUT_NAME_MAP, normalize_data_name
+from agent.console_trace import runtime_debug_event
 from database.repositories import AgentRepository
 
 
@@ -29,6 +31,26 @@ DEFAULT_INVENTORY_LIMIT = 10  # 注入 prompt 的候选上限
 DEFAULT_MAX_AGE_DAYS = 7  # 轮次级 TTL：超过该天数的摘要不进候选
 SUMMARY_MAX_CHARS = 120  # 单行摘要最大字符数
 
+
+
+
+def _canonical_output_name(value: str) -> str:
+    raw = str(value or "").strip()
+    mapped = LEGACY_OUTPUT_NAME_MAP.get(raw, raw)
+    try:
+        return normalize_data_name(mapped)
+    except Exception:
+        return mapped
+
+
+def _reusable_outputs_from_artifacts(artifact_refs: list[dict[str, Any]]) -> list[str]:
+    return list(dict.fromkeys(
+        _canonical_output_name(output)
+        for ref in list(artifact_refs or [])
+        if isinstance(ref, dict)
+        for output in ref.get("produced_outputs") or []
+        if str(output).strip()
+    ))
 
 def _now_text() -> str:
     # 当前时间文本（与 artifacts/session_state 保持同一格式）
@@ -136,6 +158,7 @@ def build_conversation_inventory(
     current_trade_date: str = "",
     limit: int = DEFAULT_INVENTORY_LIMIT,
     max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+    debug_run_id: str = "",
 ) -> dict[str, Any]:
     # 查询侧：构建 ConversationInventory
     # 返回结构：
@@ -170,12 +193,15 @@ def build_conversation_inventory(
     for index, row in enumerate(fresh_rows, start=1):
         display_id = f"turn_{index:02d}"  # 显示短编号（防真实标识暴露给 LLM）
         trade_date = str(row.get("trade_date") or "")
+        artifact_refs = list(row.get("artifact_refs_json") or row.get("artifact_refs") or [])
+        reusable_outputs = _reusable_outputs_from_artifacts(artifact_refs)
         items.append(
             {
                 "turn_id": display_id,  # LLM 引用的编号（粗筛/精判都填它）
                 "user_summary": str(row.get("user_summary") or ""),
                 "assistant_summary": str(row.get("assistant_summary") or ""),
                 "freshness": freshness_label(trade_date, current_trade_date),
+                "reusable_outputs": reusable_outputs,
             }
         )
         guards[display_id] = {
@@ -184,10 +210,11 @@ def build_conversation_inventory(
             "run_id": str(row.get("run_id") or ""),
             "trade_date": trade_date,
             "created_at": str(row.get("created_at") or ""),
-            "artifact_refs": list(row.get("artifact_refs_json") or row.get("artifact_refs") or []),
+            "artifact_refs": artifact_refs,
+            "reusable_outputs": reusable_outputs,
         }
 
-    return {
+    inventory = {
         "inventory_version": INVENTORY_VERSION,
         "generated_at": _now_text(),
         "current_trade_date": current_trade_date,
@@ -195,6 +222,19 @@ def build_conversation_inventory(
         "guards": guards,
         "truncated": truncated,
     }
+    runtime_debug_event(
+        "REUSE_CANDIDATE_DISCOVERY",
+        {
+            "user_id": str(user_id or ""),
+            "raw_summary_count": len(rows),
+            "fresh_summary_count": len(fresh_rows),
+            "candidate_count": len(items),
+            "candidates": items,
+            "truncated": truncated,
+        },
+        run_id=debug_run_id,
+    )
+    return inventory
 
 
 def render_inventory_lines(inventory: dict[str, Any]) -> list[str]:
@@ -206,7 +246,10 @@ def render_inventory_lines(inventory: dict[str, Any]) -> list[str]:
                 turn_id=str(item.get("turn_id") or ""),
                 freshness=str(item.get("freshness") or "non_trade"),
                 user_summary=str(item.get("user_summary") or ""),
-                assistant_summary=str(item.get("assistant_summary") or ""),
+                assistant_summary=(
+                    str(item.get("assistant_summary") or "")
+                    + (" | 可复用数据: " + ",".join(item.get("reusable_outputs") or []) if item.get("reusable_outputs") else "")
+                ),
             )
         )
     return lines
@@ -219,6 +262,7 @@ def load_candidate_answers(
     display_ids: list[str],
     max_chars: int = 800,
     max_candidates: int = 3,
+    debug_run_id: str = "",
 ) -> list[dict[str, Any]]:
     # 规则层 1 候选精筛（纯代码）：
     # 按 display_ids 顺序处理（清单已按时间倒序，新的在前），
@@ -264,9 +308,30 @@ def load_candidate_answers(
                 "turn_id": str(display_id),
                 "answer_excerpt": answer_text[: max(200, int(max_chars))],
                 "trade_date": str(guard.get("trade_date") or ""),
+                "freshness": freshness_label(str(guard.get("trade_date") or ""), resolve_current_trade_date()),
                 "artifact_refs": list(guard.get("artifact_refs") or []),
+                "reusable_outputs": list(guard.get("reusable_outputs") or _reusable_outputs_from_artifacts(list(guard.get("artifact_refs") or []))),
+                "source_run_id": str(guard.get("run_id") or ""),
             }
         )
         if len(candidates) >= max(1, int(max_candidates)):
             break
+    runtime_debug_event(
+        "REUSE_CANDIDATE_ANSWERS_LOADED",
+        {
+            "requested_display_ids": list(display_ids or []),
+            "loaded_count": len(candidates),
+            "candidates": [
+                {
+                    "turn_id": row.get("turn_id"),
+                    "trade_date": row.get("trade_date"),
+                    "freshness": row.get("freshness"),
+                    "reusable_outputs": row.get("reusable_outputs"),
+                    "artifact_count": len(row.get("artifact_refs") or []),
+                }
+                for row in candidates
+            ],
+        },
+        run_id=debug_run_id,
+    )
     return candidates

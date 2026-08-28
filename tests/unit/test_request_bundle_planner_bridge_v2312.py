@@ -67,7 +67,7 @@ def _plan(request_id: str = "R03"):
         memory_summary="",
         request_id=request_id,
         task_id_prefix=f"{request_id}-",
-        request_target={"comparison_scope": "previous_resolved_entities"},
+        authoritative_target={"semantic_target": {"entity_type": "security", "display_text": "前序已解析实体", "source": "conversation_context", "status": "identified"}, "graph_refs": []},
         request_constraints=["沿用前序Request已验证结果"],
     )
     return llm, tasks, meta
@@ -86,14 +86,14 @@ def test_business_request_need_carries_authoritative_request_fields_and_no_per_r
     assert request_need_contract["schema_version"] == "request_need_contract.v1"
     assert request_need_contract["request_id"] == "R03"
     assert request_need_contract["request_objective"] == "比较前面两只股票的分析结果"
-    assert request_need_contract["request_target"] == {"comparison_scope": "previous_resolved_entities"}
+    assert request_need_contract["authoritative_target"]["semantic_target"]["display_text"] == "前序已解析实体"
     assert request_need_contract["constraints"] == ["沿用前序Request已验证结果"]
     assert all(need["request_id"] == "R03" for need in request_need_contract["needs"])
     assert all(need["need_id"] != "N_FINAL" for need in request_need_contract["needs"])
 
     contract = CapabilityContract.from_dict(tasks[0].contracts[0])
     # Request DAG only controls execution order. Prior business values are read from
-    # ContextBundle Working Memory rather than transported as a dependency Slot.
+    # RunContextStore Working Memory rather than transported as a dependency Slot.
     assert "request_dependency_results" not in contract.input_data_names(required_only=True)
     assert CapabilityWorkerDirectory().get("W09").working_memory_mode == "consumer"
     assert "analysis" in tasks[0].expected_data_names
@@ -103,7 +103,7 @@ def test_request_dependencies_do_not_reappear_as_need_transport_contract() -> No
     _, _, meta = _plan()
     serialized = str(meta["request_need_contract"])
     assert "request_dependency_results" not in serialized
-    assert meta["business_data_owner"] == "context_bundle_working_memory"
+    assert meta["business_data_owner"] == "run_context_store"
     assert meta["task_dependency_owner"] == "request_task_state"
 
 

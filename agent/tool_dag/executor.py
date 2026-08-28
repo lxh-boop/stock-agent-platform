@@ -127,34 +127,21 @@ class ToolDagExecutor:
     ) -> ToolNodeExecutionRecord:
         published = cls._published_output_keys(result)
         produced = sorted(published)
+        # Business-output sufficiency is intentionally not validated at the Tool
+        # execution layer. Missing declared output keys remain diagnostic only.
         missing = sorted(set(task.expected_output_keys) - published)
         execution_success = bool(result.success)
-        contract_valid = not missing
+        contract_valid = execution_success
         summary = cls._result_summary(result)
-        if execution_success and contract_valid:
-            status = "succeeded"
-            completion_status = "completed"
-        elif execution_success:
-            status = "failed"
-            completion_status = "partially_completed"
-        else:
-            status = "failed"
-            completion_status = "not_completed"
-
-        if execution_success and summary.get("business_empty"):
-            business_status = "empty"
-        elif execution_success and not summary.get("coverage_satisfied", True):
-            business_status = "partial"
-        elif execution_success:
-            business_status = "sufficient"
-        else:
-            business_status = "unknown"
+        status = "succeeded" if execution_success else "failed"
+        completion_status = "completed" if execution_success else "not_completed"
+        business_status = "not_evaluated" if execution_success else "unknown"
 
         retryable = bool((result.metadata or {}).get("retryable", False))
-        reusable = status == "succeeded" and contract_valid
+        reusable = execution_success
         should_freeze = bool(reusable or (status == "failed" and not retryable))
         if reusable:
-            freeze_reason = "tool_completed_and_result_contract_valid"
+            freeze_reason = "tool_execution_completed"
         elif should_freeze:
             freeze_reason = "non_retryable_failure_must_not_be_reexecuted"
         else:
@@ -164,7 +151,6 @@ class ToolDagExecutor:
             structured = result.error.to_dict() if getattr(result, "error", None) else {}
             failure = {
                 "failure_kind": str((result.metadata or {}).get("failure_kind") or "tool_failure"),
-                "error_id": str(structured.get("error_id") or ""),
                 "error_id": str(structured.get("error_id") or result.error_type or "tool_reported_failure"),
                 "operation": str(structured.get("operation") or task.objective),
                 "reason": str(structured.get("reason") or result.error_message or ";".join(result.errors or []))[:2000],
@@ -353,10 +339,9 @@ class ToolDagExecutor:
 
         final_results = [results[task_id] for task_id in plan.final_output_task_ids if task_id in results]
         records_by_id = {record.tool_task_id: record for record in node_records}
-        required = set(plan.goal_contract.get("required_output_keys") or [])
-        produced: set[str] = set()
-        for result in final_results:
-            produced.update(self._published_output_keys(result))
+        # Tool-DAG success means the selected final Tool nodes executed
+        # successfully. Whether their business content is sufficient for the
+        # Worker/Request is evaluated elsewhere (currently skipped).
         success = (
             bool(final_results)
             and all(
@@ -372,7 +357,6 @@ class ToolDagExecutor:
                 )
                 for task_id in plan.final_output_task_ids
             )
-            and required.issubset(produced)
         )
         return ToolDagExecutionResult(
             plan=plan,

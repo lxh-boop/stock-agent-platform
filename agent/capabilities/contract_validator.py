@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from .data_names import missing_required_paths
 from .models import CapabilityContract, ContractCompletionReport
 
 
 class CapabilityContractValidator:
-    """Validate Worker contracts against materialized business-data names.
+    """Execution-end business contract hook.
 
-    Empty values are valid materialized data: the name is written only after a
-    successful query/generation finishes, so ``[]``/``{}`` explicitly mean the
-    completed business operation returned an empty value.
+    Stage 3.3 intentionally disables deterministic business-content validation.
+    The function name and call site are preserved so semantic/business validation
+    can be restored later without changing the Worker execution chain.
+
+    Only the already-known Worker execution status is reflected in the returned
+    contract reports.  Promised field presence, JSON paths, business emptiness,
+    forbidden business outputs, and acceptance-rule semantics are not evaluated.
     """
 
     def validate(
@@ -24,56 +27,37 @@ class CapabilityContractValidator:
         result_payload: dict[str, Any] | None,
         evidence_refs: list[str] | None = None,
     ) -> list[ContractCompletionReport]:
-        payload = dict(result_payload or {})
-        values = dict(materialized_data or {})
-        reports: list[ContractCompletionReport] = []
+        # Keep the interface and execution-end invocation stable, but deliberately
+        # do not inspect business values/keywords/paths in this stage.
+        del materialized_data, result_payload
 
+        status_value = str(result_status or "").strip().lower()
+        if status_value in {"completed", "proposal_ready"}:
+            terminal_status = "completed"
+        elif status_value in {"need_context", "waiting_context"}:
+            terminal_status = "need_context"
+        elif status_value in {"blocked", "not_executed"}:
+            terminal_status = "blocked"
+        elif status_value == "partial":
+            # PARTIAL here reflects execution state, not a business-content
+            # judgment.  canonicalize_completion_report keeps the Worker partial.
+            terminal_status = "business_insufficient"
+        else:
+            terminal_status = "failed"
+
+        produced = {str(name) for name in produced_data_names if str(name)}
+        reports: list[ContractCompletionReport] = []
         for contract in contracts:
             promised = set(contract.output_data_names())
-            concrete = {name for name in values if name in promised}
-            satisfied = sorted(promised.intersection(produced_data_names).intersection(concrete))
-            missing = sorted(promised - set(satisfied))
-            failed_rules: list[str] = []
-
-            if "schema_valid" in contract.acceptance_rule_ids:
-                for output in contract.promised_data:
-                    if output.name not in concrete:
-                        continue
-                    if missing_required_paths(values.get(output.name), output.required_paths):
-                        failed_rules.append("schema_valid")
-                        break
-            if "no_forbidden_output" in contract.acceptance_rule_ids:
-                if set(contract.forbidden_data_names).intersection(values):
-                    failed_rules.append("no_forbidden_output")
-
-            status = "completed"
-            if result_status in {"need_context", "waiting_context"}:
-                status = "need_context"
-            elif result_status in {"blocked", "not_executed"}:
-                status = "blocked"
-            elif result_status in {"failed", "error"}:
-                status = "failed"
-            elif missing or failed_rules:
-                status = "business_insufficient"
-            elif payload.get("business_empty") is True or (
-                promised and all(values.get(name) in (None, {}, [], "") for name in promised if name in values)
-            ):
-                status = "business_empty"
-
-            if status not in set(contract.allowed_terminal_states):
-                failed_rules.append("terminal_state_not_allowed")
-                status = "failed" if result_status in {"failed", "error"} else "business_insufficient"
-
-            reports.append(ContractCompletionReport(
-                contract_id=contract.contract_id,
-                status=status,
-                satisfied_outputs=satisfied,
-                missing_outputs=missing,
-                failed_acceptance_rules=list(dict.fromkeys(failed_rules)),
-                evidence_refs=list(evidence_refs or []),
-                limitations=[
-                    *(["missing materialized promised business data"] if missing else []),
-                    *(["acceptance rules failed"] if failed_rules else []),
-                ],
-            ))
+            reports.append(
+                ContractCompletionReport(
+                    contract_id=contract.contract_id,
+                    status=terminal_status,
+                    satisfied_outputs=sorted(promised.intersection(produced)),
+                    missing_outputs=[],
+                    failed_acceptance_rules=[],
+                    evidence_refs=list(evidence_refs or []),
+                    limitations=[],
+                )
+            )
         return reports

@@ -278,9 +278,9 @@ _CARDS = {
         role="entity_analysis",
         short_description="分析已确定身份的金融实体，并基于当前工作记忆形成结构化判断。",
         full_description=(
-            "W09只负责实体分析与比较。Runtime会按目标GraphRef从本轮Working Memory组装该实体已经查询完成的数据标签；"
-            "W09不负责实体定位、数据检索、选择其他Worker或理解数据来自哪个Tool。"
-            "空值标签表示对应查询已经完成但结果为空；数据是否足以支撑当前分析目标由W09自行判断。"
+            "W09只负责实体分析与比较。它只读取本轮其他Worker已经产生的GraphWorkerResult以及当前权威GraphRef；"
+            "不调用Tool、不访问数据库/RAG/业务模型接口，也不直接调用其他Worker。"
+            "其他Worker结果是否足以支撑当前分析目标由W09自行判断；不足时只说明缺少什么业务信息。"
         ),
         supported_boundary_ids=["entity.analysis"],
         capability_tags=["entity_analysis", "synthesis", "comparison", "uncertainty"],
@@ -291,7 +291,7 @@ _CARDS = {
         execution_mode="pure_llm",
         working_memory_mode="consumer",
         execution_stage="analysis",
-        private_worker_prompt="只分析目标实体当前Working Memory中的已查询数据；自行判断数据质量与充分性，不关心数据来源，不调用任何检索或业务Tool。",
+        private_worker_prompt="只分析本轮其他Worker的GraphWorkerResult；自行判断结果质量与充分性，不调用任何检索、数据库、RAG、业务Tool或其他Worker。",
     ),
 }
 

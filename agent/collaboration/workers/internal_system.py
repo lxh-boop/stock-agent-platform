@@ -63,12 +63,11 @@ def _publish_business_data(
         warnings.extend(str(item) for item in getattr(tool_result, "warnings", []) or [] if str(item))
         warnings.extend(str(item) for item in getattr(tool_result, "errors", []) or [] if str(item))
     produced = [name for name in contract_output_data_names(task) if name in business_data]
-    missing = [name for name in contract_output_data_names(task) if name not in business_data]
     return (
         business_data,
         business_data_contracts,
         produced,
-        list(dict.fromkeys([*warnings, *missing])),
+        list(dict.fromkeys(warnings)),
     )
 
 
@@ -110,15 +109,38 @@ def run_internal_system(
         max_replans=1,
     )
     business_data, business_data_contracts, produced, warnings = _publish_business_data(task, dag_result)
-    success = bool(dag_result.success and not [name for name in required_outputs if name not in produced])
-    status = ResultStatus.COMPLETED if success else ResultStatus.PARTIAL if produced else ResultStatus.FAILED
+    execution_success = bool(dag_result.success)
+    status = ResultStatus.COMPLETED if execution_success else ResultStatus.PARTIAL if produced else ResultStatus.FAILED
     payload = {
         "boundary_id": task.boundary_id,
         "business_data": business_data,
         "business_data_contracts": business_data_contracts,
         "produced_data_names": produced,
+        # Diagnostics only. Missing business names do not determine execution success.
         "missing_data_names": [name for name in required_outputs if name not in produced],
         "business_empty": bool(produced and all(value in ({}, [], None, "") for value in business_data.values())),
+        "business_validation_mode": "pass_through",
+    }
+    failed_nodes = [
+        record.to_dict()
+        for record in list(getattr(dag_result, "node_records", []) or [])
+        if str(getattr(record, "status", "") or "") != "succeeded"
+    ]
+    failure_reason = ""
+    if failed_nodes:
+        first_failure = dict(failed_nodes[0].get("failure") or {})
+        failure_reason = str(
+            first_failure.get("reason")
+            or first_failure.get("error_message")
+            or first_failure.get("error_id")
+            or "W02 private Tool execution failed."
+        )
+    error = None if execution_success else {
+        "code": "internal_capability_tool_execution_failed",
+        "message": failure_reason or "W02 私有 Tool 执行失败。",
+        "component": task.assigned_agent,
+        "retryable": True,
+        "failed_tool_tasks": failed_nodes[:8],
     }
     result = GraphWorkerResult(
         task_id=task.task_id,
@@ -126,26 +148,23 @@ def run_internal_system(
         status=status,
         output_type="CapabilityResult",
         payload_schema="capability_result.v1",
-        payload=payload if produced else None,
-        data=payload if produced else None,
-        error=None if produced else {
-            "code": "internal_capability_tool_dag_failed",
-            "message": "W02 私有 Tool DAG 未产生合同承诺的业务数据。",
-            "component": task.assigned_agent,
-            "retryable": True,
-        },
+        payload=payload,
+        data=payload,
+        error=error,
         focus_refs=task.focus_refs,
         summary=(
-            "已通过 W02 私有 Tool DAG 读取内部权威事实。"
-            if produced else "内部权威事实读取失败。"
+            "W02 私有 Tool 已执行完成；业务内容充分性当前不在Worker执行层校验。"
+            if execution_success else "W02 私有 Tool 执行失败，错误结果将交给Coordinator Recovery。"
         ),
         findings=[{"kind": "capability_business_data", "data_names": produced}],
-        confidence=1.0 if success else 0.6 if produced else 0.0,
+        confidence=1.0 if execution_success else 0.5 if produced else 0.0,
         warnings=warnings,
         metadata={
             "boundary_id": task.boundary_id,
             "tool_dag_task_count": len(getattr(getattr(dag_result, "plan", None), "tasks", []) or []),
             "produced_data_names": produced,
+            "business_validation_mode": "pass_through",
+            "tool_execution_success": execution_success,
         },
     )
     result.completion = runtime_completion_report(

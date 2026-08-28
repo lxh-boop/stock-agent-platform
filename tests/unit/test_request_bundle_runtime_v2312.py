@@ -58,9 +58,9 @@ def test_bundle_final_report_task_reads_request_aggregate_directly_not_business_
 
 def test_request_result_classifier_distinguishes_failure_classes() -> None:
     classify = AgentCollaborationCoordinator._classify_request_result
-    assert classify({"execution_status":"waiting_context","task_results":{"T":{"completion":{"failure_kind":"user_input_required","business_status":"unknown"},"error":{"error_id":"user_input_required"}}}}) == RequestStatus.WAITING_USER_INPUT
-    assert classify({"task_results":{"T":{"completion":{"failure_kind":"tool_execution_failure","business_status":"unknown"},"error":{"error_id":"tool_execution_failure"}}}}) == RequestStatus.TOOL_FAILED
-    assert classify({"task_results":{"T":{"completion":{"failure_kind":"none","business_status":"business_empty"}}}}) == RequestStatus.BUSINESS_EMPTY
+    assert classify({"execution_status":"waiting_context","worker_results":{"T":{"completion":{"failure_kind":"user_input_required","business_status":"unknown"},"error":{"error_id":"user_input_required"}}}}) == RequestStatus.WAITING_USER_INPUT
+    assert classify({"worker_results":{"T":{"completion":{"failure_kind":"tool_execution_failure","business_status":"unknown"},"error":{"error_id":"tool_execution_failure"}}}}) == RequestStatus.TOOL_FAILED
+    assert classify({"worker_results":{"T":{"completion":{"failure_kind":"none","business_status":"business_empty"}}}}) == RequestStatus.BUSINESS_EMPTY
 
 
 def test_bundle_execute_keeps_parent_run_and_dependency_is_order_only(tmp_path) -> None:
@@ -90,7 +90,7 @@ def test_bundle_execute_keeps_parent_run_and_dependency_is_order_only(tmp_path) 
     calls=[]
     def _business(self, **kwargs):
         calls.append(kwargs)
-        return {"success":True,"execution_status":"completed","task_results":{},"graph_runtime":{"worker_dag":{"tasks":[]}},"need_completion":{"goal_status":"completed"},"context_sufficiency":{"status":"sufficient"},"warnings":[],"errors":[],"replan_count":0,"agent_timeline":[],"execution_batches":[],"session_mutation_proposal":{"operations":[]}}
+        return {"success":True,"execution_status":"completed","worker_results":{},"graph_runtime":{"worker_dag":{"tasks":[]}},"need_completion":{"goal_status":"completed"},"context_sufficiency":{"status":"sufficient"},"warnings":[],"errors":[],"replan_count":0,"agent_timeline":[],"execution_batches":[],"session_mutation_proposal":{"operations":[]}}
     def _materialize(self, *, request, result, run_id):
         return {"request_id":request.request_id,"status":"completed","business_data":{"analysis":{"from":request.request_id}}}
     def _run_dag(self, tasks, **kwargs):

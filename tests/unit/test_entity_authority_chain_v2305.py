@@ -117,7 +117,7 @@ def test_coordinator_does_not_pass_previous_session_entity_to_planner_when_entry
     coordinator.planner = CapturePlanner()
     coordinator.specialist = types.SimpleNamespace(context_bundle=types.SimpleNamespace(run_id="r"))
     coordinator._resolve_request_refs = types.MethodType(
-        lambda self, **kwargs: ([], [], {"mentions": [], "items": [], "context_binding": kwargs.get("context_binding") or {}}),
+        lambda self, **kwargs: ([], [], {"semantic_entities": [], "items": [], "context_binding": kwargs.get("context_binding") or {}}),
         coordinator,
     )
 
@@ -144,71 +144,126 @@ def test_coordinator_does_not_pass_previous_session_entity_to_planner_when_entry
     assert coordinator.planner.context_binding["inherit_previous_focus"] is False
 
 
-def test_request_need_prompt_receives_authoritative_portfolio_scope_without_historical_entity() -> None:
-    import json
 
-    from agent.collaboration.planner import CoordinatorPlanner
 
-    class CaptureLLM:
-        def __init__(self):
-            self.messages = None
+def test_conversation_semantic_focus_cannot_override_authoritative_typed_focus():
+    from types import SimpleNamespace
+    from agent.collaboration.coordinator import AgentCollaborationCoordinator
+    from agent.graph.contracts import GraphNodeKind, GraphRef
 
-        def generate_json(self, **kwargs):
-            self.messages = kwargs["messages"]
-            payload = {
-                "needs": [
-                    {"description": "获取当前组合、持仓和用户约束。", "required": True, "requirements": [
-                        {"semantic_key": "portfolio_state", "direction": "output", "required": True, "required_paths": []},
-                        {"semantic_key": "portfolio_positions", "direction": "output", "required": True, "required_paths": []},
-                        {"semantic_key": "user_constraints", "direction": "output", "required": True, "required_paths": []},
-                    ]},
-                    {"description": "分析当前组合的集中度、暴露和风险约束。", "required": True, "requirements": [
-                        {"semantic_key": "portfolio_state", "direction": "input", "required": True, "required_paths": []},
-                        {"semantic_key": "portfolio_positions", "direction": "input", "required": True, "required_paths": []},
-                        {"semantic_key": "user_constraints", "direction": "input", "required": True, "required_paths": []},
-                        {"semantic_key": "portfolio_risk", "direction": "output", "required": True, "required_paths": []},
-                    ]},
-                    {"description": "基于组合事实和风险分析形成持仓调整建议。", "required": True, "requirements": [
-                        {"semantic_key": "portfolio_risk", "direction": "input", "required": True, "required_paths": []},
-                        {"semantic_key": "user_constraints", "direction": "input", "required": True, "required_paths": []},
-                        {"semantic_key": "rebalance_proposal", "direction": "output", "required": True, "required_paths": []},
-                    ]},
-                ],
-            }
-            kwargs["validator"](payload)
-            return payload
-
-    llm = CaptureLLM()
-    planner = CoordinatorPlanner(CapabilityWorkerDirectory(), llm_service=llm)
-    initial_context_names = planner._initial_context_names(
-        focus_refs=[], context_refs=[], memory_summary=""
+    typed = GraphRef(
+        graph_id="financial_graph",
+        node_id="cn:security:szse:000858",
+        node_kind=GraphNodeKind.OBJECT,
+        role="focus",
+        source="session_state",
+        confidence=1.0,
+        locked=True,
     )
-    result = planner._plan_request_need_contract(
-        query="生成当前完整持仓的调整建议",
-        request_target={"portfolio": "current"},
-        request_constraints=["仅基于当前完整组合"],
-        effect_limit="proposal",
-        run_id="r",
+    semantic = GraphRef(
+        graph_id="financial_graph",
+        node_id="cn:security:sse:600519",
+        node_kind=GraphNodeKind.OBJECT,
+        role="focus",
+        source="neo4j",
+        confidence=1.0,
+        locked=True,
+    )
+
+    class Identity:
+        def resolve_request(self, *args, **kwargs):
+            del args, kwargs
+            return SimpleNamespace(
+                refs=[semantic],
+                ambiguous_mentions=[],
+                unresolved_mentions=[],
+                to_dict=lambda: {"refs": [semantic.to_dict()]},
+            )
+
+    coordinator = AgentCollaborationCoordinator.__new__(AgentCollaborationCoordinator)
+    coordinator.identity = Identity()
+    refs, missing, audit = coordinator._resolve_request_refs(
+        query="那它呢？",
+        inherited_refs=[typed],
+        typed_inherited_refs=[typed],
+        context_refs=[],
+        as_of_time="",
         language="zh",
-        initial_context_names=initial_context_names,
-        memory_summary="",
         context_binding={
-            "entity_scope": "portfolio",
-            "inherit_previous_focus": False,
-            "reason": "完整组合任务不继承上一轮单一证券",
+            "entity_scope": "conversation_focus",
+            "inherit_previous_focus": True,
+            "reference_entity_type": "security",
         },
-        request_id="R01",
+        semantic_target={
+            "entity_type": "security",
+            "display_text": "贵州茅台",
+            "source": "conversation_context",
+            "status": "identified",
+        },
+        semantic_entities=[{
+            "text": "贵州茅台",
+            "entity_type": "security",
+            "role": "focus",
+            "source": "conversation_context",
+        }],
+    )
+    assert refs == []
+    assert [item.key for item in missing] == ["conversation_focus_semantic_conflict"]
+    assert audit["items"][0]["authority_decision"] == "semantic_hint_conflicts_with_typed_focus"
+
+
+def test_unresolved_conversation_semantic_hint_falls_back_to_authoritative_typed_focus():
+    from types import SimpleNamespace
+    from agent.collaboration.coordinator import AgentCollaborationCoordinator
+    from agent.graph.contracts import GraphNodeKind, GraphRef
+
+    typed = GraphRef(
+        graph_id="financial_graph",
+        node_id="cn:security:szse:000858",
+        node_kind=GraphNodeKind.OBJECT,
+        role="focus",
+        source="session_state",
+        confidence=1.0,
+        locked=True,
     )
 
-    user_payload = json.loads(llm.messages[1]["content"])
-    assert user_payload["request_objective"] == "生成当前完整持仓的调整建议"
-    assert user_payload["request_target"] == {"portfolio": "current"}
-    assert user_payload["request_constraints"] == ["仅基于当前完整组合"]
-    assert user_payload["context_binding"]["entity_scope"] == "portfolio"
-    assert user_payload["context_binding"]["inherit_previous_focus"] is False
-    assert user_payload["authoritative_entity_refs_available"] is False
-    assert user_payload["session_summary"] == ""
-    assert "贵州茅台" not in json.dumps(user_payload, ensure_ascii=False)
-    assert result["request_objective"] == "生成当前完整持仓的调整建议"
-    assert result["request_target"] == {"portfolio": "current"}
-    assert "贵州茅台" not in json.dumps(result, ensure_ascii=False)
+    class Identity:
+        def resolve_request(self, *args, **kwargs):
+            del args, kwargs
+            return SimpleNamespace(
+                refs=[],
+                ambiguous_mentions=[],
+                unresolved_mentions=["上一只股票"],
+                to_dict=lambda: {"unresolved_mentions": ["上一只股票"]},
+            )
+
+    coordinator = AgentCollaborationCoordinator.__new__(AgentCollaborationCoordinator)
+    coordinator.identity = Identity()
+    refs, missing, audit = coordinator._resolve_request_refs(
+        query="那它呢？",
+        inherited_refs=[typed],
+        typed_inherited_refs=[typed],
+        context_refs=[],
+        as_of_time="",
+        language="zh",
+        context_binding={
+            "entity_scope": "conversation_focus",
+            "inherit_previous_focus": True,
+            "reference_entity_type": "security",
+        },
+        semantic_target={
+            "entity_type": "security",
+            "display_text": "上一只股票",
+            "source": "conversation_context",
+            "status": "identified",
+        },
+        semantic_entities=[{
+            "text": "上一只股票",
+            "entity_type": "security",
+            "role": "focus",
+            "source": "conversation_context",
+        }],
+    )
+    assert [ref.node_id for ref in refs] == [typed.node_id]
+    assert missing == []
+    assert audit["items"][0]["authority_decision"] == "typed_focus_used_when_semantic_hint_unresolved"

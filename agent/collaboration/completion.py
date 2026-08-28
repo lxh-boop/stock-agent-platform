@@ -79,7 +79,15 @@ def validate_completion_report(report: dict[str, Any], contract: dict[str, Any] 
     if expected and produced | missing != expected:
         absent = expected - produced - missing
         raise WorkerContractViolation("completion_report_data_partition_incomplete", path, ",".join(sorted(absent)))
-    if bool(report.get("expected_task_completed")) and missing:
+    # Business-content validation is intentionally disabled. During pass-through
+    # mode a Worker may have executed successfully while some expected business
+    # names are absent; keep that as diagnostics instead of invalidating the
+    # completion report.
+    if (
+        str(report.get("business_validation_mode") or "") != "pass_through"
+        and bool(report.get("expected_task_completed"))
+        and missing
+    ):
         raise WorkerContractViolation("completed_report_cannot_have_missing_data", path, ",".join(sorted(missing)))
 
 
@@ -103,6 +111,7 @@ def build_completion_report(
     report = {
         "schema_version": COMPLETION_REPORT_VERSION,
         "report_source": str(report_source or "runtime"),
+        "business_validation_mode": "pass_through",
         "execution_status": str(execution_status),
         "contract_status": str(contract_status),
         "business_status": str(business_status),
@@ -125,6 +134,7 @@ def non_success_completion_report(task: GraphAgentTask, *, execution_status: str
     return {
         "schema_version": COMPLETION_REPORT_VERSION,
         "report_source": "runtime",
+        "business_validation_mode": "pass_through",
         "execution_status": str(execution_status),
         "contract_status": "not_satisfied",
         "business_status": "unknown",
@@ -192,7 +202,7 @@ def evaluate_need_completion(request_need_contract: dict[str, Any], observations
         required_outputs = list(dict.fromkeys(
             str(req.get("data_name") or "")
             for req in need.get("requirements") or []
-            if req.get("direction") == "output" and bool(req.get("required", True)) and str(req.get("data_name") or "")
+            if req.get("direction") == "output" and str(req.get("necessity") or "required") == "required" and str(req.get("data_name") or "")
         ))
         if not required_outputs:
             status, missing = "untracked", []
@@ -256,6 +266,7 @@ def canonicalize_completion_report(
     result_data: dict[str, Any] | None,
 ) -> tuple[ResultStatus, dict[str, Any], bool]:
     report = dict(completion or {})
+    report["business_validation_mode"] = "pass_through"
     required_pairs = [
         (contract, contract_report)
         for contract, contract_report in zip(task.contracts, contract_reports)
@@ -286,8 +297,8 @@ def canonicalize_completion_report(
         status = ResultStatus.PROPOSAL_READY if result_status == ResultStatus.PROPOSAL_READY else ResultStatus.COMPLETED
         report.update({
             "execution_status": "succeeded",
-            "contract_status": "valid",
-            "business_status": "empty" if business_empty else "sufficient",
+            "contract_status": "validation_skipped",
+            "business_status": "not_evaluated",
             "failure_kind": "none",
             "limitations": [],
         })

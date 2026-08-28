@@ -12,11 +12,13 @@ from typing import Any
 from core.llm import LLMService
 from core.llm.prompt_compaction import catalog_for_prompt, compact_json_dumps, schema_for_prompt
 
-from agent.console_trace import flow_event
+from agent.console_trace import flow_event, runtime_debug_event
 from agent.worker_tools import WorkerToolDirectory
 
 from .contracts import TOOL_DAG_OUTPUT_SCHEMA, ToolDagContractViolation, ToolDagPlan
 from .validation import ToolDagValidator
+
+
 
 
 def _safe_planning_value(value: Any, *, depth: int = 0) -> Any:
@@ -84,21 +86,19 @@ class WorkerToolDagPlanner:
                 "$.private_tool_catalog",
                 worker_role,
             )
-        rows = self.directory.summary_catalog(worker_role, tool_names=selected)
-        produced = {
-            str(slot)
-            for row in rows
-            for slot in row.get("produced_output_slots") or []
-            if str(slot)
-        }
-        required = {str(item) for item in required_output_keys if str(item)}
-        if required and not required.issubset(produced):
-            missing = sorted(required - produced)
-            raise ToolDagContractViolation(
-                "worker_private_tools_do_not_cover_required_outputs",
-                "$.private_tool_catalog",
-                ",".join(missing),
-            )
+        runtime_debug_event(
+            "WORKER_PRIVATE_TOOL_EXECUTION_CATALOG_READY",
+            {
+                "worker_task_id": worker_task_id,
+                "worker_role": worker_role,
+                "selected_tool_ids": selected,
+                "required_output_keys_for_planner_context_only": [str(item) for item in required_output_keys if str(item)],
+                "business_goal_coverage_validation": "skipped",
+            },
+            run_id=run_id,
+            task_id=worker_task_id,
+            level="DEBUG",
+        )
         flow_event(
             "TOOL_PRIVATE_CATALOG_SELECTED",
             {
@@ -189,7 +189,7 @@ class WorkerToolDagPlanner:
         system = (
             "你是专业Worker内部的Tool DAG Planner。private_tool_details_catalog包含该Worker可用的固定Tool合同。"
             "只能从 private_tool_details_catalog 选择Tool；不得选择其他Worker或修改Worker DAG。"
-            "根据任务目标和available_context生成最小Tool DAG。Tool彼此独立；只有本次DAG决定哪个输入引用哪个上下文或上游Tool输出。args只放普通常量，权威值通过inputs引用。"
+            "根据任务目标和available_context生成可执行的最小Tool DAG。required_output_keys只用于理解Worker目标，不是执行前的业务覆盖校验。Tool彼此独立；只有本次DAG决定哪个输入引用哪个上下文或上游Tool输出。args只放普通常量，权威值通过inputs引用。"
             "当输入来自前序Tool时，使用{from_tool_task_id, output_slot}；当输入合同cardinality=many时，inputs对应值必须是由一个或多个引用组成的List。"
             "output_slot必须来自上游Tool的output_contract；不要猜测records/items等Python内部data_key。final_output_task_ids必须指向完成目标的末端任务。"
             "不要输出goal_contract或expected_output_keys。严格输出JSON。"
@@ -246,38 +246,8 @@ class WorkerToolDagPlanner:
     ) -> ToolDagPlan:
         reusable_ids = set(reusable_results)
 
-        # Deterministic completion gate before any local-Replan LLM call.  A
-        # successful Tool set is authoritative when its frozen node records
-        # already cover every Worker-required output key.  This is generic: it
-        # depends only on the Tool DAG goal contract and node output records,
-        # never on Worker IDs or business-specific Tool names.
-        required_output_keys = {
-            str(item) for item in previous_plan.goal_contract.get("required_output_keys") or []
-            if str(item)
-        }
-        frozen_output_keys = {
-            str(key)
-            for record in node_records
-            if str(record.get("status") or "") == "succeeded"
-            and bool(record.get("execution_success", True))
-            and bool(record.get("contract_valid", True))
-            and bool(record.get("should_freeze", True))
-            for key in record.get("produced_output_keys") or []
-            if str(key)
-        }
-        if required_output_keys and required_output_keys.issubset(frozen_output_keys):
-            flow_event(
-                "TOOL_DAG_REPLAN_SKIPPED",
-                {
-                    "reason": "required_outputs_already_satisfied",
-                    "required_output_keys": sorted(required_output_keys),
-                    "frozen_output_keys": sorted(frozen_output_keys),
-                    "reusable_tool_task_ids": sorted(reusable_ids),
-                },
-                run_id=run_id,
-                task_id=previous_plan.worker_task_id,
-            )
-            return previous_plan
+        # Local Tool-DAG replanning is entered only after a real Tool execution
+        # failure. Business-output sufficiency is intentionally not evaluated here.
 
         frozen_rows = [
             task.planning_dict()

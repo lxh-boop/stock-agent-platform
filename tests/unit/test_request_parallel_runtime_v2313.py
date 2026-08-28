@@ -114,7 +114,7 @@ def test_two_independent_read_requests_overlap(tmp_path):
         with lock:
             active -= 1
         windows[rid] = (started, time.perf_counter())
-        return {"success": True, "execution_status": "completed", "task_results": {},
+        return {"success": True, "execution_status": "completed", "worker_results": {},
                 "graph_runtime": {"worker_dag": {"tasks": []}}, "need_completion": {},
                 "warnings": [], "errors": [], "replan_count": 0, "agent_timeline": [],
                 "execution_batches": [], "session_mutation_proposal": {"operations": []}}
@@ -137,7 +137,7 @@ def test_dependency_request_starts_after_parent_finishes(tmp_path):
     times = {}
     def _business(self, **kwargs):
         rid=kwargs["request_id"]; times[rid+"_start"]=time.perf_counter(); time.sleep(0.03); times[rid+"_end"]=time.perf_counter()
-        return {"success": True, "execution_status": "completed", "task_results": {},
+        return {"success": True, "execution_status": "completed", "worker_results": {},
                 "graph_runtime": {"worker_dag": {"tasks": []}}, "need_completion": {},
                 "warnings": [], "errors": [], "replan_count": 0, "agent_timeline": [],
                 "execution_batches": [], "session_mutation_proposal": {"operations": []}}
@@ -191,7 +191,7 @@ def test_non_mutating_proposal_requests_can_parallelize(tmp_path):
         with lock: active+=1; peak=max(peak,active)
         time.sleep(0.03)
         with lock: active-=1
-        return {"success":True,"execution_status":"completed","task_results":{},"graph_runtime":{"worker_dag":{"tasks":[]}},"need_completion":{},"warnings":[],"errors":[],"replan_count":0,"agent_timeline":[],"execution_batches":[],"session_mutation_proposal":{"operations":[]}}
+        return {"success":True,"execution_status":"completed","worker_results":{},"graph_runtime":{"worker_dag":{"tasks":[]}},"need_completion":{},"warnings":[],"errors":[],"replan_count":0,"agent_timeline":[],"execution_batches":[],"session_mutation_proposal":{"operations":[]}}
     c._execute_read_request=MethodType(_business,c)
     c._materialize_request_payload=MethodType(lambda self, **kwargs:{"request_id":kwargs["request"].request_id,"slots":{}},c)
     result=c.execute(query="P1;P2",decomposition={},user_id="u",default_top_k=5,session_id="s",run_id="r",language="zh",execution_context={})
@@ -206,7 +206,7 @@ def test_failed_parallel_request_does_not_cancel_independent_sibling(tmp_path):
     def _business(self, **kwargs):
         if kwargs["request_id"] == "R01":
             raise RuntimeError("tool boom")
-        return {"success":True,"execution_status":"completed","task_results":{},"graph_runtime":{"worker_dag":{"tasks":[]}},"need_completion":{},"warnings":[],"errors":[],"replan_count":0,"agent_timeline":[],"execution_batches":[],"session_mutation_proposal":{"operations":[]}}
+        return {"success":True,"execution_status":"completed","worker_results":{},"graph_runtime":{"worker_dag":{"tasks":[]}},"need_completion":{},"warnings":[],"errors":[],"replan_count":0,"agent_timeline":[],"execution_batches":[],"session_mutation_proposal":{"operations":[]}}
     c._execute_read_request=MethodType(_business,c)
     c._materialize_request_payload=MethodType(lambda self, **kwargs:{"request_id":kwargs["request"].request_id,"slots":{}},c)
     result=c.execute(query="A;B",decomposition={},user_id="u",default_top_k=5,session_id="s",run_id="r",language="zh",execution_context={})

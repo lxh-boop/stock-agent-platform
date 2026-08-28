@@ -169,6 +169,7 @@ class CollaborationRuntimeServices:
                 else max(0.0, float(result.metadata.get("duration_ms") or 0.0) / 1000.0)
             )
             step_status = _TERMINAL_STEP_STATUS.get(result.status, STEP_FAILED)
+            audit = result.audit_view()
             self.recorder.record_step_result(
                 task.task_id,
                 {
@@ -190,12 +191,12 @@ class CollaborationRuntimeServices:
                         "dependency_task_ids": list(task.dependency_task_ids),
                     },
                     "agent_output_summary": {
-                        "worker_result_status": result.status.value,
-                        "confidence": result.confidence,
-                        "warning_count": len(result.warnings),
-                        "missing_context_count": len(result.missing_items),
-                        "evidence_ref_count": len(result.evidence_refs),
-                        "artifact_ref_count": len(result.artifact_refs),
+                        "worker_result_status": audit["status"],
+                        "confidence": audit["confidence"],
+                        "warning_count": audit["warning_count"],
+                        "missing_context_count": audit["missing_context_count"],
+                        "evidence_ref_count": audit["evidence_ref_count"],
+                        "artifact_ref_count": audit["artifact_ref_count"],
                     },
                     "metadata": {
                         "runtime_layer": "capability_dag",

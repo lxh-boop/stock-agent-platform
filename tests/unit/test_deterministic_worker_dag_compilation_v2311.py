@@ -30,14 +30,14 @@ class _LLM:
                 {"description":"分析证券","required":True,"requirements":[
                     {"semantic_key":"entity_analysis","direction":"output","required":True},
                 ],"binding":{"worker_binding":{"worker_id":"W09","objective":"分析证券","desired_output_data_names":["analysis"]}}},
-            ],"selection_reason":"数据查询后由分析Worker读取ContextBundle。"}
+            ],"selection_reason":"数据查询后由分析Worker读取RunContextStore。"}
         else: raise AssertionError(stage)
         kwargs["validator"](payload); return payload
 
 
 def _plan():
     llm=_LLM(); planner=CoordinatorPlanner(CapabilityWorkerDirectory(),llm_service=llm,worker_tool_directory=_Tools())
-    tasks,meta=planner.plan(query="分析600519",effect_limit="read",request_target={"stock_code":"600519"},session_id="s",run_id="r",user_id="u",focus_refs=[SimpleNamespace(role="focus")],context_refs=[],memory_summary="",request_id="R01",task_id_prefix="R01-")
+    tasks,meta=planner.plan(query="分析600519",effect_limit="read",authoritative_target={"graph_refs":[{"node_id":"sec:600519.SH"}],"semantic_target":{"entity_type":"security","display_text":"贵州茅台","source":"explicit","status":"identified"}},session_id="s",run_id="r",user_id="u",focus_refs=[SimpleNamespace(role="focus")],context_refs=[],memory_summary="",request_id="R01",task_id_prefix="R01-")
     return llm,tasks,meta
 
 
@@ -51,7 +51,7 @@ def test_runtime_dependencies_are_execution_order_only() -> None:
     _,tasks,meta=_plan()
     assert tasks[0].dependency_task_ids == [] and tasks[1].dependency_task_ids == []
     assert set(tasks[2].dependency_task_ids) == {"R01-T01","R01-T02"}
-    assert meta["business_data_owner"] == "context_bundle_working_memory"
+    assert meta["business_data_owner"] == "run_context_store"
     assert meta["task_dependency_owner"] == "request_task_state"
     assert not hasattr(tasks[2],"resolved_input_bindings")
 

@@ -149,7 +149,7 @@ class ContextManager:
                 phase="initial",
                 metadata={
                     **({"page_state": safe_page_state} if safe_page_state else {}),
-                    "working_memory_model": "context_bundle_per_run",
+                    "working_memory_model": "run_context_store",
                 },
             ),
             artifact_context=artifact_context,
@@ -195,7 +195,7 @@ class ContextManager:
             metadata={
                 **dict(metadata or {}),
                 "memory_retrieval_id": str(memory_view.get("retrieval_id") or ""),
-                "working_memory_model": "context_bundle_per_run",
+                "working_memory_model": "run_context_store",
                 "working_memory_scope": "single_agent_run",
                 "context_authority": "conversation_state",
                 "artifact_reference_count": len(artifact_context.artifact_refs),
@@ -363,15 +363,16 @@ class ContextManager:
         if not isinstance(orchestration, dict):
             return
         runtime = bundle.runtime_context
-        task_results = orchestration.get("task_results")
+        worker_results = orchestration.get("worker_results")
         completed: list[str] = []
         failed: list[str] = []
-        if isinstance(task_results, dict):
-            for task_id, value in task_results.items():
+        if isinstance(worker_results, dict):
+            for task_id, value in worker_results.items():
                 item = value if isinstance(value, dict) else {}
-                if bool(item.get("success")):
+                status = str(item.get("status") or "").strip().lower()
+                if status in {"completed", "success", "succeeded"}:
                     completed.append(str(task_id))
-                else:
+                elif status:
                     failed.append(str(task_id))
         all_tasks = _task_ids(bundle.task_context.task_plan)
         runtime.completed_tasks = list(dict.fromkeys(completed))

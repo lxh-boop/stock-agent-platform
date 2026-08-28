@@ -28,6 +28,7 @@ class RunCheckpoint:
     task_states: dict[str, str] = field(default_factory=dict)
     resolved_entity_refs: list[dict[str, Any]] = field(default_factory=list)
     data_refs: list[str] = field(default_factory=list)
+    working_memory_snapshot: dict[str, Any] = field(default_factory=dict)
     missing_parameters: list[str] = field(default_factory=list)
     missing_context: list[str] = field(default_factory=list)
     pending_proposal_id: str = ""

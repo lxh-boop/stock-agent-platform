@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import traceback
 from typing import Any
 import uuid
 
@@ -22,6 +23,8 @@ _RUN_SEQUENCE: dict[str, int] = {}
 _RUN_FINALIZED: set[str] = set()
 _RUN_TOOL_EXECUTIONS: dict[str, list[dict[str, Any]]] = {}
 _RUN_LLM_EXECUTIONS: dict[str, list[dict[str, Any]]] = {}
+_RUN_DEBUG_FILES: dict[str, Path] = {}
+_RUN_DEBUG_SEQUENCE: dict[str, int] = {}
 
 _SECRET_KEY_PATTERN = re.compile(
     r"(?:api[_-]?key|token|secret|password|passwd|credential|"
@@ -132,6 +135,115 @@ def console_trace_enabled() -> bool:
 is_flow_trace_enabled = flow_trace_enabled
 is_console_trace_enabled = console_trace_enabled
 
+
+
+
+def runtime_debug_enabled() -> bool:
+    """Whether the code-level runtime JSONL debug log is enabled."""
+    return _env_truthy("AGENT_RUNTIME_DEBUG", default=True)
+
+
+def _runtime_debug_directory() -> Path:
+    configured = str(os.getenv("AGENT_RUNTIME_DEBUG_DIR", "")).strip()
+    path = Path(configured) if configured else Path.cwd() / "outputs" / "agent_runtime_debug"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _safe_source_file(filename: str) -> str:
+    try:
+        path = Path(str(filename or "")).resolve()
+        cwd = Path.cwd().resolve()
+        try:
+            return path.relative_to(cwd).as_posix()
+        except ValueError:
+            return path.name
+    except Exception:
+        return Path(str(filename or "unknown")).name
+
+
+def _debug_safe(value: Any, *, depth: int = 0) -> Any:
+    """Bounded JSON-safe payload for developer diagnostics.
+
+    Unlike the Markdown renderer this keeps deeper contract structure, but still
+    redacts secret-like fields and never writes absolute local paths.
+    """
+    if depth > 12:
+        return "<debug_max_depth>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        text = _redact_text(value)
+        return text if len(text) <= 8000 else text[:8000] + "...[truncated]"
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        out = [_debug_safe(item, depth=depth + 1) for item in items[:120]]
+        if len(items) > 120:
+            out.append({"truncated_count": len(items) - 120})
+        return out
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in list(value.items())[:240]:
+            name = str(key)
+            if _SECRET_KEY_PATTERN.search(name):
+                out[name] = "[redacted]"
+            elif _PATH_KEY_PATTERN.search(name) and name not in {"source_file", "file", "module"}:
+                out[name] = "[redacted path]"
+            else:
+                out[name] = _debug_safe(item, depth=depth + 1)
+        if len(value) > 240:
+            out["__truncated_key_count__"] = len(value) - 240
+        return out
+    if hasattr(value, "to_dict"):
+        try:
+            return _debug_safe(value.to_dict(), depth=depth + 1)
+        except Exception:
+            pass
+    return _debug_safe(str(value), depth=depth + 1)
+
+
+def runtime_debug_event(
+    stage: str,
+    payload: Any = None,
+    *,
+    run_id: str = "",
+    task_id: str = "",
+    level: str = "DEBUG",
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    """Write one code-level runtime diagnostic event as JSONL.
+
+    This log is deliberately separate from the human-readable Agent flow Markdown.
+    It records compiler/binder/gate/state-machine inputs and outputs without
+    exposing secrets or absolute local paths.
+    """
+    if not runtime_debug_enabled():
+        return ""
+    try:
+        canonical_run_id = _resolve_run_id(str(stage or "DEBUG").upper(), payload, run_id)
+        with _LOCK:
+            path = _RUN_DEBUG_FILES.get(canonical_run_id)
+            if path is None:
+                path = _runtime_debug_directory() / f"{_safe_file_name(canonical_run_id)}.jsonl"
+                _RUN_DEBUG_FILES[canonical_run_id] = path
+                _RUN_DEBUG_SEQUENCE[canonical_run_id] = 0
+            seq = _RUN_DEBUG_SEQUENCE.get(canonical_run_id, 0) + 1
+            _RUN_DEBUG_SEQUENCE[canonical_run_id] = seq
+            record = {
+                "sequence": seq,
+                "time": datetime.now().isoformat(timespec="milliseconds"),
+                "run_id": canonical_run_id,
+                "task_id": str(task_id or ""),
+                "stage": str(stage or "DEBUG"),
+                "level": str(level or "DEBUG"),
+                "payload": _debug_safe(payload),
+                "metadata": _debug_safe(dict(metadata or {})),
+            }
+            with path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=False, default=str) + "\n")
+            return str(path)
+    except Exception:
+        return ""
 
 def _max_chars() -> int:
     raw = os.getenv("AGENT_FLOW_TRACE_MAX_CHARS", "30000")
@@ -564,7 +676,7 @@ def flow_event(
         kwargs,
     )
     try:
-        return _append_event(
+        path = _append_event(
             stage=stage,
             payload=event_payload,
             run_id=run_id,
@@ -573,6 +685,15 @@ def flow_event(
             metadata=metadata,
             trace_kind="AGENT-FLOW",
         )
+        runtime_debug_event(
+            stage,
+            event_payload,
+            run_id=run_id,
+            task_id=task_id,
+            level=level,
+            metadata=metadata,
+        )
+        return path
     except Exception:
         return ""
 
@@ -848,10 +969,20 @@ def trace_exception(
     if not stage:
         stage = type(exc).__name__ if exc is not None else "EXCEPTION"
 
+    frames: list[dict[str, Any]] = []
+    if exc is not None and exc.__traceback__ is not None:
+        for frame in traceback.extract_tb(exc.__traceback__)[-12:]:
+            frames.append({
+                "source_file": _safe_source_file(frame.filename),
+                "line": int(frame.lineno),
+                "function": str(frame.name or ""),
+                "code": _redact_text(str(frame.line or ""))[:1000],
+            })
     payload: dict[str, Any] = {
         "stage": stage,
         "exception_type": type(exc).__name__ if exc is not None else "Exception",
         "message": _redact_text(str(exc)) if exc is not None else "",
+        "frames": frames,
     }
     if args:
         payload["context"] = list(args)
@@ -940,15 +1071,12 @@ def finalize_flow_markdown(
             graph_runtime = _as_mapping(payload.get("graph_runtime"))
             worker_dag = _as_mapping(graph_runtime.get("worker_dag"))
             planned_tasks = _as_rows(worker_dag.get("tasks"))
-            task_results = _as_mapping(payload.get("task_results"))
-            graph_results = _as_mapping(payload.get("graph_worker_results"))
-            result_items = _as_rows(graph_results.get("items"))
-            if not result_items:
-                result_items = [
-                    dict(item)
-                    for item in task_results.values()
-                    if isinstance(item, dict)
-                ]
+            worker_results = _as_mapping(payload.get("worker_results"))
+            result_items = [
+                dict(item)
+                for item in worker_results.values()
+                if isinstance(item, dict)
+            ]
             result_by_task = {
                 str(item.get("task_id") or ""): item
                 for item in result_items

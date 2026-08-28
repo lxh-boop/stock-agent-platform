@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from agent.console_trace import runtime_debug_event
+
 from .data_names import data_name_matches_patterns
 from .registry import CapabilityRegistry
 
@@ -21,7 +23,8 @@ def _violation(code: str, path: str, detail: str = ""):
 
 
 class NeedRequirementCompiler:
-    SCHEMA_VERSION = "need-requirement.v2"
+    SCHEMA_VERSION = "need-requirement.v3"
+    NECESSITY_VALUES = {"required", "preferred", "optional"}
 
     def __init__(self, registry: CapabilityRegistry, worker_directory: Any) -> None:
         self.registry = registry
@@ -69,6 +72,25 @@ class NeedRequirementCompiler:
                 semantic_key,
             )
 
+        necessity = str(raw.get("necessity") or "").strip().lower()
+        if not necessity:
+            # Canonical defaults are semantic, not backward-compatibility aliases:
+            # outputs and runtime identity are hard requirements; analytical data inputs
+            # are enhancement inputs unless the planner explicitly marks them required.
+            necessity = "required" if direction in {"output", "parameter"} or kind == "context" else "preferred"
+        if necessity not in self.NECESSITY_VALUES:
+            raise _violation(
+                "invalid_need_requirement_necessity",
+                f"$.needs[{need_id}].requirements[{index}].necessity",
+                necessity,
+            )
+        if direction in {"output", "parameter"} and necessity == "optional":
+            raise _violation(
+                "output_or_parameter_cannot_be_optional",
+                f"$.needs[{need_id}].requirements[{index}].necessity",
+                necessity,
+            )
+
         row: dict[str, Any] = {
             "requirement_id": f"{need_id}-R{index + 1:02d}",
             "semantic_key": semantic_key,
@@ -77,7 +99,7 @@ class NeedRequirementCompiler:
             "semantic_role": str(registered.get("semantic_role") or semantic_key),
             "source_policy": str(registered.get("source_policy") or "system"),
             "satisfaction_rule": str(registered.get("satisfaction_rule") or "exists"),
-            "required": bool(raw.get("required", True)),
+            "necessity": necessity,
             "required_paths": list(dict.fromkeys(
                 str(item).strip()
                 for item in raw.get("required_paths") or []
@@ -112,7 +134,7 @@ class NeedRequirementCompiler:
             for index, row in enumerate(rows)
         ]
         if strict and not any(
-            item["direction"] == "output" and item.get("required", True)
+            item["direction"] == "output" and item.get("necessity") == "required"
             for item in normalized
         ):
             raise _violation("request_need_output_requirement_required", f"$.needs[{need_id}].requirements")
@@ -139,7 +161,7 @@ class NeedRequirementCompiler:
                     req.get("direction") == "output"
                     and req.get("kind") == "data"
                     and req.get("data_name")
-                    and req.get("required", True)
+                    and req.get("necessity") == "required"
                 ):
                     result[need_id].add(str(req["data_name"]))
         return dict(result)
@@ -180,7 +202,7 @@ class NeedRequirementCompiler:
             "semantic_role": str(req.get("semantic_role") or req.get("semantic_key") or ""),
             "source_policy": str(req.get("source_policy") or "system"),
             "satisfaction_rule": str(req.get("satisfaction_rule") or "exists"),
-            "required": bool(req.get("required", True)),
+            "required": str(req.get("necessity") or "required") == "required",
             "required_paths": list(req.get("required_paths") or []),
         }
 
@@ -191,7 +213,7 @@ class NeedRequirementCompiler:
             "semantic_role": str(req.get("semantic_role") or req.get("semantic_key") or ""),
             "source_policy": str(req.get("source_policy") or "user"),
             "satisfaction_rule": str(req.get("satisfaction_rule") or "one_of"),
-            "required": bool(req.get("required", True)),
+            "required": str(req.get("necessity") or "required") == "required",
             "satisfy_by": list(req.get("satisfy_by") or []),
             "description": str(req.get("description") or req.get("semantic_role") or ""),
             "expected_format": str(req.get("expected_format") or ""),
@@ -257,7 +279,7 @@ class NeedRequirementCompiler:
             ]
             if req.get("kind") == "context":
                 # GraphRefs/runtime state are task/runtime context, never business data.
-                if bool(req.get("required", True)):
+                if str(req.get("necessity") or "required") == "required":
                     assigned_required.add(requirement_id)
                 continue
             if req.get("direction") == "parameter":
@@ -283,7 +305,7 @@ class NeedRequirementCompiler:
                         )
                     ]
             if not eligible:
-                if bool(req.get("required", True)):
+                if str(req.get("necessity") or "required") == "required":
                     raise _violation(
                         "need_requirement_has_no_consumer_worker",
                         "$.worker_calls",
@@ -292,12 +314,12 @@ class NeedRequirementCompiler:
                 continue
             for call_id in eligible:
                 assignments[call_id]["requirement_ids"].append(requirement_id)
-            if bool(req.get("required", True)):
+            if str(req.get("necessity") or "required") == "required":
                 assigned_required.add(requirement_id)
 
         required_ids = {
             req_id for req_id, (_, req) in req_index.items()
-            if bool(req.get("required", True)) and req.get("direction") in {"input", "parameter"}
+            if str(req.get("necessity") or "required") == "required" and req.get("direction") in {"input", "parameter"}
         }
         missing = sorted(required_ids - assigned_required)
         if missing:
@@ -308,6 +330,30 @@ class NeedRequirementCompiler:
             row = assignments[call_id]
             row["requirement_ids"] = list(dict.fromkeys(row["requirement_ids"]))
             result.append(row)
+        runtime_debug_event(
+            "NEED_REQUIREMENTS_COMPILED",
+            {
+                "requirement_contract_version": self.SCHEMA_VERSION,
+                "requirements": [
+                    {
+                        "requirement_id": req_id,
+                        "need_id": need_id,
+                        "semantic_key": req.get("semantic_key"),
+                        "direction": req.get("direction"),
+                        "kind": req.get("kind"),
+                        "data_name": req.get("data_name"),
+                        "context_name": req.get("context_name"),
+                        "necessity": req.get("necessity"),
+                    }
+                    for req_id, (need_id, req) in req_index.items()
+                ],
+                "worker_calls": calls,
+                "assignments": result,
+                "runtime_context_requirements": [
+                    req_id for req_id, (_, req) in req_index.items() if req.get("kind") == "context"
+                ],
+            },
+        )
         return result
 
     def expand_compact_tasks(
@@ -413,9 +459,24 @@ class NeedRequirementCompiler:
 
         required_assignments = {
             req_id for req_id, (_, req) in req_index.items()
-            if bool(req.get("required", True)) and req.get("direction") in {"input", "parameter"}
+            if (
+                str(req.get("necessity") or "required") == "required"
+                and req.get("direction") in {"input", "parameter"}
+                and req.get("kind") != "context"
+            )
         }
         missing = sorted(required_assignments - assigned_requirements)
+        runtime_debug_event(
+            "WORKER_CALL_REQUIREMENTS_BOUND",
+            {
+                "task_requirements": task_requirements,
+                "assigned_requirement_ids": sorted(assigned_requirements),
+                "required_task_requirement_ids": sorted(required_assignments),
+                "missing_required_task_requirement_ids": missing,
+                "compact_tasks": tasks,
+            },
+            level="ERROR" if missing else "DEBUG",
+        )
         if missing:
             raise _violation("required_need_requirement_unassigned", "$.task_requirements", ",".join(missing))
         return tasks

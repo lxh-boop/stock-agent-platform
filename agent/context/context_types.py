@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from agent.context.run_context_store import InMemoryRunContextStore, RunContextStore
+
 
 def _now_text() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -179,7 +181,11 @@ class MemoryContext:
 
 @dataclass
 class ContextBundle:
-    """The single working-memory object for one user request / Agent run."""
+    """单次用户请求 / Agent Run 的上下文逻辑模型。
+
+    Worker 业务数据不再直接保存在本对象的裸 list 中，而是通过 run_store
+    访问 RunContextStore；这样以后可以替换 Redis 后端而不改变 Worker 业务代码。
+    """
     context_id: str = field(default_factory=lambda: f"context_{uuid4().hex[:12]}")
     user_id: str = "default"
     conversation_id: str = ""
@@ -198,7 +204,7 @@ class ContextBundle:
     approval_context: ApprovalContext = field(default_factory=ApprovalContext)
     runtime_context: RuntimeContext = field(default_factory=RuntimeContext)
     memory_context: MemoryContext = field(default_factory=MemoryContext)
-    business_data: list[dict[str, Any]] = field(default_factory=list)
+    run_store: RunContextStore = field(default_factory=InMemoryRunContextStore, repr=False)
     visibility_policy: dict[str, Any] = field(default_factory=dict)
     token_budget: dict[str, int] = field(default_factory=lambda: {"max_total_tokens": 1800})
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -212,11 +218,44 @@ class ContextBundle:
             self.task_context.task_id = self.task_id
         if not self.runtime_context.run_id:
             self.runtime_context.run_id = self.run_id
-        self.metadata.setdefault("working_memory_model", "context_bundle_per_run")
+        self.metadata.setdefault("working_memory_model", "run_context_store")
         self.metadata.setdefault("working_memory_scope", "single_agent_run")
+        self.metadata.setdefault("run_context_store_backend", "memory")
 
     def to_dict(self) -> dict[str, Any]:
-        return _plain(self)
+        # RunContextStore 内含线程锁，不能直接走 dataclasses.asdict；
+        # 必须通过 snapshot 合同序列化，保证存储实现与逻辑模型解耦。
+        return {
+            "context_id": self.context_id,
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
+            "run_id": self.run_id,
+            "task_id": self.task_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "locale": self.locale,
+            "user_context": self.user_context.to_dict(),
+            "conversation_context": self.conversation_context.to_dict(),
+            "task_context": self.task_context.to_dict(),
+            "tool_context": self.tool_context.to_dict(),
+            "portfolio_context": self.portfolio_context.to_dict(),
+            "evidence_context": self.evidence_context.to_dict(),
+            "artifact_context": self.artifact_context.to_dict(),
+            "approval_context": self.approval_context.to_dict(),
+            "runtime_context": self.runtime_context.to_dict(),
+            "memory_context": self.memory_context.to_dict(),
+            "run_context_store": self.run_store.snapshot(),
+            "visibility_policy": _plain(self.visibility_policy),
+            "token_budget": _plain(self.token_budget),
+            "metadata": _plain(self.metadata),
+        }
+
+    def snapshot_working_memory(self) -> dict[str, Any]:
+        return self.run_store.snapshot()
+
+    def restore_working_memory(self, snapshot: dict[str, Any]) -> None:
+        self.run_store.restore(dict(snapshot or {}))
+        self.updated_at = _now_text()
 
     @staticmethod
     def _business_entity_id(entity_ref: dict[str, Any] | None) -> str:
@@ -235,11 +274,10 @@ class ContextBundle:
         schema_id: str = "",
         provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Append one successfully queried/generated business-data item.
+        """写入一条已经成功查询/生成的业务数据。
 
-        The label is only the business data name.  Empty values are retained
-        because the presence of the label itself means the query completed.
-        Failed Worker/Tool paths never call this method.
+        name 只表达稳定业务数据名称。即使 value 为空也要保留，因为“名称存在”
+        本身代表该查询已经完成；失败的 Worker / Tool 路径不得调用此方法。
         """
         data_name = str(name or "").strip()
         if not data_name:
@@ -259,23 +297,23 @@ class ContextBundle:
             "provenance": _plain(dict(provenance or {})),
             "created_at": _now_text(),
         }
-        self.business_data.append(item)
+        stored = self.run_store.put(item)
         self.updated_at = _now_text()
-        return dict(item)
+        return dict(stored)
 
     def business_data_context(
         self,
         *,
         entity_refs: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Return the latest entity+name values from this run working memory."""
+        """返回本 Run 工作内存中每个 entity+name 的最新业务值。"""
         refs = [
             dict(ref) for ref in list(entity_refs or [])
             if isinstance(ref, dict) and str(ref.get("node_id") or "")
         ]
         wanted_ids = {str(ref.get("node_id") or "") for ref in refs}
         latest: dict[tuple[str, str], dict[str, Any]] = {}
-        for raw in list(self.business_data or []):
+        for raw in self.run_store.items():
             if not isinstance(raw, dict):
                 continue
             entity_id = str(raw.get("entity_id") or self._business_entity_id(raw.get("entity_ref")))
@@ -344,7 +382,7 @@ class ContextBundle:
             if row_entity == "__run__"
         }
         return {
-            "schema_version": "context_bundle_business_data.v2",
+            "schema_version": "run_context_business_data.v1",
             "run_id": str(self.run_id or ""),
             "entities": entities,
             "global_data": global_data,
@@ -355,12 +393,7 @@ class ContextBundle:
     def has_business_data(self, *, entity_id: str, name: str) -> bool:
         target_entity = str(entity_id or "__run__")
         target_name = str(name or "").strip()
-        return any(
-            str(item.get("entity_id") or self._business_entity_id(item.get("entity_ref"))) == target_entity
-            and str(item.get("name") or "") == target_name
-            for item in list(self.business_data or [])
-            if isinstance(item, dict)
-        )
+        return self.run_store.has(entity_id=target_entity, name=target_name)
 
     def missing_business_data_entities(
         self,
@@ -422,7 +455,7 @@ class ContextBundle:
             "handoff_role_summaries": list(self.runtime_context.handoff_role_summaries),
             "business_data_names": sorted({
                 str(item.get("name") or "")
-                for item in self.business_data
+                for item in self.run_store.items()
                 if isinstance(item, dict) and str(item.get("name") or "")
             }),
             "metadata": dict(self.metadata),

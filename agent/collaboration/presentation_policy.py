@@ -115,12 +115,7 @@ class PresentationPolicyResolver:
                 # Request-level Presentation must name its target through the
                 # Request dependency edge.  It does not mutate the whole-bundle
                 # policy.  Later Presentation Requests win field-by-field.
-                raw_targets = []
-                if isinstance(item.target, dict):
-                    if isinstance(item.target.get("request_ids"), list):
-                        raw_targets.extend(item.target.get("request_ids") or [])
-                    if item.target.get("request_id"):
-                        raw_targets.append(item.target.get("request_id"))
+                raw_targets = list(p.request_ids or [])
                 targets = [str(target) for target in raw_targets if str(target) in request_ids]
                 if not targets:
                     # Deterministic fallback: apply to the nearest preceding

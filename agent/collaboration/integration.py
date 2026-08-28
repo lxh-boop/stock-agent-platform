@@ -156,7 +156,7 @@ def execute_unified_agent_request(
         {
             "graph_id": str(getattr(getattr(coordinator, "store", None), "graph_id", "")),
             "worker_count": len(getattr(getattr(coordinator, "directory", None), "list", lambda: [])()),
-            "request_entry": "request_bundle.v2",
+            "request_entry": "request_bundle.v3",
             "request_categories": ["business", "presentation"],
             "business_request_types": ["read", "write"],
             "worker_visibility": "all_public_descriptions_upfront_per_business_request",

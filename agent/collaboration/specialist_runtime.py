@@ -1,4 +1,4 @@
-"""Worker execution facade using ContextBundle as the run business-data memory."""
+"""Worker execution facade. Providers may use ContextBundle; W09 consumes sibling Worker results."""
 from __future__ import annotations
 
 import copy
@@ -33,11 +33,11 @@ from .workers.common import safe_public_value as _safe
 
 
 class SpecialistRuntime:
-    """Execute one already-assigned Worker.
+    """执行一个已经完成分配的 Worker。
 
-    Business data never travels on task edges. Query/generation Workers publish
-    successful values (including empty values) into the current run ContextBundle.
-    Analysis/decision Workers receive only the relevant ContextBundle view.
+    查询/生成 Worker 仍可把可复用 BusinessData 发布到 RunContextStore。
+    W09 是例外的纯分析 Consumer：它只读取 Coordinator 已存在的其他 GraphWorkerResult，
+    不从 RunContextStore、Tool、数据库或 RAG 获取业务事实。
     """
 
     def __init__(self, *, llm_service: LLMService, provider: GraphProviderAdapter,
@@ -82,15 +82,23 @@ class SpecialistRuntime:
 
     def _working_context(self, task: GraphAgentTask) -> dict[str, Any]:
         if self.context_bundle is None:
-            return {
-                "schema_version": "context_bundle_business_data.v2",
+            context = {
+                "schema_version": "run_context_business_data.v1",
                 "run_id": task.run_id,
                 "entities": [],
                 "global_data": {},
                 "global_contracts": {},
                 "available_names": [],
             }
-        return self.context_bundle.business_data_context(entity_refs=[self._ref_dict(ref) for ref in task.focus_refs])
+        else:
+            context = self.context_bundle.business_data_context(entity_refs=[self._ref_dict(ref) for ref in task.focus_refs])
+        context["runtime_input_quality"] = {
+            "degraded_execution": bool(task.metadata.get("degraded_execution")),
+            "missing_preferred_data_names": list(task.metadata.get("missing_preferred_data_names") or []),
+            "missing_optional_data_names": list(task.metadata.get("missing_optional_data_names") or []),
+            "input_gate": dict(task.metadata.get("input_gate") or {}),
+        }
+        return context
 
     def _provider_reuse(self, task: GraphAgentTask) -> GraphWorkerResult | None:
         if self.context_bundle is None:
@@ -124,8 +132,8 @@ class SpecialistRuntime:
                 "working_memory_reused": True}
         result = GraphWorkerResult(task_id=task.task_id, agent_id=task.assigned_agent, status=ResultStatus.COMPLETED,
             output_type="CapabilityResult", data=data, payload=data, payload_schema="capability_result.v2", error=None,
-            focus_refs=task.focus_refs, summary="已复用本轮ContextBundle中的同实体已查询数据，未重复调用查询Tool。",
-            findings=[{"kind": "context_bundle_reuse", "data_names": list(values)}], confidence=1.0,
+            focus_refs=task.focus_refs, summary="已复用本轮RunContextStore中的同实体已查询数据，未重复调用查询Tool。",
+            findings=[{"kind": "run_context_store_reuse", "data_names": list(values)}], confidence=1.0,
             metadata={"working_memory_reused": True, "database_write": False})
         result.completion = runtime_completion_report(task, result_status=result.status, output_type=result.output_type,
                                                       data=result.data, error=result.error)
@@ -260,7 +268,9 @@ class SpecialistRuntime:
         execution_task = self._provider_execution_task(task) if reused is None else task
         card = self.directory.get(task.worker_id or task.assigned_agent)
         allowed_tools = list(card.private_tool_ids)
-        working_context = self._working_context(execution_task)
+        # W09 must not read RunContextStore/ContextBundle business data. Other
+        # Workers keep the existing working-context behavior.
+        working_context = {} if task.assigned_agent == ENTITY_ANALYST else self._working_context(execution_task)
         if reused is not None:
             result = reused
         else:
@@ -277,7 +287,11 @@ class SpecialistRuntime:
                     result = run_graph_context(self.worker_tool_executor, execution_task, output_dir, db_path,
                         working_memory_context=working_context)
                 elif task.assigned_agent == ENTITY_ANALYST:
-                    result = run_entity_analysis(self.llm_service, execution_task, working_memory_context=working_context, language=language)
+                    result = run_entity_analysis(
+                        self.llm_service, execution_task,
+                        worker_results_context=context.get("worker_results_context"),
+                        language=language,
+                    )
                 elif task.assigned_agent == GRAPH_RELATION_RETRIEVER:
                     result = run_graph_impact(self.worker_tool_dag_runtime, execution_task, working_memory_context=working_context,
                         worker_prompt=str(card.private_worker_prompt or ""), allowed_tool_names=allowed_tools,
@@ -299,19 +313,34 @@ class SpecialistRuntime:
                 else:
                     raise RuntimeError(f"unknown_worker_agent:{task.assigned_agent}")
             except Exception as exc:
-                kind = "structured_output_failure" if type(exc).__name__ == "LLMJSONError" or "json" in type(exc).__name__.lower() else "worker_execution_failure"
+                exc_name = type(exc).__name__
+                exc_text = str(exc)
+                if exc_name == "LLMJSONError" and (
+                    "ToolDagContractViolation" in exc_text
+                    or "tool_dag_" in exc_text
+                    or "worker_private_tool" in exc_text
+                ):
+                    kind = "worker_private_tool_planning_failure"
+                elif exc_name == "LLMJSONError" or "json" in exc_name.lower():
+                    kind = "structured_output_failure"
+                else:
+                    kind = "worker_execution_failure"
+                # Execution/planning failures are recoverable at Coordinator level.
+                # User/context blockers are represented separately as NEED_CONTEXT.
+                retryable = True
                 result = GraphWorkerResult(task_id=task.task_id, agent_id=task.assigned_agent, status=ResultStatus.FAILED,
                     output_type="CapabilityResult", data=None,
-                    error={"code": kind, "message": str(exc), "component": task.assigned_agent,
-                           "retryable": False if kind == "structured_output_failure" else True},
-                    focus_refs=task.focus_refs, summary="Worker执行失败。", warnings=[f"{type(exc).__name__}:{exc}"],
-                    completion=non_success_completion_report(task, execution_status="failed", reason=str(exc), failure_kind=kind))
+                    error={"code": kind, "message": exc_text, "component": task.assigned_agent,
+                           "retryable": retryable},
+                    focus_refs=task.focus_refs, summary="Worker执行失败。", warnings=[f"{exc_name}:{exc_text}"],
+                    completion=non_success_completion_report(task, execution_status="failed", reason=exc_text, failure_kind=kind))
 
         published = [] if reused is not None else self._publish_business_data(task, result)
         values, produced = self._produced_data(result)
         result.metadata.update({"boundary_id": task.boundary_id, "attempt": task.attempt,
             "business_data_owner": "ContextBundle", "produced_data_names": produced,
-            "working_memory_records_published": len(published), "can_mutate": bool(card.can_mutate)})
+            "working_memory_records_published": len(published), "can_mutate": bool(card.can_mutate),
+            "business_validation_mode": "pass_through"})
         if not result.completion:
             result.completion = runtime_completion_report(task, result_status=result.status, output_type=result.output_type,
                                                           data=result.data, error=result.error)
@@ -324,6 +353,17 @@ class SpecialistRuntime:
         if satisfied:
             result.error = None
             result.missing_items = []
+        if bool(task.metadata.get("degraded_execution")) and result.status in {ResultStatus.COMPLETED, ResultStatus.PARTIAL}:
+            missing_preferred = list(task.metadata.get("missing_preferred_data_names") or [])
+            missing_optional = list(task.metadata.get("missing_optional_data_names") or [])
+            result.warnings = list(dict.fromkeys([
+                *result.warnings,
+                *( ["degraded_missing_preferred:" + ",".join(missing_preferred)] if missing_preferred else [] ),
+                *( ["degraded_missing_optional:" + ",".join(missing_optional)] if missing_optional else [] ),
+            ]))
+            result.metadata["completed_with_limitations"] = True
+            result.metadata["missing_preferred_data_names"] = missing_preferred
+            result.metadata["missing_optional_data_names"] = missing_optional
         decision = flow_decision(result.status, result.completion, output_type=result.output_type,
                                  retryable=bool((result.error or {}).get("retryable")))
         result.status = decision.result_status
