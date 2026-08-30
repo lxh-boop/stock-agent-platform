@@ -7,7 +7,7 @@ from agent.services.model_inference_service import model_inference_service
 
 
 class ModelMCPAdapter:
-    """Adapter for completed Kronos inference snapshots.
+    """Adapter for completed active-ranker inference snapshots.
 
     Full-market inference remains an asynchronous Task Runtime operation and is
     deliberately absent from the synchronous MCP surface.

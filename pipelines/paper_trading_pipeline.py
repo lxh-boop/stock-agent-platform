@@ -27,7 +27,7 @@ from portfolio.user_profile import build_user_constraints, default_user_profile,
 from scoring.schemas import FinalRecommendationRecord, FusionOutput
 from strategies.base import StrategyContext
 from strategies.runtime_resolver import StrategyRuntimeResolver
-from kronos_runtime.settings import KRONOS_MODEL_NAME
+from ranking_runtime.settings import ACTIVE_MODEL_NAME
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -692,9 +692,9 @@ def run_paper_trading_from_latest(
 
         if not ranking.empty and "model_name" in ranking.columns:
             ranking_models = set(ranking["model_name"].dropna().astype(str).str.strip()) - {""}
-            if ranking_models and ranking_models != {KRONOS_MODEL_NAME}:
+            if ranking_models and ranking_models != {ACTIVE_MODEL_NAME}:
                 raise RuntimeError(
-                    f"模拟盘拒绝旧模型排名：expected={KRONOS_MODEL_NAME}, actual={sorted(ranking_models)}"
+                    f"模拟盘拒绝非主动模型排名：expected={ACTIVE_MODEL_NAME}, actual={sorted(ranking_models)}"
                 )
 
         if not ranking.empty and "top15_up_signal" in ranking.columns:

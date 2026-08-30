@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
@@ -32,7 +32,25 @@ def _rolling(
     return getattr(values, statistic)().reset_index(level=0, drop=True).reindex(frame.index)
 
 
-def _daily_basic_and_close_features(path: Path) -> pd.DataFrame:
+def _date_slice(
+    frame: pd.DataFrame,
+    *,
+    source_start_date: str | None,
+    source_end_date: str | None,
+) -> pd.DataFrame:
+    if source_start_date:
+        frame = frame[frame["date"].ge(pd.Timestamp(source_start_date))]
+    if source_end_date:
+        frame = frame[frame["date"].le(pd.Timestamp(source_end_date))]
+    return frame.copy()
+
+
+def _daily_basic_and_close_features(
+    path: Path,
+    *,
+    source_start_date: str | None = None,
+    source_end_date: str | None = None,
+) -> pd.DataFrame:
     raw_columns = [
         "close",
         "turnover_rate",
@@ -52,6 +70,11 @@ def _daily_basic_and_close_features(path: Path) -> pd.DataFrame:
     )
     _keys(frame)
     _numeric(frame, raw_columns)
+    frame = _date_slice(
+        frame,
+        source_start_date=source_start_date,
+        source_end_date=source_end_date,
+    )
     frame = frame.dropna(subset=["date", "code", "close"]).sort_values(
         ["code", "date"], kind="stable"
     )
@@ -159,7 +182,12 @@ def _daily_basic_and_close_features(path: Path) -> pd.DataFrame:
     return pd.concat([result, technical_frame], axis=1)
 
 
-def _moneyflow_features(path: Path) -> pd.DataFrame:
+def _moneyflow_features(
+    path: Path,
+    *,
+    source_start_date: str | None = None,
+    source_end_date: str | None = None,
+) -> pd.DataFrame:
     amounts = [
         "buy_sm_amount",
         "sell_sm_amount",
@@ -178,6 +206,11 @@ def _moneyflow_features(path: Path) -> pd.DataFrame:
     )
     _keys(frame)
     _numeric(frame, amounts)
+    frame = _date_slice(
+        frame,
+        source_start_date=source_start_date,
+        source_end_date=source_end_date,
+    )
     frame = frame.dropna(subset=["date", "code"]).sort_values(
         ["code", "date"], kind="stable"
     ).drop_duplicates(["date", "code"], keep="last").reset_index(drop=True)
@@ -220,7 +253,12 @@ def _moneyflow_features(path: Path) -> pd.DataFrame:
     return values
 
 
-def _margin_features(path: Path) -> pd.DataFrame:
+def _margin_features(
+    path: Path,
+    *,
+    source_start_date: str | None = None,
+    source_end_date: str | None = None,
+) -> pd.DataFrame:
     columns = ["rzye", "rqye", "rzmre", "rqyl", "rzche", "rqchl", "rqmcl", "rzrqye"]
     frame = pd.read_csv(
         path,
@@ -229,6 +267,11 @@ def _margin_features(path: Path) -> pd.DataFrame:
     )
     _keys(frame)
     _numeric(frame, columns)
+    frame = _date_slice(
+        frame,
+        source_start_date=source_start_date,
+        source_end_date=source_end_date,
+    )
     frame = frame.dropna(subset=["date", "code"]).sort_values(
         ["code", "date"], kind="stable"
     ).drop_duplicates(["date", "code"], keep="last").reset_index(drop=True)
@@ -272,10 +315,20 @@ def _margin_features(path: Path) -> pd.DataFrame:
     return values
 
 
-def _index_features(path: Path) -> pd.DataFrame:
+def _index_features(
+    path: Path,
+    *,
+    source_start_date: str | None = None,
+    source_end_date: str | None = None,
+) -> pd.DataFrame:
     frame = pd.read_csv(path, dtype={"ts_code": str, "trade_date": str})
     _keys(frame)
     _numeric(frame, ["pct_chg", "vol", "amount"])
+    frame = _date_slice(
+        frame,
+        source_start_date=source_start_date,
+        source_end_date=source_end_date,
+    )
     frame["index_code"] = frame["ts_code"].str.split(".").str[0]
     wide = frame.pivot(index="date", columns="index_code", values=["pct_chg", "vol", "amount"])
     wide.columns = [f"market_index_{code}_{metric}" for metric, code in wide.columns]
@@ -301,9 +354,19 @@ def _index_features(path: Path) -> pd.DataFrame:
     return result
 
 
-def _hsgt_features(path: Path) -> pd.DataFrame:
+def _hsgt_features(
+    path: Path,
+    *,
+    source_start_date: str | None = None,
+    source_end_date: str | None = None,
+) -> pd.DataFrame:
     frame = pd.read_csv(path, dtype={"trade_date": str})
     frame["date"] = pd.to_datetime(frame["trade_date"], format="%Y%m%d", errors="coerce")
+    frame = _date_slice(
+        frame,
+        source_start_date=source_start_date,
+        source_end_date=source_end_date,
+    )
     columns = [value for value in ("hgt", "sgt", "north_money", "south_money") if value in frame]
     _numeric(frame, columns)
     frame = frame.sort_values("date").reset_index(drop=True)
@@ -325,17 +388,57 @@ def build_tushare_panel(
     *,
     start_date: str = "2018-02-14",
     end_date: str = "2026-07-30",
+    required_features: Sequence[str] | None = None,
+    source_lookback_trading_days: int | None = None,
 ) -> tuple[pd.DataFrame, list[str], dict[str, Any]]:
     directory = Path(feature_dir)
-    frame = _daily_basic_and_close_features(directory / "daily_basic.csv")
-    frame = frame.merge(_moneyflow_features(directory / "moneyflow.csv"), on=["date", "code"], how="left")
+    source_start_date: str | None = None
+    source_end_date: str | None = None
+    if source_lookback_trading_days is not None:
+        lookback = max(251, int(source_lookback_trading_days))
+        dates = pd.read_csv(
+            directory / "daily_basic.csv",
+            usecols=["trade_date"],
+            dtype={"trade_date": str},
+        )["trade_date"]
+        dates = pd.to_datetime(
+            dates.astype(str).str[:8], format="%Y%m%d", errors="coerce"
+        ).dropna()
+        dates = dates[dates.le(pd.Timestamp(end_date))].drop_duplicates().sort_values()
+        if dates.empty:
+            raise RuntimeError(f"Tushare 特征缓存中不存在 {end_date} 及之前的交易日")
+        source_start_date = str(dates.iloc[max(0, len(dates) - lookback)].date())
+        source_end_date = str(pd.Timestamp(end_date).date())
+
+    source_range = {
+        "source_start_date": source_start_date,
+        "source_end_date": source_end_date,
+    }
+    frame = _daily_basic_and_close_features(
+        directory / "daily_basic.csv", **source_range
+    )
+    frame = frame.merge(
+        _moneyflow_features(directory / "moneyflow.csv", **source_range),
+        on=["date", "code"],
+        how="left",
+    )
     margin_path = directory / "margin_detail.csv"
     if margin_path.exists():
-        frame = frame.merge(_margin_features(margin_path), on=["date", "code"], how="left")
-    frame = frame.merge(_index_features(directory / "index_daily.csv"), on="date", how="left")
+        frame = frame.merge(
+            _margin_features(margin_path, **source_range),
+            on=["date", "code"],
+            how="left",
+        )
+    frame = frame.merge(
+        _index_features(directory / "index_daily.csv", **source_range),
+        on="date",
+        how="left",
+    )
     hsgt_path = directory / "moneyflow_hsgt.csv"
     if hsgt_path.exists():
-        frame = frame.merge(_hsgt_features(hsgt_path), on="date", how="left")
+        frame = frame.merge(
+            _hsgt_features(hsgt_path, **source_range), on="date", how="left"
+        )
     frame = frame.sort_values(["date", "code"], kind="stable").reset_index(drop=True)
 
     daily_up = frame.groupby("date", sort=True)["label_up_tushare"].mean().shift(1)
@@ -357,13 +460,23 @@ def build_tushare_panel(
 
     excluded = {"date", "code", "future_1d_ret_tushare", "label_up_tushare"}
     candidates = [column for column in frame.columns if column not in excluded]
-    coverage = frame[frame["date"].le("2024-12-31")]
-    features = [
-        column
-        for column in candidates
-        if coverage[column].notna().mean() >= 0.80
-        and coverage[column].std(skipna=True) > 1e-8
-    ]
+    if required_features is None:
+        coverage = frame[frame["date"].le("2024-12-31")]
+        features = [
+            column
+            for column in candidates
+            if coverage[column].notna().mean() >= 0.80
+            and coverage[column].std(skipna=True) > 1e-8
+        ]
+        coverage_rule = ">=80% non-null through 2024-12-31"
+    else:
+        features = list(dict.fromkeys(str(column) for column in required_features))
+        missing = [column for column in features if column not in frame.columns]
+        if missing:
+            raise RuntimeError(f"Tushare 推理面板缺少模型特征：{missing[:12]}")
+        coverage_rule = "explicit checkpoint feature contract"
+    if frame.empty:
+        raise RuntimeError(f"Tushare 特征面板在 {start_date} 至 {end_date} 为空")
     audit = {
         "rows": int(len(frame)),
         "stocks": int(frame["code"].nunique()),
@@ -373,7 +486,9 @@ def build_tushare_panel(
         "duplicate_keys": int(frame.duplicated(["date", "code"]).sum()),
         "label_rows": int(frame["label_up_tushare"].notna().sum()),
         "feature_count": len(features),
-        "coverage_rule": ">=80% non-null through 2024-12-31",
+        "coverage_rule": coverage_rule,
+        "source_start_date": source_start_date,
+        "source_end_date": source_end_date,
     }
     return frame.loc[:, ["date", "code", "future_1d_ret_tushare", "label_up_tushare", *features]], features, audit
 

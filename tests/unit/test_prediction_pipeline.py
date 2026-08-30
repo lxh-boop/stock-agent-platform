@@ -5,6 +5,7 @@ import csv
 from database.runtime_data_import import import_ranking_file
 from pipelines.prediction_pipeline import run_prediction_pipeline
 from pipelines.schemas import PipelineContext, PipelineStatus
+from ranking_runtime.settings import ACTIVE_MODEL_NAME
 
 
 def test_prediction_pipeline_missing_ranking_does_not_crash(tmp_path) -> None:
@@ -24,7 +25,7 @@ def test_prediction_pipeline_reads_database_ranking(tmp_path) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=["date", "code", "name", "score", "rank", "confidence", "risk_level", "industry", "model_name"])
         writer.writeheader()
-        writer.writerow({"date": "2026-06-11", "code": "000001", "name": "Demo", "score": "0.9", "rank": "1", "confidence": "high", "risk_level": "medium", "industry": "bank", "model_name": "kronos_mini"})
+        writer.writerow({"date": "2026-06-11", "code": "000001", "name": "Demo", "score": "0.9", "rank": "1", "confidence": "high", "risk_level": "medium", "industry": "bank", "model_name": ACTIVE_MODEL_NAME})
 
     db_path = tmp_path / "agent_quant.db"
     import_ranking_file(path, db_path=db_path)

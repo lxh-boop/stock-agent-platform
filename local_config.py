@@ -37,7 +37,7 @@ DEFAULT_LOCAL_CONFIG = {
     "llm_request_timeout_seconds": 99120,
     "llm_max_retries": 0,
     "current_user_id": "default",
-    "model_backend": "kronos_mini",
+    "model_backend": "registered_ranker",
     "auto_retrain_enabled": False,
     "auto_retrain_hour": 20,
     "auto_retrain_minute": 0,

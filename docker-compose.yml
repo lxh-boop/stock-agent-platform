@@ -30,10 +30,6 @@ services:
       STOCK_LOCAL_LLM_BASE_URL: ${STOCK_LOCAL_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       NEO4J_URI: ${NEO4J_URI:-bolt://host.docker.internal:7687}
       QLIB_PROVIDER_URI: ${QLIB_PROVIDER_URI:-/app/data/qlib}
-      KRONOS_LAB_ROOT: /kronos_model_lab
-      KRONOS_MODEL_DIR: /kronos_model_lab/outputs/target_mode/target_full_recent_v1/model
-      KRONOS_PREDICTOR_DIR: /kronos_model_lab/models/pretrained/Kronos-mini
-      KRONOS_TOKENIZER_DIR: /kronos_model_lab/models/pretrained/Kronos-Tokenizer-2k
       PYTHONUNBUFFERED: "1"
       AGENT_FLOW_TRACE: ${AGENT_FLOW_TRACE:-1}
       AGENT_FLOW_TRACE_MAX_CHARS: ${AGENT_FLOW_TRACE_MAX_CHARS:-30000}
@@ -75,10 +71,6 @@ services:
       - type: bind
         source: ${STOCK_LLM_PROMPT_DUMP_HOST_DIR:-D:/google/llm_prompt_dumps}
         target: /app_runtime/llm_prompt_dumps
-      - type: bind
-        source: ${KRONOS_LAB_HOST_DIR:-D:/google/kronos_model_lab}
-        target: /kronos_model_lab
-        read_only: true
       - type: bind
         source: "${AGENT_RUN_LOG_HOST_DIR:-D:/stock_daily_app/outputs/agent_runs}"
         target: /app_run_logs

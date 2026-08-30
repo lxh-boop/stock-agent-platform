@@ -128,6 +128,7 @@ class PredictionRepository:
         records: list[dict[str, Any]],
         *,
         source_kind: str = "ranking",
+        exclusive_scope: bool = False,
     ) -> list[dict[str, Any]]:
         normalized = [self.normalize_ranking_record(row, source_kind=source_kind) for row in records]
         if not normalized:
@@ -140,12 +141,20 @@ class PredictionRepository:
         }
 
         with self.store.transaction() as conn:
-            for trade_date, model_name, kind in snapshot_keys:
-                self.store.delete_where(
-                    "model_prediction",
-                    {"trade_date": trade_date, "model_name": model_name, "source_kind": kind},
-                    connection=conn,
-                )
+            if exclusive_scope:
+                for trade_date, _model_name, kind in snapshot_keys:
+                    self.store.delete_where(
+                        "model_prediction",
+                        {"trade_date": trade_date, "source_kind": kind},
+                        connection=conn,
+                    )
+            else:
+                for trade_date, model_name, kind in snapshot_keys:
+                    self.store.delete_where(
+                        "model_prediction",
+                        {"trade_date": trade_date, "model_name": model_name, "source_kind": kind},
+                        connection=conn,
+                    )
             for row in normalized:
                 self.store.insert("model_prediction", row, connection=conn)
 

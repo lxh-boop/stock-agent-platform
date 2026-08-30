@@ -139,7 +139,7 @@ def model_server_config(
             "provider": "internal",
             "project_managed": True,
             "sdk_version": mcp_sdk_version(),
-            "purpose": "completed_kronos_inference_snapshots",
+            "purpose": "completed_active_ranker_inference_snapshots",
             "long_running_execution": "task_runtime",
         },
     )

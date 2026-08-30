@@ -39,7 +39,7 @@ from config import (
     DEFAULT_LLM_MODEL,
     LATEST_FEATURE_DATA_PATH,
     LATEST_RAW_DATA_PATH,
-    KRONOS_LATEST_METRICS_PATH,
+    ACTIVE_RANKING_MODEL_METRICS_PATH,
     LLM_API_KEY_ENV,
     LLM_BASE_URL_ENV,
     LLM_MODEL_ENV,
@@ -73,17 +73,13 @@ from llm_explainer import (
     load_cached_ai_explanation,
 )
 from local_config import load_local_config, save_local_config
-from kronos_runtime.settings import KRONOS_BACKEND, KRONOS_MODEL_NAME, validate_kronos_assets
-from market_context import MARKET_CONTEXT_COLUMNS, ensure_market_context_for_feature_data
-from model_zoo.metadata import bootstrap_registered_metadata, load_metadata
-from model_zoo.registry import list_model_names
-from model_zoo_backend import (
-    downloaded_zoo_backends,
-    is_zoo_backend,
-    make_zoo_latest_ranking,
-    registered_zoo_backends,
-    zoo_model_name_from_backend,
+from ranking_runtime.settings import (
+    ACTIVE_MODEL_BACKEND,
+    ACTIVE_MODEL_NAME,
+    ACTIVE_MODEL_VERSION,
+    validate_active_model_assets,
 )
+from market_context import MARKET_CONTEXT_COLUMNS, ensure_market_context_for_feature_data
 from runtime_paths import (
     ensure_runtime_directories,
     get_logs_dir,
@@ -104,10 +100,10 @@ ENABLE_RAG = getattr(app_config, "ENABLE_RAG", True)
 ENABLE_LLM_EXPLAINER = getattr(app_config, "ENABLE_LLM_EXPLAINER", True)
 
 
-# Stage 6 freezes these callable names. Keep compatibility shells while making
-# the original Kronos-mini model as the only model they can expose.
+# Stage 6 freezes these callable names. They expose only the registered active
+# ranker; concrete algorithm names stay inside the model manifest.
 def downloaded_zoo_backends() -> dict[str, str]:
-    return {"Kronos-mini": KRONOS_BACKEND}
+    return {ACTIVE_MODEL_NAME: ACTIVE_MODEL_BACKEND}
 
 
 def registered_zoo_backends() -> dict[str, str]:
@@ -115,7 +111,7 @@ def registered_zoo_backends() -> dict[str, str]:
 
 
 def list_model_names() -> list[str]:
-    return [KRONOS_MODEL_NAME]
+    return [ACTIVE_MODEL_NAME]
 
 
 def is_zoo_backend(model_backend: str | None) -> bool:
@@ -123,9 +119,9 @@ def is_zoo_backend(model_backend: str | None) -> bool:
 
 
 def zoo_model_name_from_backend(model_backend: str) -> str:
-    if str(model_backend or "").strip() != KRONOS_BACKEND:
-        raise ValueError(f"旧模型后端已下线：{model_backend}")
-    return KRONOS_MODEL_NAME
+    if str(model_backend or "").strip() != ACTIVE_MODEL_BACKEND:
+        raise ValueError(f"非主动模型后端：{model_backend}")
+    return ACTIVE_MODEL_NAME
 
 
 @dataclass
@@ -238,7 +234,9 @@ class DashboardApplicationService:
         from database.repositories import PredictionRepository
 
         del path
-        rows = PredictionRepository().list_latest_predictions()
+        rows = PredictionRepository().list_latest_predictions(
+            model_name=ACTIVE_MODEL_NAME,
+        )
         if not rows:
             return {
                 "exists": False,
@@ -250,11 +248,18 @@ class DashboardApplicationService:
                 "prediction_date": "",
             }
         first = rows[0]
+        updated_at = str(first.get("updated_at") or first.get("created_at") or "")
+        updated_time = pd.to_datetime(updated_at, errors="coerce")
+        mtime = float(updated_time.timestamp()) if pd.notna(updated_time) else 0.0
         snapshot: dict[str, Any] = {
             "exists": True,
             "path": "database/model_prediction",
-            "mtime": float(stat.st_mtime),
-            "mtime_text": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+            "mtime": mtime,
+            "mtime_text": (
+                updated_time.strftime("%Y-%m-%d %H:%M:%S")
+                if pd.notna(updated_time)
+                else ""
+            ),
             "rows": len(rows),
             "signal_date": str(first.get("trade_date") or first.get("date") or ""),
             "prediction_date": str(
@@ -278,7 +283,7 @@ class DashboardApplicationService:
             cmd.append("--daily-update-child")
         else:
             cmd.append(str(self.rolling_update_script))
-        model_backend = KRONOS_BACKEND
+        model_backend = ACTIVE_MODEL_BACKEND
         cmd.extend([
             "--token", str(token),
             "--base-version", str(base_version),
@@ -342,7 +347,9 @@ class DashboardApplicationService:
         from database.repositories import PredictionRepository
 
         del path
-        rows = PredictionRepository().list_latest_predictions()
+        rows = PredictionRepository().list_latest_predictions(
+            model_name=ACTIVE_MODEL_NAME,
+        )
         if not rows:
             return None
         frame = pd.DataFrame(rows)
@@ -354,7 +361,7 @@ class DashboardApplicationService:
 
     @staticmethod
     def load_metrics(path: str | Path | None = None) -> Any:
-        file_path = Path(path or KRONOS_LATEST_METRICS_PATH)
+        file_path = Path(path or ACTIVE_RANKING_MODEL_METRICS_PATH)
         if not file_path.exists():
             return None
         try:
@@ -400,15 +407,15 @@ class DashboardApplicationService:
 
     @staticmethod
     def load_model_zoo_table() -> pd.DataFrame:
-        report = validate_kronos_assets()
+        report = validate_active_model_assets()
         return pd.DataFrame(
             [{
-                "name": KRONOS_MODEL_NAME,
-                "backend": KRONOS_BACKEND,
+                "name": ACTIVE_MODEL_NAME,
+                "backend": ACTIVE_MODEL_BACKEND,
                 "status": "ready" if report.get("ready") else "missing",
-                "version": report.get("model_version"),
-                "prediction_output": "下一交易日预测 OHLCVA",
-                "ranking_source": "预测上涨优先，其后按逐股平滑真实上涨率和预测收益率降序",
+                "version": report.get("model_version") or ACTIVE_MODEL_VERSION,
+                "prediction_output": "下一交易日截面排序分",
+                "ranking_source": "两个注册成员的当日截面百分位秩融合",
             }]
         )
 
@@ -420,14 +427,14 @@ class DashboardApplicationService:
         try:
             frame = pd.read_csv(path, encoding="utf-8-sig")
             if "model_name" in frame.columns:
-                frame = frame[frame["model_name"].astype(str).eq(KRONOS_MODEL_NAME)]
+                frame = frame[frame["model_name"].astype(str).eq(ACTIVE_MODEL_NAME)]
             return frame
         except Exception:
             return pd.DataFrame()
 
     @staticmethod
     def load_external_daily_returns(model_name: str, topk: int) -> pd.DataFrame:
-        if str(model_name or "").strip() != KRONOS_MODEL_NAME:
+        if str(model_name or "").strip() != ACTIVE_MODEL_NAME:
             return pd.DataFrame()
         path = Path(OUTPUT_DIR) / "backtests" / f"{model_name}_top{int(topk)}_daily_returns.csv"
         if not path.exists():
@@ -486,12 +493,12 @@ class DashboardApplicationService:
         ranking_df: pd.DataFrame | None = None,
     ) -> dict[str, Any]:
         return {
-            "backend": KRONOS_BACKEND,
-            "model_name": KRONOS_MODEL_NAME,
-            "status": "ready",
-            "prediction_output": "下一交易日预测 OHLCVA",
-            "ranking_source": "预测上涨优先，其后按逐股平滑真实上涨率和预测收益率降序",
-            "assets": validate_kronos_assets(),
+            "backend": ACTIVE_MODEL_BACKEND,
+            "model_name": ACTIVE_MODEL_NAME,
+            "status": "ready" if validate_active_model_assets().get("ready") else "missing",
+            "prediction_output": "下一交易日截面排序分",
+            "ranking_source": "两个注册成员的当日截面百分位秩融合",
+            "assets": validate_active_model_assets(),
         }
 
         # Historical DFT implementation remains unreachable below because the
@@ -584,13 +591,13 @@ class DashboardApplicationService:
         checkpoint_path: str,
         token: str | None = None,
     ) -> tuple[pd.DataFrame, dict[str, Any]]:
-        if model_backend != KRONOS_BACKEND:
-            raise RuntimeError(f"仅支持唯一模型后端 {KRONOS_BACKEND}")
+        if model_backend != ACTIVE_MODEL_BACKEND:
+            raise RuntimeError(f"仅支持主动模型后端 {ACTIVE_MODEL_BACKEND}")
         if not token:
-            raise RuntimeError("运行 Kronos 每日更新需要 Tushare Token")
-        from daily_incremental_update import kronos_daily_update
+            raise RuntimeError("运行每日排名更新需要 Tushare Token")
+        from daily_incremental_update import active_ranker_daily_update
 
-        ranking_df, backend_report = kronos_daily_update(token=token)
+        ranking_df, backend_report = active_ranker_daily_update(token=token)
         return ranking_df, backend_report
 
 
@@ -612,12 +619,12 @@ class DashboardApplicationService:
 
     @staticmethod
     def inspect_model(model_backend: str, checkpoint_path: str, zoo_table: pd.DataFrame) -> dict[str, Any]:
-        if model_backend != KRONOS_BACKEND:
-            raise RuntimeError(f"旧模型后端已下线：{model_backend}")
+        if model_backend != ACTIVE_MODEL_BACKEND:
+            raise RuntimeError(f"非主动模型后端：{model_backend}")
         return {
-            "kind": KRONOS_BACKEND,
-            "model_name": KRONOS_MODEL_NAME,
-            "report": validate_kronos_assets(),
+            "kind": ACTIVE_MODEL_BACKEND,
+            "model_name": ACTIVE_MODEL_NAME,
+            "report": validate_active_model_assets(),
         }
 
 

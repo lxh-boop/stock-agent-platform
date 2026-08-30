@@ -3,7 +3,6 @@ import { Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import { dashboardApi } from '../../api/dashboardApi'
 import { ModelStatusCards } from '../../components/dashboard/ModelStatusCards'
-import { ProbabilityChart } from '../../components/dashboard/ProbabilityChart'
 import { RankingScoreChart } from '../../components/dashboard/RankingScoreChart'
 import { RankingTable } from '../../components/dashboard/RankingTable'
 import { EmptyState } from '../../components/common/EmptyState'
@@ -24,11 +23,11 @@ export function RankingPage() {
   const liftText = (value?: number) => typeof value === 'number' ? `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)} 个百分点` : '—'
   const percentage = (value?: number) => Number(((value ?? 0) * 100).toFixed(2))
   return <Space direction="vertical" size="large" style={{width:'100%'}}>
-    <PageHeader title="首页 / 预测排名" description="展示 Kronos-mini 预测的下一交易日开盘、最高、最低和收盘；预测上涨股票优先，再按该股历史命中率的平滑概率、样本数和预测收益率排序。" />
+    <PageHeader title="首页 / 预测排名" description="展示主动截面排序模型的下一交易日 Top15；排名由两个已注册模型的当日截面百分位秩等权融合得到。排序分不是个股上涨概率。" />
     <ReadOnlyNotice />
     {summary.data && <ModelStatusCards summary={summary.data}/>}
     <Card title={`最新预测排名 · ${rankings.data?.total ?? 0} 条`}><RankingTable records={records} onSelect={(code)=>navigate(`/stocks/${code}`)}/></Card>
-    <Card title="目标模式未见数据验证">
+    <Card title="独立留出集验证">
       {typeof target?.universe_next_day_up_probability === 'number' ? <>
         <Row gutter={[16, 16]}>
           <Col xs={12} lg={6}><Statistic title="同期股票池上涨基准" value={percentage(target.universe_next_day_up_probability)} precision={2} suffix="%" /></Col>
@@ -37,9 +36,9 @@ export function RankingPage() {
           <Col xs={12} lg={6}><Statistic title={`Top15（${liftText(target.top15_lift_vs_universe)}）`} value={percentage(target.top15_next_day_up_probability)} precision={2} suffix="%" /></Col>
         </Row>
         <Typography.Text type="secondary">
-          测试区间 {target.test_start_date || '—'} 至 {target.test_end_date || '—'}，共 {target.valid_test_days ?? 0} 个训练和选模均未见的交易日；最佳检查点为第 {target.best_epoch ?? '—'} epoch。
+          训练数据截止 {target.train_end_date || '—'}；测试区间 {target.test_start_date || '—'} 至 {target.test_end_date || '—'}，共 {target.valid_test_days ?? 0} 个未参与训练的交易日。
         </Typography.Text>
-        <div style={{marginTop: 8}}><Tag color={target.all_topk_above_universe ? 'success' : 'error'}>{target.all_topk_above_universe ? 'Top5 / Top10 / Top15 全部高于同期基准' : '未达到三档同时高于同期基准'}</Tag></div>
+        <div style={{marginTop: 8}}><Tag color={target.target_met ? 'success' : 'warning'}>{target.target_met ? '达到 55% 目标' : 'Top15 尚未达到 55%，当前使用用户指定的最佳可用模型'}</Tag></div>
       </> : <Typography.Text type="secondary">暂无目标模式未见数据验证结果。</Typography.Text>}
     </Card>
     <Card title="历史每日排名前5名 / 前10名 / 前15名上涨统计">
@@ -55,7 +54,7 @@ export function RankingPage() {
         </Typography.Text>
       </> : <Typography.Text type="secondary">完整历史样本不足，暂不发布每日前5 / 前10 / 前15名统计。</Typography.Text>}
     </Card>
-    <Row gutter={[16,16]}><Col xs={24} xl={12}><RankingScoreChart records={records}/></Col><Col xs={24} xl={12}><ProbabilityChart records={records}/></Col></Row>
+    <Row gutter={[16,16]}><Col span={24}><RankingScoreChart records={records}/></Col></Row>
     <Card title="数据新鲜度"><Table size="small" pagination={false} rowKey="key" dataSource={freshness.data ?? []} columns={[{title:'数据项',dataIndex:'label'},{title:'状态',dataIndex:'status',render:(v:string)=><Tag color={v==='ready'?'success':'default'}>{v==='ready'?'已就绪':'缺失'}</Tag>},{title:'更新时间',dataIndex:'updated_at',render:(v:string|null)=>v?new Date(v).toLocaleString():'—'},{title:'大小',dataIndex:'size_bytes',render:(v:number|null)=>v?`${(v/1024).toFixed(1)} KB`:'—'}]}/></Card>
   </Space>
 }

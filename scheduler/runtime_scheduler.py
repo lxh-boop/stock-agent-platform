@@ -9,6 +9,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from database.repositories import PredictionRepository
+from config import ACTIVE_RANKING_MODEL_NAME
 from local_config import load_local_config
 from scheduler.job_state import load_latest_job_status
 from scheduler.trading_calendar import get_latest_trading_day
@@ -58,6 +59,7 @@ def read_ranking_signal_date(output_dir: str | Path = "outputs") -> str:
 
     del output_dir
     rows = PredictionRepository().list_latest_predictions(
+        model_name=ACTIVE_RANKING_MODEL_NAME,
         limit=1
     )
     if not rows:

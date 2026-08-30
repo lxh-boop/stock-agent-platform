@@ -11,7 +11,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 
-from config import NEWS_EVENT_LOOKBACK_DAYS
+from config import ACTIVE_RANKING_MODEL_NAME, NEWS_EVENT_LOOKBACK_DAYS
 from database.repositories import NewsRepository, PredictionRepository
 from scheduler.job_lock import JobLock, JobLockError
 from scheduler.job_state import run_recorded_step, save_job_status
@@ -38,7 +38,10 @@ def _csv_signal_date(path: str | Path) -> str:
 
 
 def _ranking_signal_date(db_path: str | Path | None) -> str:
-    rows = PredictionRepository(db_path).list_latest_predictions(limit=1)
+    rows = PredictionRepository(db_path).list_latest_predictions(
+        model_name=ACTIVE_RANKING_MODEL_NAME,
+        limit=1,
+    )
     return str((rows[0] if rows else {}).get("trade_date") or "")[:10]
 
 
@@ -72,21 +75,19 @@ def run_market_update_from_local_config(
             "metadata": {"signal_date": current_signal_date, "already_current": True},
         }
 
-    from data_tushare import get_token
     from local_config import load_local_config
 
     config = load_local_config()
-    token = get_token()
-    from kronos_runtime.settings import KRONOS_BACKEND, KRONOS_MODEL_VERSION
+    from ranking_runtime.settings import ACTIVE_MODEL_BACKEND, ACTIVE_MODEL_VERSION
 
     configured_backend = str(config.get("model_backend") or "").strip()
-    model_backend = KRONOS_BACKEND
-    if configured_backend and configured_backend != KRONOS_BACKEND:
+    model_backend = ACTIVE_MODEL_BACKEND
+    if configured_backend and configured_backend != ACTIVE_MODEL_BACKEND:
         print(
-            f"[Scheduler] ignore retired model backend {configured_backend}; "
-            f"use {KRONOS_BACKEND}."
+            f"[Scheduler] ignore inactive model backend {configured_backend}; "
+            f"use {ACTIVE_MODEL_BACKEND}."
         )
-    model_version = KRONOS_MODEL_VERSION
+    model_version = ACTIVE_MODEL_VERSION
     timeout_seconds = max(1, int(config.get("scheduler_market_update_timeout_seconds") or 997200))
 
     project_root = Path(root).resolve()
@@ -97,8 +98,6 @@ def run_market_update_from_local_config(
     command = [
         sys.executable,
         str(script),
-        "--token",
-        token,
         "--base-version",
         model_version,
         "--model-backend",
@@ -264,7 +263,7 @@ def run_news_refresh_and_rebuild(
 
     The public step fetches metadata, acquires/validates article bodies before active DB persistence,
     removes legacy title-only RAG rows, writes structured chunk metadata, and finally rebuilds BM25/Dense.
-    Kronos/DFT model inputs remain K-line/model features only.
+    Ranking-model inputs remain market/model features only.
     """
 
     project_root = Path(root).resolve()

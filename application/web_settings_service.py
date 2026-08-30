@@ -8,7 +8,7 @@ import config
 from core.llm.profiles import build_model_profile
 from core.llm.runtime_settings import resolve_active_llm_settings
 from local_config import load_local_config, save_local_config
-from kronos_runtime.settings import KRONOS_BACKEND, KRONOS_MODEL_VERSION
+from ranking_runtime.settings import ACTIVE_MODEL_BACKEND, ACTIVE_MODEL_VERSION
 from scheduler.runtime_scheduler import reload_runtime_scheduler, scheduler_public_status
 
 
@@ -68,8 +68,8 @@ class WebSettingsApplicationService:
 
         return {
             "universe": self._text(getattr(config, "UNIVERSE", "")),
-            "model_backend": KRONOS_BACKEND,
-            "model_version": KRONOS_MODEL_VERSION,
+            "model_backend": ACTIVE_MODEL_BACKEND,
+            "model_version": ACTIVE_MODEL_VERSION,
             "default_topk": int(getattr(config, "TOPK", 10) or 10),
             "current_user_id": self._text(cfg.get("current_user_id") or "default"),
             "feature_flags": {

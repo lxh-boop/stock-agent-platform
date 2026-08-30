@@ -7,7 +7,7 @@ from typing import Any
 from database.repositories import PredictionRepository
 from pipelines.schemas import PipelineContext, PipelineStatus, PredictionPipelineResult
 from scoring.schemas import ModelPredictionSignal
-from kronos_runtime.settings import KRONOS_MODEL_NAME
+from ranking_runtime.settings import ACTIVE_MODEL_NAME
 
 
 def _default_ranking_path(context: PipelineContext) -> Path:
@@ -34,10 +34,15 @@ def _as_bool(value: Any) -> bool:
 def _from_database(context: PipelineContext) -> list[dict[str, Any]]:
     repo = PredictionRepository(context.db_path)
     trade_date = None if context.trade_date == "latest" else context.trade_date
-    rows = repo.list_predictions(trade_date=trade_date)
-    if context.trade_date == "latest" and rows:
-        latest_date = max(str(row.get("trade_date") or "") for row in rows)
-        rows = [row for row in rows if str(row.get("trade_date") or "") == latest_date]
+    if trade_date is None:
+        rows = repo.list_latest_predictions(model_name=ACTIVE_MODEL_NAME)
+    else:
+        rows = repo.list_predictions(trade_date=trade_date)
+        rows = [
+            row
+            for row in rows
+            if str(row.get("model_name") or "").strip() == ACTIVE_MODEL_NAME
+        ]
     rows.sort(key=lambda row: int(row.get("pred_rank") or 999999))
     return rows
 
@@ -105,14 +110,14 @@ def run_prediction_pipeline(
         for row in rows
         if str(row.get("model_name") or "").strip()
     }
-    if declared_models and declared_models != {KRONOS_MODEL_NAME}:
+    if declared_models and declared_models != {ACTIVE_MODEL_NAME}:
         models = ", ".join(sorted(declared_models))
         return PredictionPipelineResult(
             status=PipelineStatus.FAILED,
             message=f"Rejected retired model ranking: {models}",
             input_count=len(rows),
             output_count=0,
-            errors=[f"expected_model={KRONOS_MODEL_NAME}; actual_models={models}"],
+            errors=[f"expected_model={ACTIVE_MODEL_NAME}; actual_models={models}"],
             warnings=warnings,
             predictions=[],
             source=source,

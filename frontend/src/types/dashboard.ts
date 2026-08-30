@@ -14,6 +14,10 @@ export interface RankingRecord {
   rank?: number
   score?: number
   pred_score?: number
+  model_score?: number
+  member_1_rank_pct?: number
+  member_2_rank_pct?: number
+  historical_rank_bucket_up_rate?: number
   raw_score?: number
   pred_5d_ret?: number
   pred_return?: number
@@ -81,6 +85,9 @@ export interface TargetValidation {
   top10_lift_vs_universe?: number
   top15_lift_vs_universe?: number
   all_topk_above_universe?: boolean
+  target_precision?: number
+  target_met?: boolean
+  promotion_status?: string
 }
 
 export interface FreshnessItem {

@@ -24,7 +24,7 @@ def create_model_server(*, db_path: str | Path | None = None) -> MCPServer:
         name="stock-daily-model",
         title="Stock Daily Internal Model MCP",
         description=(
-            "Read completed Kronos inference snapshots. Full inference is owned "
+            "Read completed active-ranker inference snapshots. Full inference is owned "
             "by the asynchronous Task Runtime and cannot run in this request."
         ),
         version="1.0.0",

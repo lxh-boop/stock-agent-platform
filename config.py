@@ -8,6 +8,7 @@ from core.config.paths import (
     get_logs_dir,
     get_models_dir,
     get_outputs_dir,
+    get_resource_root,
     get_runtime_dir,
     is_frozen_app,
 )
@@ -177,10 +178,14 @@ CONFIDENCE_MEDIUM_THRESHOLD = 0.45
 
 
 # ============================================================
-# 当前默认模型
+# 当前默认排名模型
 # ============================================================
 
-MODEL_NAME = "kronos_mini"
+# 业务层只依赖这组稳定身份，不依赖具体算法或 checkpoint 文件名。
+ACTIVE_RANKING_MODEL_NAME = "cross_sectional_ranker"
+ACTIVE_RANKING_MODEL_BACKEND = "registered_ranker"
+ACTIVE_RANKING_MODEL_VERSION = "2026.08.29.1"
+MODEL_NAME = ACTIVE_RANKING_MODEL_NAME
 
 
 # ============================================================
@@ -218,8 +223,23 @@ TRAIN_FEATURE_DATA_PATH = os.path.join(DATA_DIR, "train_feature_stock_data_alpha
 LATEST_RAW_DATA_PATH = os.path.join(DATA_DIR, "latest_raw_stock_data.csv")
 LATEST_FEATURE_DATA_PATH = os.path.join(DATA_DIR, "latest_feature_stock_data_alpha158.csv")
 KRONOS_MARKET_HISTORY_CACHE_PATH = os.path.join(DATA_DIR, "kronos_market_history.csv")
-KRONOS_LATEST_METRICS_PATH = os.path.join(MODEL_DIR, "kronos_mini", "metrics.json")
-KRONOS_STOCK_DIRECTION_FEATURE_DIR = os.path.join(DATA_DIR, "model_precision", "tushare")
+ACTIVE_RANKING_MODEL_DIR = os.path.join(MODEL_DIR, ACTIVE_RANKING_MODEL_NAME)
+ACTIVE_RANKING_MODEL_MANIFEST_PATH = os.environ.get(
+    "ACTIVE_RANKING_MODEL_MANIFEST_PATH",
+    _mode_path(
+        get_resource_root() / "configs" / "active_ranker.json",
+        os.path.join("configs", "active_ranker.json"),
+    ),
+)
+ACTIVE_RANKING_MODEL_METRICS_PATH = os.path.join(
+    ACTIVE_RANKING_MODEL_DIR,
+    "metrics.json",
+)
+ACTIVE_RANKING_FEATURE_DIR = os.path.join(DATA_DIR, "model_precision", "tushare")
+
+# 旧运行时仍可读取这些名字；正式业务代码不再依赖它们。
+KRONOS_LATEST_METRICS_PATH = ACTIVE_RANKING_MODEL_METRICS_PATH
+KRONOS_STOCK_DIRECTION_FEATURE_DIR = ACTIVE_RANKING_FEATURE_DIR
 
 RANKING_LATEST_PATH = os.path.join(OUTPUT_DIR, "ranking_latest.csv")
 EVAL_METRICS_PATH = os.path.join(OUTPUT_DIR, "evaluation_metrics.csv")

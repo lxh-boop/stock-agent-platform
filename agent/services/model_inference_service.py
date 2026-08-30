@@ -4,10 +4,10 @@ from pathlib import Path
 from typing import Any
 
 from database.repositories import PredictionRepository
-from kronos_runtime.settings import (
-    KRONOS_BACKEND,
-    KRONOS_MODEL_NAME,
-    KRONOS_MODEL_VERSION,
+from ranking_runtime.settings import (
+    ACTIVE_MODEL_BACKEND,
+    ACTIVE_MODEL_NAME,
+    ACTIVE_MODEL_VERSION,
 )
 
 
@@ -19,7 +19,7 @@ def _code(value: Any) -> str:
 class ModelInferenceService:
     """Read completed real-model inference outputs from database authority.
 
-    Running Kronos across the market is intentionally not a synchronous service
+    Running the active cross-sectional ranker is intentionally not a synchronous service
     method. The existing Task Runtime owns that long-running operation; these
     queries expose only a completed, persisted inference snapshot.
     """
@@ -33,7 +33,7 @@ class ModelInferenceService:
     ) -> list[dict[str, Any]]:
         return PredictionRepository(db_path).list_latest_predictions(
             stock_code=_code(stock_code) if stock_code else None,
-            model_name=KRONOS_MODEL_NAME,
+            model_name=ACTIVE_MODEL_NAME,
             limit=limit,
         )
 
@@ -51,9 +51,9 @@ class ModelInferenceService:
                 "records": records,
                 "record_count": len(records),
                 "as_of_date": as_of_date,
-                "model_backend": KRONOS_BACKEND,
-                "model_name": KRONOS_MODEL_NAME,
-                "model_version": KRONOS_MODEL_VERSION,
+                "model_backend": ACTIVE_MODEL_BACKEND,
+                "model_name": ACTIVE_MODEL_NAME,
+                "model_version": ACTIVE_MODEL_VERSION,
                 "inference_mode": "completed_task_snapshot",
                 "source": "database/model_prediction",
                 "long_running_execution": "task_runtime",

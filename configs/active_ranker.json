@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "alias": "cross_sectional_ranker",
+  "display_name": "截面选股排序模型",
+  "version": "2026.08.29.1",
+  "engine": "lightgbm_rank_fusion",
+  "selection_count": 15,
+  "feature_source": "local_tushare_cross_sectional_panel",
+  "inference": {
+    "lookback_trading_days": 400,
+    "minimum_candidates": 15
+  },
+  "fusion": {
+    "method": "daily_percentile_rank_weighted_mean",
+    "members": [
+      {
+        "id": "member_1",
+        "checkpoint": "member_1.txt",
+        "sha256": "4682dc9d50a1a9982c4acb00e116f39b03c2496f5b5474d4c0508720c847debd",
+        "weight": 0.5,
+        "feature_count": 259
+      },
+      {
+        "id": "member_2",
+        "checkpoint": "member_2.txt",
+        "sha256": "64700b732e905b71e0ba75bc4d3f17b24a36d7f3135957997a82b7a77f0e098c",
+        "weight": 0.5,
+        "feature_count": 103
+      }
+    ]
+  },
+  "training": {
+    "trained_through": "2025-12-31",
+    "label": "next_trading_day_close_up",
+    "objective": "fixed_daily_top15_precision"
+  },
+  "validation": {
+    "target_precision": 0.55,
+    "target_met": false,
+    "promotion_status": "user_selected_best_available",
+    "primary_split": "holdout_2026",
+    "validation_2025": {
+      "start_date": "2025-01-02",
+      "end_date": "2025-12-31",
+      "days": 243,
+      "top5_precision": 0.5711933970451355,
+      "top10_precision": 0.5555555820465088,
+      "top15_precision": 0.5467764139175415,
+      "top15_signals": 3645,
+      "top15_correct": 1993,
+      "universe_up_rate": 0.47519034147262573
+    },
+    "holdout_2026": {
+      "start_date": "2026-01-05",
+      "end_date": "2026-07-30",
+      "days": 138,
+      "top5_precision": 0.5652173757553101,
+      "top10_precision": 0.5456521511077881,
+      "top15_precision": 0.5154589414596558,
+      "top15_signals": 2070,
+      "top15_correct": 1067,
+      "universe_up_rate": 0.45967891812324524
+    }
+  },
+  "disclaimer": "本项目仅用于机器学习、金融数据分析和项目展示，不构成投资建议，不用于实盘交易。"
+}

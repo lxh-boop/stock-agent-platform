@@ -5,9 +5,9 @@ from pathlib import Path
 import pandas as pd
 
 from kronos_runtime.stock_direction_features import _merge_asof_events
-from kronos_runtime.settings import KRONOS_MODEL_NAME
 from pipelines.prediction_pipeline import run_prediction_pipeline
 from pipelines.schemas import PipelineContext, PipelineStatus
+from ranking_runtime.settings import ACTIVE_MODEL_NAME
 
 
 def _ranking(rows: int = 20) -> pd.DataFrame:
@@ -20,7 +20,7 @@ def _ranking(rows: int = 20) -> pd.DataFrame:
                 "code": f"{index:06d}",
                 "pred_score": 0.10 - index / 1000,
                 "pred_return": 0.10 - index / 1000,
-                "model_name": KRONOS_MODEL_NAME,
+                "model_name": ACTIVE_MODEL_NAME,
                 "top15_up_signal": index <= 15,
             }
             for index in range(1, rows + 1)
@@ -33,7 +33,10 @@ def test_prediction_pipeline_always_emits_fixed_top15(tmp_path: Path) -> None:
     output.mkdir()
     _ranking().to_csv(output / "ranking_latest.csv", index=False, encoding="utf-8-sig")
 
-    result = run_prediction_pipeline(PipelineContext(output_dir=output, top_k=50))
+    result = run_prediction_pipeline(
+        PipelineContext(output_dir=output, top_k=50),
+        ranking_path=output / "ranking_latest.csv",
+    )
 
     assert result.status == PipelineStatus.SUCCESS
     assert result.input_count == 20
@@ -50,7 +53,10 @@ def test_prediction_pipeline_rejects_incomplete_fixed_top15(tmp_path: Path) -> N
     ranking.loc[ranking["rank"].eq(15), "top15_up_signal"] = False
     ranking.to_csv(output / "ranking_latest.csv", index=False, encoding="utf-8-sig")
 
-    result = run_prediction_pipeline(PipelineContext(output_dir=output, top_k=50))
+    result = run_prediction_pipeline(
+        PipelineContext(output_dir=output, top_k=50),
+        ranking_path=output / "ranking_latest.csv",
+    )
 
     assert result.status == PipelineStatus.FAILED
     assert result.output_count == 0
