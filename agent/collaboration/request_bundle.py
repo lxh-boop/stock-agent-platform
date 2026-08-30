@@ -445,8 +445,16 @@ class RequestDecomposer:
                     "content": (
                         "你是MainAgent入口唯一的Request语义理解器。你只把当前用户消息变成RequestBundle语义合同；"
                         "禁止拆Need、选择Worker、规划Tool或生成任何权威实体ID。"
-                        "显式编号/项目符号只由explicit_request_boundaries保护；如果没有显式边界，你自行按语义决定是否拆成多个Request。"
-                        "objective只描述用户要完成什么，不得塞入目标对象、约束或执行步骤。"
+                        "一个输入可以包含多个同类BUSINESS Request，也可以同时包含BUSINESS和PRESENTATION Request；Request不等于Worker Task。"
+                        "显式编号/项目符号只由explicit_request_boundaries保护；显式边界只保护用户原始边界和source_index，不限制一个边界只能产生一个Request。"
+                        "如果没有显式边界，Request数量仍由独立用户诉求决定；同一条原始消息可以按语义产生多个Request。"
+                        "category只能business/presentation。READ包括查询、分析、比较、建议、生成/修订待审批Proposal；"
+                        "WRITE只允许明确确认执行已有Proposal或拒绝/取消已有Proposal。"
+                        "语言、风格、长度、格式属于PRESENTATION。PRESENTATION是独立的用户诉求，不是BUSINESS的修饰字段。"
+                        "当同一句、同一条原始消息或同一个显式边界中同时存在业务目标与明确呈现要求时，必须分别生成BUSINESS Request和PRESENTATION Request；"
+                        "二者可以使用相同source_index。不得把明确呈现要求并入BUSINESS objective、semantic_target、semantic_entities或constraints，也不得忽略。"
+                        "objective只描述用户要完成什么：BUSINESS objective填写规范化业务目标；PRESENTATION objective填写简短的呈现要求摘要。"
+                        "不得把目标对象、约束或执行步骤塞入BUSINESS objective。"
                         "semantic_target表示当前Request在自然语言层面针对什么对象。它允许三种status："
                         "identified=已经从本轮原文或session_summary识别出具体语义对象；missing=业务需要具体对象但当前上下文仍无法知道；"
                         "not_required=该业务本身不要求一个具体对象。identified必须提供display_text。"
@@ -458,9 +466,10 @@ class RequestDecomposer:
                         "context_binding只声明实体范围、是否允许继承焦点、指代类型和新鲜度。"
                         "reuse_candidates是历史回答摘要候选；你只做粗筛，把‘大概可能有用’的turn_id写入reuse_reference，"
                         "最终是否复用由后续Need规划决定。latest或unspecified时reuse_reference必须为空。"
-                        "category只能business/presentation。READ包括查询、分析、比较、建议、生成/修订待审批Proposal；"
-                        "WRITE只允许明确确认执行已有Proposal或拒绝/取消已有Proposal。"
-                        "PRESENTATION的request_indexes放在presentation内部，不得再通过业务target表达展示作用范围。"
+                        "PRESENTATION的request_indexes放在presentation内部，用于指定呈现要求作用于哪些Request；不得再通过业务语义字段表达展示作用范围。"
+                        "例如‘这只股票适合我吗？回答不要带表情包’必须生成一个BUSINESS Request和一个PRESENTATION Request；"
+                        "后者的objective可为‘回答不要带表情包’，presentation.style可为‘不要带表情包’。"
+                        "例如‘分析贵州茅台，用英文表格回答’必须同时生成BUSINESS和PRESENTATION，后者设置presentation.language=en、presentation.format=table。"
                         "depends_on只使用当前requests数组1-based位置。严格只输出JSON。"
                     ),
                 },
@@ -479,7 +488,7 @@ class RequestDecomposer:
                             "requests": [{
                                 "source_index": 1,
                                 "category": "business|presentation",
-                                "objective": "只描述要完成什么的规范化业务目标",
+                                "objective": "BUSINESS填写只描述要完成什么的规范化业务目标；PRESENTATION填写简短的呈现要求摘要",
                                 "request_type": "read|write",
                                 "proposal_required": False,
                                 "semantic_target": {
@@ -528,7 +537,10 @@ class RequestDecomposer:
             disable_thinking=False,
             repair_mode="targeted",
             repair_guidance=(
-                "只修复Request语义合同。禁止旧字段target/mentions；必须使用semantic_target/semantic_entities。"
+                "只修复Request语义合同。禁止旧字段target/mentions；BUSINESS必须使用semantic_target/semantic_entities。"
+                "category只能business/presentation；同一条原始消息可以同时包含BUSINESS和PRESENTATION。"
+                "如果用户同时提出业务目标和明确呈现要求，修复时必须保留为两个独立Request，不得把PRESENTATION并入BUSINESS或忽略。"
+                "BUSINESS objective是规范化业务目标；PRESENTATION objective可为简短呈现要求摘要。"
                 "semantic_target.status只能identified/missing/not_required；identified必须有display_text；"
                 "semantic_entities只能输出自然语言语义实体，绝不能生成GraphRef/node_id/证券代码作为权威身份。"
                 "reuse_reference只能引用conversation_context.reuse_candidates中的turn_id；不得输出Worker/Need/Tool。"
