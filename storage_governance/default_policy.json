@@ -1,0 +1,68 @@
+{
+  "schema_version": "storage_governance_policy.v1",
+  "policy_version": "2026.08.29-stage3.6a3",
+  "factor_cache_days": 120,
+  "benchmark_workspace_days": 14,
+  "runtime_test_days": 14,
+  "log_copy_days": 30,
+  "log_retention_days": 30,
+  "artifact_expiry_grace_days": 7,
+  "news_raw_html_days": 90,
+  "protected_exact": [
+    "data/agent_quant.db",
+    "data/latest_raw_stock_data.csv",
+    "data/csi300_stock_pool.csv",
+    "data/kronos_market_history.csv",
+    "runtime/task_runtime.sqlite3",
+    "outputs/ranking_latest.csv",
+    "outputs/shared/ranking_latest.csv",
+    "outputs/rag_indexes/news_bm25.pkl",
+    "outputs/rag_indexes/news_dense.pkl",
+    "outputs/benchmarks/agent_capability/raw_runs.jsonl",
+    "outputs/benchmarks/agent_capability/normalized_traces.jsonl"
+  ],
+  "protected_prefixes": [
+    "data/model_precision/tushare/",
+    "data/model_precision/tushare_events/",
+    "models/",
+    "outputs/portfolio/",
+    "outputs/agent_runs/",
+    "runtime/replay_audit/"
+  ],
+  "protected_until_refactor": [
+    "data/rag_tfidf_index.pkl"
+  ],
+  "review_globs": [
+    "data/model_precision/stock_direction_features*.parquet",
+    "data/agent_quant_before_*.db",
+    "dist/**",
+    "build/**",
+    "installer_output/**"
+  ],
+  "output_review_prefixes": [
+    "outputs/backtests/",
+    "outputs/news_cleanup/",
+    "outputs/agent_llm_events/",
+    "outputs/react_logs/",
+    "outputs/reflection_logs/",
+    "outputs/rejected_experiments/",
+    "outputs/reports/",
+    "outputs/test_reports/"
+  ],
+  "cleanup_globs": [
+    "logs/clean_localappdata_*/**",
+    "outputs/benchmarks/agent_capability/isolated_workspaces/**"
+  ],
+  "runtime_cleanup_prefixes": [
+    "runtime/tmp",
+    "runtime/phase",
+    "runtime/agent_harness_",
+    "runtime/news_rag_diag_",
+    "runtime/pip_probe/"
+  ],
+  "large_log_mb": 50,
+  "log_rotation_keep": 5,
+  "log_rotation_segment_mb": 20,
+  "artifact_payload_days": 30,
+  "artifact_gc_interval_minutes": 60
+}
