@@ -41,6 +41,7 @@ def test_settings_save_preserves_blank_secrets_and_never_returns_values(monkeypa
 
     config_path = tmp_path / "local_app_config.json"
     monkeypatch.setattr(local_config, "LOCAL_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("STOCK_APP_SECRET_DIR", str(tmp_path / "secrets"))
     local_config.save_local_config({
         "llm_mode": "api",
         "llm_api_provider": "openai_compatible",
@@ -66,8 +67,12 @@ def test_settings_save_preserves_blank_secrets_and_never_returns_values(monkeypa
         clear_tushare_credential=False,
     )
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["llm_api_key"] == "existing-api-secret"
-    assert saved["tushare_token"] == "existing-ts-secret"
+    # Enterprise E1: credentials are no longer persisted in local_app_config.json.
+    assert saved["llm_api_key"] == ""
+    assert saved["tushare_token"] == ""
+    loaded = local_config.load_local_config()
+    assert loaded["llm_api_key"] == "existing-api-secret"
+    assert loaded["tushare_token"] == "existing-ts-secret"
     encoded = json.dumps(result, ensure_ascii=False)
     assert "existing-api-secret" not in encoded
     assert "existing-ts-secret" not in encoded
@@ -93,6 +98,7 @@ def test_tushare_loader_prefers_saved_local_credential(monkeypatch, tmp_path: Pa
 
     config_path = tmp_path / "local_app_config.json"
     monkeypatch.setattr(local_config, "LOCAL_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("STOCK_APP_SECRET_DIR", str(tmp_path / "secrets"))
     monkeypatch.setenv("TUSHARE_TOKEN", "environment-token")
     local_config.save_local_config({"tushare_token": "saved-token"})
     assert get_token() == "saved-token"

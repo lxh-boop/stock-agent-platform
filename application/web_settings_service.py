@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import config
+from core.config.secrets import resolve_secret
 from core.llm.profiles import build_model_profile
 from core.llm.runtime_settings import resolve_active_llm_settings
 from local_config import load_local_config, save_local_config
@@ -24,16 +25,22 @@ class WebSettingsApplicationService:
         return str(value or "").strip()
 
     @staticmethod
-    def _env_api_credential() -> str:
-        for key in (getattr(config, "LLM_API_KEY_ENV", "LLM_API_KEY"), "OPENAI_API_KEY"):
-            value = str(os.environ.get(key, "") or "").strip()
-            if value:
-                return value
-        return ""
+    def _external_api_credential_configured() -> bool:
+        return resolve_secret(
+            "llm_api_key",
+            env_names=(getattr(config, "LLM_API_KEY_ENV", "LLM_API_KEY"), "OPENAI_API_KEY"),
+            file_env_names=("STOCK_LLM_API_KEY_FILE",),
+            prefer_external=True,
+        ).configured
 
     @staticmethod
-    def _env_tushare_credential() -> str:
-        return str(os.environ.get("TUSHARE_TOKEN", "") or "").strip()
+    def _external_tushare_credential_configured() -> bool:
+        return resolve_secret(
+            "tushare_token",
+            env_names=("TUSHARE_TOKEN",),
+            file_env_names=("STOCK_TUSHARE_TOKEN_FILE",),
+            prefer_external=True,
+        ).configured
 
     @staticmethod
     def _validated_endpoint(value: Any, *, required: bool) -> str:
@@ -55,9 +62,9 @@ class WebSettingsApplicationService:
 
         runtime = resolve_active_llm_settings(local_config=cfg, mode=mode)
         saved_api_credential = bool(self._text(cfg.get("llm_api_key")))
-        default_api_credential = bool(self._env_api_credential())
+        default_api_credential = self._external_api_credential_configured()
         saved_tushare = bool(self._text(cfg.get("tushare_token")))
-        default_tushare = bool(self._env_tushare_credential())
+        default_tushare = self._external_tushare_credential_configured()
 
         api_base_url = self._text(cfg.get("llm_api_base_url")) or self._text(
             os.environ.get(getattr(config, "LLM_BASE_URL_ENV", "LLM_BASE_URL"))

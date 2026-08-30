@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 import json
@@ -873,4 +874,34 @@ class WebAgentApplicationService:
         }
 
 
-web_agent_service = WebAgentApplicationService()
+class LazyWebAgentApplicationService:
+    """Create the PostgreSQL-backed WebAgent facade only on first real API use.
+
+    Importing FastAPI modules, building OpenAPI, or inspecting routes must not
+    initialize AgentRepository/PostgresStore. Route handlers keep using the
+    stable ``web_agent_service`` object and transparently initialize the real
+    service on first method access.
+    """
+
+    def __init__(self) -> None:
+        self._instance: WebAgentApplicationService | None = None
+        self._lock = threading.RLock()
+
+    @property
+    def initialized(self) -> bool:
+        return self._instance is not None
+
+    def _get(self) -> WebAgentApplicationService:
+        instance = self._instance
+        if instance is not None:
+            return instance
+        with self._lock:
+            if self._instance is None:
+                self._instance = WebAgentApplicationService()
+            return self._instance
+
+    def __getattr__(self, name: str):
+        return getattr(self._get(), name)
+
+
+web_agent_service = LazyWebAgentApplicationService()

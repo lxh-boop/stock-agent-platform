@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from typing import Any
@@ -17,7 +18,49 @@ from server.task_runtime.manager import TaskManager
 from server.task_runtime.store import TERMINAL_STATUSES
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
-task_manager = TaskManager()
+
+
+class LazyTaskManager:
+    """Create the PostgreSQL-backed TaskManager only when runtime work needs it.
+
+    Importing API modules, building OpenAPI, or inspecting routes must stay free of
+    database side effects. The real API lifespan explicitly initializes the
+    manager when startup recovery is enabled; task endpoints initialize it on
+    first use otherwise.
+    """
+
+    def __init__(self) -> None:
+        self._instance: TaskManager | None = None
+        self._lock = threading.RLock()
+
+    @property
+    def initialized(self) -> bool:
+        return self._instance is not None
+
+    def _get(self) -> TaskManager:
+        instance = self._instance
+        if instance is not None:
+            return instance
+        with self._lock:
+            if self._instance is None:
+                self._instance = TaskManager()
+            return self._instance
+
+    @property
+    def store(self):
+        return self._get().store
+
+    def recover_on_api_startup(self) -> list[str]:
+        return self._get().recover_on_api_startup()
+
+    def submit(self, **kwargs):
+        return self._get().submit(**kwargs)
+
+    def cancel(self, task_id: str) -> dict[str, Any]:
+        return self._get().cancel(task_id)
+
+
+task_manager = LazyTaskManager()
 
 
 class TaskSubmitRequest(BaseModel):

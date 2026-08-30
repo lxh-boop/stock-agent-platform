@@ -15,6 +15,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+from core.config.service_settings import get_service_settings
+
 from server.task_runtime.store import ACTIVE_STATUSES, TERMINAL_STATUSES, TaskStore, utc_now
 
 ALLOWED_TASK_TYPES = {
@@ -72,7 +74,7 @@ class TaskManager:
         task_type = str(task_type)
         if task_type not in ALLOWED_TASK_TYPES:
             raise KeyError(f"Task type is not allowed: {task_type}")
-        max_concurrent = max(1, int(os.environ.get("STOCK_AGENT_MAX_CONCURRENT_TASKS") or 4))
+        max_concurrent = get_service_settings().max_concurrent_tasks
         with self._lock:
             active_count = len(self.store.list(active_only=True, limit=200))
             if active_count >= max_concurrent:

@@ -4,6 +4,7 @@ from pathlib import Path
 import time
 from typing import Any
 
+from core.config.service_settings import get_service_settings
 from core.llm import LLMExecutionDependencies, LLMRuntimeSettings, LLMService, resolve_active_llm_settings
 from core.llm.contracts import LLMConfigurationError, LLMJSONError, LLMProviderError
 from core.llm.dependencies import register_llm_execution_dependencies
@@ -248,6 +249,7 @@ def run_agent_request(
     user_id = str(user_id or "default")
     session_id = str(session_id or f"session_{user_id}")
     language = _language(raw_query, reply_language)
+    service_settings = get_service_settings()
     active_llm = llm_settings or resolve_active_llm_settings(
         mode=llm_mode,
         api_key=llm_api_key,
@@ -278,6 +280,10 @@ def run_agent_request(
             "result_contract": "graph_worker_result.v1",
         },
         "llm_runtime_snapshot": {**active_llm.public_dict, "config_hash": active_llm.config_hash},
+        "service_runtime_snapshot": {
+            **service_settings.public_dict,
+            "config_hash": service_settings.config_hash,
+        },
     })
     activate_llm_audit_context(
         run_id=runtime.run_id,
@@ -291,6 +297,9 @@ def run_agent_request(
     context["llm_runtime_settings"] = active_llm
     context["llm_profile_id"] = llm_service.profile_id
     context["llm_config_hash"] = llm_service.config_hash
+    context["service_config_hash"] = service_settings.config_hash
+    context["service_environment"] = service_settings.environment
+    context["service_deployment_mode"] = service_settings.deployment_mode
     trace_event(
         "executor.graph_request.received",
         {"query": raw_query, "user_id": user_id, "session_id": session_id, "top_k": top_k, "language": language},

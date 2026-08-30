@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from config import DEFAULT_LLM_MODE, LLM_API_KEY_ENV, LLM_BASE_URL_ENV, LLM_MODEL_ENV
+from core.config.secrets import resolve_secret
 from core.llm.profiles import ModelProfile, build_model_profile
 
 
@@ -101,21 +102,15 @@ def _load_saved_config() -> dict[str, Any]:
 
 
 def _credential(saved: Mapping[str, Any], explicit: str | None) -> tuple[str, str]:
-    if explicit is not None:
-        value = _text(explicit)
-        if value:
-            return value, "runtime:explicit"
-    else:
-        value = _text(saved.get("llm_api_key"))
-        if value:
-            return value, "local_config:llm_api_key"
-    env_value = _text(os.environ.get(LLM_API_KEY_ENV))
-    if env_value:
-        return env_value, f"env:{LLM_API_KEY_ENV}"
-    env_value = _text(os.environ.get("OPENAI_API_KEY"))
-    if env_value:
-        return env_value, "env:OPENAI_API_KEY"
-    return "", "unconfigured"
+    resolved = resolve_secret(
+        "llm_api_key",
+        explicit=explicit,
+        local_value=saved.get("llm_api_key"),
+        env_names=(LLM_API_KEY_ENV, "OPENAI_API_KEY"),
+        file_env_names=("STOCK_LLM_API_KEY_FILE",),
+        prefer_external=False,
+    )
+    return resolved.value, resolved.source
 
 
 def resolve_active_llm_settings(

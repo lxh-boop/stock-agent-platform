@@ -7,6 +7,8 @@ from datetime import datetime, time as datetime_time, timedelta
 import numpy as np
 import pandas as pd
 
+from core.config.secrets import resolve_secret
+
 from config import EPS, START_DATE
 
 from universe import get_stock_pool
@@ -24,24 +26,26 @@ def _tushare_module():
 
 
 def get_token(token: str | None = None) -> str:
-    if token and token.strip():
-        return token.strip()
-
     try:
         from local_config import load_local_config
 
         saved_token = str(load_local_config().get("tushare_token") or "").strip()
     except Exception:
         saved_token = ""
-    if saved_token:
-        return saved_token
 
-    env_token = os.environ.get("TUSHARE_TOKEN", "").strip()
-    if env_token:
-        return env_token
+    resolved = resolve_secret(
+        "tushare_token",
+        explicit=token,
+        local_value=saved_token,
+        env_names=("TUSHARE_TOKEN",),
+        file_env_names=("STOCK_TUSHARE_TOKEN_FILE",),
+        prefer_external=False,
+    )
+    if resolved.value:
+        return resolved.value
 
     raise RuntimeError(
-        "没有找到 Tushare Token。请在系统设置中填写，或设置环境变量 TUSHARE_TOKEN。"
+        "没有找到 Tushare Token。请在系统设置中填写，或配置 TUSHARE_TOKEN / STOCK_TUSHARE_TOKEN_FILE。"
     )
 
 

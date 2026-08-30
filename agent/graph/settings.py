@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from core.config.secrets import resolve_secret
+
 
 def _local_config_values() -> dict[str, Any]:
     try:
@@ -49,7 +51,14 @@ class Neo4jSettings:
             or local.get("neo4j_username")
             or "neo4j"
         ).strip()
-        password = str(_pick(source, local, "NEO4J_PASSWORD", "neo4j_password", "")).strip()
+        password = resolve_secret(
+            "neo4j_password",
+            local_value=local.get("neo4j_password"),
+            env_names=("NEO4J_PASSWORD",),
+            file_env_names=("STOCK_NEO4J_PASSWORD_FILE",),
+            prefer_external=True,
+            env=source,
+        ).value
         database = str(_pick(source, local, "NEO4J_DATABASE", "neo4j_database", "neo4j")).strip()
         graph_id = str(_pick(source, local, "FINANCIAL_GRAPH_ID", "financial_graph_id", "financial_graph")).strip()
         encrypted_raw = str(_pick(source, local, "NEO4J_ENCRYPTED", "neo4j_encrypted", "")).strip().lower()

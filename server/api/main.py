@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from core.config.service_settings import get_service_settings
+from core.config.startup import get_startup_report, invalidate_startup_cache
+from local_config import migrate_legacy_local_config_secrets
 
 from server.api.contracts import OperationResponse
 from server.api.dispatch import (
@@ -37,14 +39,29 @@ from scheduler.runtime_scheduler import shutdown_runtime_scheduler, start_runtim
 
 
 @asynccontextmanager
-async def _lifespan(_: FastAPI):
+async def _lifespan(app: FastAPI):
+    settings = get_service_settings()
+    # Migrate legacy plaintext credentials before readiness can become healthy.
+    # Migration writes secrets first and sanitizes local_app_config.json only
+    # after all secret writes succeed.
+    try:
+        app.state.secret_migration = migrate_legacy_local_config_secrets()
+    except Exception as exc:
+        app.state.secret_migration = {
+            "schema_version": "secret_migration.v1",
+            "changed": False,
+            "migrated": [],
+            "error_code": f"secret_migration:{type(exc).__name__}",
+        }
+    invalidate_startup_cache()
+
     # Task recovery belongs to the real API process lifecycle, not TaskManager
-    # construction. Compose enables it explicitly so imports/tests cannot
-    # accidentally interrupt live production tasks.
-    if os.environ.get("STOCK_AGENT_RECOVER_INTERRUPTED_ON_START", "0") == "1":
+    # construction. Imports/tests must never mutate production task state.
+    if settings.recover_interrupted_on_start:
         task_manager.recover_on_api_startup()
     # 正式 API 进程即常驻调度器宿主；测试环境由 runtime_scheduler 自动禁用。
-    start_runtime_scheduler()
+    if settings.runtime_scheduler_enabled:
+        start_runtime_scheduler()
     try:
         yield
     finally:
@@ -52,31 +69,54 @@ async def _lifespan(_: FastAPI):
 
 
 def create_app() -> FastAPI:
+    settings = get_service_settings()
     app = FastAPI(
         title="Stock Daily App API",
         version="4.0.0",
         description="React + FastAPI boundary with persistent daily scheduler.",
         lifespan=_lifespan,
     )
-    origins = [item.strip() for item in os.environ.get("STOCK_AGENT_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if item.strip()]
+    app.state.service_settings = settings
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins,
+        allow_origins=list(settings.cors_origins),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+    @app.get("/api/v1/liveness", response_model=OperationResponse)
+    def liveness() -> OperationResponse:
+        return OperationResponse(
+            success=True,
+            data={
+                "status": "alive",
+                "service": "stock-daily-app-api",
+                "version": "4.0.0",
+                "environment": settings.environment,
+                "deployment_mode": settings.deployment_mode,
+                "config_hash": settings.config_hash,
+            },
+        )
+
+    @app.get("/api/v1/readiness", response_model=OperationResponse)
+    def readiness() -> OperationResponse:
+        report = get_startup_report(deep=True)
+        return OperationResponse(success=report.ready, data=report.public_dict())
+
     @app.get("/api/v1/health", response_model=OperationResponse)
     def health() -> OperationResponse:
+        # Backward-compatible liveness endpoint. Docker/production probes use
+        # /readiness so a live process is not confused with a ready service.
         return OperationResponse(
             success=True,
             data={
                 "status": "ok",
                 "service": "stock-daily-app-api",
                 "version": "4.0.0",
-                "deployment_mode": os.environ.get("STOCK_APP_DEPLOYMENT_MODE", "local"),
-                "project_root": str(Path.cwd()),
+                "environment": settings.environment,
+                "deployment_mode": settings.deployment_mode,
+                "config_hash": settings.config_hash,
             },
         )
 

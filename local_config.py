@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from core.config.paths import get_local_config_path, is_frozen_app
+from core.config.secrets import LocalSecretStore, SECRET_IDS
 
 
 LOCAL_CONFIG_PATH = (
@@ -18,6 +19,8 @@ _CONFIG_WRITE_LOCK = threading.Lock()
 
 
 DEFAULT_LOCAL_CONFIG = {
+    # Secret keys stay in the in-memory compatibility schema, but persisted JSON
+    # always stores them blank. Values live in LocalSecretStore instead.
     "tushare_token": "",
     "llm_api_key": "",
     "llm_mode": "api",
@@ -93,45 +96,19 @@ def _legacy_compatible_view(config: Dict[str, Any]) -> Dict[str, Any]:
     return view
 
 
-def load_local_config() -> Dict[str, Any]:
-    path = Path(LOCAL_CONFIG_PATH)
-    if not path.exists():
-        return _legacy_compatible_view(DEFAULT_LOCAL_CONFIG)
-
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        cfg = DEFAULT_LOCAL_CONFIG.copy()
-        cfg.update(data)
-        for obsolete_key in (
-            "mcp_example_enabled",
-            "mcp_example_allowed_tools",
-            "mcp_example_timeout_seconds",
-        ):
-            cfg.pop(obsolete_key, None)
-        # Legacy aliases are read only at this migration boundary.
-        if not str(cfg.get("llm_api_base_url") or "").strip() and str(cfg.get("llm_base_url") or "").strip():
-            cfg["llm_api_base_url"] = str(cfg["llm_base_url"]).strip()
-        if not str(cfg.get("llm_api_model") or "").strip() and str(cfg.get("llm_model") or "").strip():
-            cfg["llm_api_model"] = str(cfg["llm_model"]).strip()
-        if str(cfg.get("llm_mode") or "").strip().lower() not in {"api", "local"}:
-            cfg["llm_mode"] = "api"
-        return _legacy_compatible_view(cfg)
-
-    except Exception:
-        return _legacy_compatible_view(DEFAULT_LOCAL_CONFIG)
+def _merge_local_secret_store(config: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(config)
+    store = LocalSecretStore()
+    for key in SECRET_IDS:
+        if str(merged.get(key) or "").strip():
+            continue
+        value = store.read(key)
+        if value:
+            merged[key] = value
+    return merged
 
 
-def save_local_config(config: Dict[str, Any]) -> None:
-    """Persist one validated configuration snapshot.
-
-    The temporary file is written and fsynced before replacement. Docker may
-    bind-mount ``local_app_config.json`` as an individual file, in which case
-    replacing the mount point can fail. The fallback copies the already-complete
-    temporary JSON into the mounted file while holding the process write lock.
-    """
-
+def _normalise_config(config: Dict[str, Any]) -> Dict[str, Any]:
     cfg = DEFAULT_LOCAL_CONFIG.copy()
     cfg.update(config)
     for obsolete_key in (
@@ -144,37 +121,147 @@ def save_local_config(config: Dict[str, Any]) -> None:
         cfg["llm_api_base_url"] = str(cfg["llm_base_url"]).strip()
     if not str(cfg.get("llm_api_model") or "").strip() and str(cfg.get("llm_model") or "").strip():
         cfg["llm_api_model"] = str(cfg["llm_model"]).strip()
-    # Do not perpetuate legacy aliases after migration.
+    if str(cfg.get("llm_mode") or "").strip().lower() not in {"api", "local"}:
+        cfg["llm_mode"] = "api"
     cfg.pop("llm_base_url", None)
     cfg.pop("llm_model", None)
+    return cfg
 
-    path = Path(LOCAL_CONFIG_PATH)
+
+def _write_payload(path: Path, cfg: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(cfg, ensure_ascii=False, indent=2) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+        text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.replace(temporary, path)
+        except OSError:
+            # A single-file Docker bind mount cannot be replaced, but it can
+            # be updated. Copy only after the complete JSON was fsynced.
+            with temporary.open("r", encoding="utf-8") as source, path.open(
+                "w", encoding="utf-8", newline="\n"
+            ) as target:
+                shutil.copyfileobj(source, target)
+                target.flush()
+                os.fsync(target.fileno())
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def load_local_config() -> Dict[str, Any]:
+    path = Path(LOCAL_CONFIG_PATH)
+    if not path.exists():
+        return _legacy_compatible_view(_merge_local_secret_store(DEFAULT_LOCAL_CONFIG))
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        cfg = _normalise_config(dict(data) if isinstance(data, dict) else {})
+        # Compatibility: until startup migration runs, legacy plaintext values
+        # remain readable. Once migrated, LocalSecretStore overlays them.
+        cfg = _merge_local_secret_store(cfg)
+        return _legacy_compatible_view(cfg)
+
+    except Exception:
+        return _legacy_compatible_view(_merge_local_secret_store(DEFAULT_LOCAL_CONFIG))
+
+
+def save_local_config(config: Dict[str, Any]) -> None:
+    """Persist one validated non-secret configuration snapshot.
+
+    Secret fields are accepted for legacy/UI compatibility, but are written to
+    ``LocalSecretStore`` outside the source tree. The JSON file always contains
+    blank secret fields so Git/build artifacts cannot capture credentials.
+    """
+
+    input_config = dict(config or {})
+    cfg = _normalise_config(input_config)
+    store = LocalSecretStore()
+
+    # Only mutate a secret when the caller explicitly supplied the key. Partial
+    # non-secret saves must never clear an existing credential.
+    for secret_id in SECRET_IDS:
+        if secret_id in input_config:
+            value = str(input_config.get(secret_id) or "").strip()
+            if value:
+                store.write(secret_id, value)
+            else:
+                store.clear(secret_id)
+        cfg[secret_id] = ""
+
+    path = Path(LOCAL_CONFIG_PATH)
+    with _CONFIG_WRITE_LOCK:
+        _write_payload(path, cfg)
+
+
+def migrate_legacy_local_config_secrets() -> dict[str, Any]:
+    """Move plaintext secrets from legacy ``local_app_config.json`` safely.
+
+    Migration is atomic from the application's point of view: all secret values
+    are written to the local secret store before the JSON is sanitized. If a
+    secret-store write raises, the source JSON is left untouched.
+    """
+
+    path = Path(LOCAL_CONFIG_PATH)
+    if not path.exists():
+        return {"schema_version": "secret_migration.v1", "migrated": [], "changed": False}
 
     with _CONFIG_WRITE_LOCK:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            dir=str(path.parent),
-            text=True,
-        )
-        temporary = Path(temporary_name)
+        with path.open("r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        if not isinstance(raw, dict):
+            raise ValueError("local_config_not_object")
+
+        candidates = {
+            secret_id: str(raw.get(secret_id) or "").strip()
+            for secret_id in SECRET_IDS
+            if str(raw.get(secret_id) or "").strip()
+        }
+        if not candidates:
+            return {"schema_version": "secret_migration.v1", "migrated": [], "changed": False}
+
+        store = LocalSecretStore()
+        for secret_id, value in candidates.items():
+            store.write(secret_id, value)
+
+        sanitized = dict(raw)
+        for secret_id in SECRET_IDS:
+            sanitized[secret_id] = ""
+        _write_payload(path, _normalise_config(sanitized))
+        return {
+            "schema_version": "secret_migration.v1",
+            "migrated": sorted(candidates),
+            "changed": True,
+        }
+
+
+def local_secret_storage_status() -> dict[str, Any]:
+    store = LocalSecretStore()
+    path = Path(LOCAL_CONFIG_PATH)
+    legacy_plaintext_keys: list[str] = []
+    if path.exists():
         try:
-            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(encoded)
-                handle.flush()
-                os.fsync(handle.fileno())
-            try:
-                os.replace(temporary, path)
-            except OSError:
-                # A single-file Docker bind mount cannot be replaced, but it can
-                # be updated. Copy only after the complete JSON was fsynced.
-                with temporary.open("r", encoding="utf-8") as source, path.open(
-                    "w", encoding="utf-8", newline="\n"
-                ) as target:
-                    shutil.copyfileobj(source, target)
-                    target.flush()
-                    os.fsync(target.fileno())
-        finally:
-            temporary.unlink(missing_ok=True)
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                legacy_plaintext_keys = [
+                    key for key in SECRET_IDS if str(raw.get(key) or "").strip()
+                ]
+        except Exception:
+            legacy_plaintext_keys = ["<unreadable_local_config>"]
+    return {
+        "schema_version": "secret_storage_status.v1",
+        "legacy_plaintext_present": bool(legacy_plaintext_keys),
+        "legacy_plaintext_keys": legacy_plaintext_keys,
+        "configured": {key: bool(store.read(key)) for key in SECRET_IDS},
+    }

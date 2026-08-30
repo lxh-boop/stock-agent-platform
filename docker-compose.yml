@@ -15,6 +15,9 @@ services:
       AGENT_API_HOST: 0.0.0.0
       AGENT_API_PORT: "8010"
       STOCK_APP_DEPLOYMENT_MODE: compose-react
+      STOCK_APP_ENV: ${STOCK_APP_ENV:-development}
+      STOCK_APP_SECRET_DIR: /app_secrets
+      STOCK_APP_READINESS_CACHE_SECONDS: ${STOCK_APP_READINESS_CACHE_SECONDS:-5}
       STOCK_APP_RUNTIME_SCHEDULER_ENABLED: "${STOCK_APP_RUNTIME_SCHEDULER_ENABLED:-1}"
       TZ: Asia/Shanghai
       STOCK_AGENT_RECOVER_INTERRUPTED_ON_START: "1"
@@ -64,6 +67,9 @@ services:
       - type: bind
         source: .
         target: /app
+      - type: volume
+        source: app_secrets
+        target: /app_secrets
       - type: bind
         source: ${STOCK_POSTGRES_SECRET_FILE:-D:/google/postgres_final/postgres_password.txt}
         target: /run/secrets/postgres_password
@@ -82,7 +88,7 @@ services:
         - CMD
         - python
         - -c
-        - "import json,urllib.request; p=json.load(urllib.request.urlopen('http://127.0.0.1:8010/api/v1/health', timeout=5)); assert p.get('success') and (p.get('data') or {}).get('status') == 'ok'"
+        - "import json,urllib.request; p=json.load(urllib.request.urlopen('http://127.0.0.1:8010/api/v1/readiness', timeout=5)); assert p.get('success') and (p.get('data') or {}).get('status') == 'ready'"
       interval: 10s
       timeout: 6s
       retries: 12
@@ -137,3 +143,4 @@ services:
 
 volumes:
   postgres_data: {name: stock_daily_app_postgres}
+  app_secrets: {name: stock_daily_app_secrets}

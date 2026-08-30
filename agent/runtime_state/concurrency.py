@@ -1,18 +1,12 @@
 """Run-scoped concurrency gates for Request/Worker/Tool/LLM execution."""
 from __future__ import annotations
 
-import os
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-
-def _env_int(name: str, default: int, minimum: int = 1) -> int:
-    try:
-        return max(minimum, int(os.getenv(name, str(default))))
-    except (TypeError, ValueError):
-        return max(minimum, int(default))
+from core.config.service_settings import get_service_settings
 
 
 @dataclass
@@ -56,10 +50,11 @@ class RuntimeResourceBudget:
         max_parallel_tools: int | None = None,
         max_parallel_llm: int | None = None,
     ) -> None:
-        self.request_gate = _Gate("request", max_parallel_requests or _env_int("AGENT_MAX_PARALLEL_REQUESTS", 3))
-        self.worker_gate = _Gate("worker", max_parallel_workers or _env_int("AGENT_MAX_PARALLEL_WORKERS", 6))
-        self.tool_gate = _Gate("tool", max_parallel_tools or _env_int("AGENT_MAX_PARALLEL_TOOLS", 8))
-        self.llm_gate = _Gate("llm", max_parallel_llm or _env_int("AGENT_MAX_PARALLEL_LLM", 4))
+        settings = get_service_settings()
+        self.request_gate = _Gate("request", max_parallel_requests or settings.max_parallel_requests)
+        self.worker_gate = _Gate("worker", max_parallel_workers or settings.max_parallel_workers)
+        self.tool_gate = _Gate("tool", max_parallel_tools or settings.max_parallel_tools)
+        self.llm_gate = _Gate("llm", max_parallel_llm or settings.max_parallel_llm)
 
     @property
     def max_parallel_requests(self) -> int:

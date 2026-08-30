@@ -313,7 +313,21 @@ def scheduler_public_status(root: str | Path = ".") -> dict[str, Any]:
     cron_job = scheduler.get_job(SCHEDULER_JOB_ID) if scheduler else None
     next_run = getattr(cron_job, "next_run_time", None)
     expected = expected_signal_date()
-    signal_date = read_ranking_signal_date(Path(root) / "outputs")
+    ranking_signal_status = "available"
+    ranking_signal_error = ""
+    try:
+        signal_date = read_ranking_signal_date(Path(root) / "outputs")
+        if not signal_date:
+            ranking_signal_status = "empty"
+    except Exception as exc:
+        # Status aggregation is an observability boundary. A temporarily unavailable
+        # prediction store must not make unrelated settings/status APIs fail.
+        # Keep the distinction from a valid-but-empty prediction result and expose
+        # only the exception type, never credentials/DSNs/error messages.
+        signal_date = ""
+        ranking_signal_status = "unavailable"
+        ranking_signal_error = type(exc).__name__
+
     public_state = _public_data_state(latest_job, expected)
     market_stale = bool(expected and signal_date != expected)
     public_stale = not bool(public_state["healthy"])
@@ -329,6 +343,9 @@ def scheduler_public_status(root: str | Path = ".") -> dict[str, Any]:
         "next_run_time": _iso(next_run),
         "expected_signal_date": expected,
         "latest_signal_date": signal_date,
+        "ranking_signal_available": ranking_signal_status != "unavailable",
+        "ranking_signal_status": ranking_signal_status,
+        "ranking_signal_error": ranking_signal_error,
         "market_stale": market_stale,
         "public_data_ready": bool(public_state["ready"]),
         "public_data_healthy": bool(public_state["healthy"]),
