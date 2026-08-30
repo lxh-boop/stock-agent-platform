@@ -10,9 +10,6 @@ from mcp.types import ToolAnnotations
 
 from agent.mcp.adapters import ModelMCPAdapter
 from agent.mcp.tool_envelope import MCPToolEnvelope
-from config import AGENT_QUANT_DB_PATH
-
-
 READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,
@@ -53,12 +50,8 @@ def create_model_server(*, db_path: str | Path | None = None) -> MCPServer:
 
 def main() -> None:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument(
-        "--db-path",
-        default=os.environ.get("STOCK_MCP_DB_PATH") or str(AGENT_QUANT_DB_PATH),
-    )
     args = parser.parse_args()
-    create_model_server(db_path=args.db_path).run("stdio")
+    create_model_server().run("stdio")
 
 
 if __name__ == "__main__":

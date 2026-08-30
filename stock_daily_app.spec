@@ -83,8 +83,7 @@ datas = [
 ]
 
 for directory in [
-    "database/migrations",
-    "database/seed",
+    "database/postgres_migrations",
     "resources",
     "model_zoo/configs",
 ]:
@@ -92,14 +91,24 @@ for directory in [
     if path.exists():
         datas.append((str(path), directory))
 
+DATABASE_FILE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
+
 for source_dir, target_dir in [
     ("data", "bundled_seed/data"),
     ("models", "bundled_seed/models"),
     ("outputs", "bundled_seed/outputs"),
 ]:
     path = project_root / source_dir
-    if path.exists():
-        datas.append((str(path), target_dir))
+    if not path.exists():
+        continue
+    for file_path in path.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() in DATABASE_FILE_SUFFIXES:
+            continue
+        rel = file_path.relative_to(path)
+        destination = str(Path(target_dir) / rel.parent)
+        datas.append((str(file_path), destination))
 
 datas += collect_data_files("plotly")
 datas += collect_data_files("rfc3987_syntax")

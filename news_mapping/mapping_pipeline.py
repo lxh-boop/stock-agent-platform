@@ -19,7 +19,8 @@ from .stock_alias_builder import build_stock_alias_table
 
 def get_table_count(table: str, db_path: str | Path = NEWS_MAPPING_DB_PATH) -> int:
     with get_connection(db_path) as conn:
-        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        row = conn.execute(f"SELECT COUNT(*) AS row_count FROM {table}").fetchone()
+        return int((row or {}).get("row_count") or 0)
 
 
 def load_news_for_date(
@@ -30,20 +31,20 @@ def load_news_for_date(
     init_db(db_path)
     with get_connection(db_path) as conn:
         if not date:
-            row = conn.execute("SELECT MAX(date) AS max_date FROM news_items").fetchone()
+            row = conn.execute("SELECT MAX(date) AS max_date FROM news_mapping_news_items").fetchone()
             date = row["max_date"] if row else None
         if not date:
             return pd.DataFrame()
 
         sql = """
             SELECT news_id, date, publish_time, title, content, source, url
-            FROM news_items
-            WHERE date = ?
+            FROM news_mapping_news_items
+            WHERE date = %s
             ORDER BY publish_time DESC, news_id
         """
         params: list = [date]
         if limit and limit > 0:
-            sql += " LIMIT ?"
+            sql += " LIMIT %s"
             params.append(int(limit))
         return pd.read_sql_query(sql, conn, params=params)
 
@@ -69,10 +70,10 @@ def export_mapping_for_date(
                 l.evidence,
                 l.mapper,
                 l.status
-            FROM news_items n
-            JOIN news_stock_links l
+            FROM news_mapping_news_items n
+            JOIN news_mapping_news_stock_links l
               ON n.news_id = l.news_id
-            WHERE n.date = ?
+            WHERE n.date = %s
             ORDER BY n.publish_time DESC, l.status, l.confidence DESC
             """,
             conn,
@@ -127,10 +128,10 @@ def run_mapping_pipeline(
 ) -> dict:
     init_db(db_path)
 
-    if get_table_count("stock_alias", db_path) == 0:
+    if get_table_count("news_mapping_stock_alias", db_path) == 0:
         build_stock_alias_table(token=token, db_path=db_path)
 
-    if get_table_count("concept_stock_map", db_path) == 0:
+    if get_table_count("news_mapping_concept_stock_map", db_path) == 0:
         seed_default_concept_stock_map(db_path=db_path)
 
     if refresh_tushare and token:

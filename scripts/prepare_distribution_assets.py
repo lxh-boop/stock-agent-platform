@@ -9,9 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app_version import APP_NAME, APP_VERSION
-from database.connection import initialize_database
 from runtime_paths import (
-    get_database_dir,
     get_logs_dir,
     get_outputs_dir,
     get_project_root,
@@ -19,6 +17,8 @@ from runtime_paths import (
     get_user_data_root,
     is_frozen_app,
 )
+
+DATABASE_FILE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 
 
 def _repo_root() -> Path:
@@ -34,13 +34,22 @@ def _expected_frozen_user_root() -> Path:
     return Path.home() / "AppData" / "Local" / "StockDailyApp"
 
 
+def _database_seed_files(root: Path) -> list[str]:
+    hits: list[str] = []
+    for rel in ("data", "models", "outputs"):
+        base = root / rel
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if path.is_file() and path.suffix.lower() in DATABASE_FILE_SUFFIXES:
+                hits.append(path.relative_to(root).as_posix())
+    return sorted(hits)
+
+
 def main() -> int:
     root = _repo_root()
-    migrations = root / "database" / "migrations"
+    postgres_migrations = root / "database" / "postgres_migrations"
     resources = root / "resources"
-    probe_dir = root / "build" / "distribution_probe"
-    probe_db = probe_dir / "agent_quant_probe.db"
-    live_db = root / "data" / "agent_quant.db"
     frozen_user_root = _expected_frozen_user_root()
 
     print("=" * 80)
@@ -49,19 +58,16 @@ def main() -> int:
     print(f"[Project Root] {get_project_root()}")
     print(f"[Resource Root] {get_resource_root()}")
     print(f"[User Data Root] {get_user_data_root()}")
-    print(f"[Development Live DB] {live_db}")
-    print(f"[Current Mode DB Dir] {get_database_dir()}")
     print(f"[Current Mode Outputs Dir] {get_outputs_dir()}")
     print(f"[Current Mode Logs Dir] {get_logs_dir()}")
     print(f"[Frozen User Data Root Expected] {frozen_user_root}")
-    print(f"[Frozen DB Expected] {frozen_user_root / 'database' / 'agent_quant.db'}")
-    print(f"[Frozen Config Expected] {frozen_user_root / 'config' / 'local_app_config.json'}")
+    print("[Database Backend] PostgreSQL only")
     print("=" * 80)
 
     required = [
         root / "desktop_launcher.py",
         root / "stock_daily_app.spec",
-        migrations,
+        postgres_migrations,
         resources,
     ]
     missing = [str(path) for path in required if not path.exists()]
@@ -70,19 +76,18 @@ def main() -> int:
         print(json.dumps(missing, ensure_ascii=False, indent=2))
         return 1
 
-    migration_files = sorted(migrations.glob("*.sql"))
+    migration_files = sorted(postgres_migrations.glob("*.sql"))
     if not migration_files:
-        print(f"[Error] No migration files found: {migrations}")
+        print(f"[Error] No PostgreSQL baseline/migration SQL found: {postgres_migrations}")
         return 1
 
-    print(f"[Migrations] {len(migration_files)} files")
-    print("[Database] Initializing a probe database copy under build/ only.")
-    print(f"[Database] Source live database is not modified: {live_db}")
-    print(f"[Database] Probe database: {probe_db}")
-    probe_dir.mkdir(parents=True, exist_ok=True)
-    if probe_db.exists():
-        probe_db.unlink()
-    initialize_database(probe_db)
+    database_seed_files = _database_seed_files(root)
+    if database_seed_files:
+        print(
+            "[Database Seed] Local database files exist in seed source trees; "
+            "the PyInstaller spec must exclude them:"
+        )
+        print(json.dumps(database_seed_files, ensure_ascii=False, indent=2))
 
     root_sensitive = [
         root / ".env",
@@ -91,29 +96,35 @@ def main() -> int:
     ]
     present_sensitive = [str(path) for path in root_sensitive if path.exists()]
     if present_sensitive:
-        print("[Sensitive Local Files] Present in development tree, intentionally not listed in spec datas:")
+        print("[Sensitive Local Files] Present in development tree, intentionally not packaged:")
         print(json.dumps(present_sensitive, ensure_ascii=False, indent=2))
 
     print("[Package Resources]")
-    print(json.dumps({
-        "frontend_runtime": "external production React service on port 3000",
-        "database_migrations": "database/migrations",
-        "database_seed": "database/seed",
-        "resources": "resources",
-        "bundled_demo_data": [
-            "data/ -> bundled_seed/data/",
-            "models/ -> bundled_seed/models/",
-            "outputs/ -> bundled_seed/outputs/",
-        ],
-        "excluded_sensitive_files": [
-            "logs/",
-            "runtime/",
-            "local_app_config.json",
-            "config/local_app_config.json",
-            ".env",
-        ],
-    }, ensure_ascii=False, indent=2))
-    print("[OK] Distribution asset preparation checks passed.")
+    print(
+        json.dumps(
+            {
+                "frontend_runtime": "external production React service on port 3000",
+                "database_backend": "postgresql",
+                "database_schema_source": "database/postgres_migrations",
+                "bundled_demo_data": [
+                    "data/ -> bundled_seed/data/ (database files excluded)",
+                    "models/ -> bundled_seed/models/",
+                    "outputs/ -> bundled_seed/outputs/ (database files excluded)",
+                ],
+                "forbidden_bundled_database_suffixes": sorted(DATABASE_FILE_SUFFIXES),
+                "excluded_sensitive_files": [
+                    "logs/",
+                    "runtime/",
+                    "local_app_config.json",
+                    "config/local_app_config.json",
+                    ".env",
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    print("[OK] PostgreSQL-only distribution asset checks passed.")
     return 0
 
 

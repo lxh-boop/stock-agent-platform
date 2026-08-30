@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .memory_store import SQLiteMemoryStore
+from .memory_store import MemoryStore
 from .memory_types import MemoryRecord, MemoryStatus, MemoryType, is_record_expired
 
 
@@ -29,13 +29,13 @@ class MemorySearchResult:
 
 
 class MemoryRetriever:
-    """Retrieve only active long-term memory from SQLite.
+    """Retrieve only active long-term memory from the configured MemoryStore.
 
     Runtime working state is owned by the per-run ContextBundle and therefore
     never participates in long-term memory retrieval.
     """
 
-    def __init__(self, *, store: SQLiteMemoryStore | None = None) -> None:
+    def __init__(self, *, store: MemoryStore | None = None) -> None:
         self.store = store
 
     def retrieve(

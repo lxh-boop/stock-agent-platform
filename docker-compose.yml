@@ -15,10 +15,16 @@ services:
       AGENT_API_HOST: 0.0.0.0
       AGENT_API_PORT: "8010"
       STOCK_APP_DEPLOYMENT_MODE: compose-react
-      STOCK_APP_RUNTIME_SCHEDULER_ENABLED: "1"
+      STOCK_APP_RUNTIME_SCHEDULER_ENABLED: "${STOCK_APP_RUNTIME_SCHEDULER_ENABLED:-1}"
       TZ: Asia/Shanghai
-      STOCK_AGENT_TASK_DB: /app/runtime/task_runtime.sqlite3
       STOCK_AGENT_RECOVER_INTERRUPTED_ON_START: "1"
+      STOCK_POSTGRES_HOST: ${STOCK_POSTGRES_HOST:-postgres}
+      STOCK_POSTGRES_PORT: ${STOCK_POSTGRES_PORT:-5432}
+      STOCK_POSTGRES_DB: ${STOCK_POSTGRES_DB:-stock_daily_app}
+      STOCK_POSTGRES_USER: ${STOCK_POSTGRES_USER:-stock_app}
+      STOCK_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      STOCK_POSTGRES_SCHEMA: ${STOCK_POSTGRES_SCHEMA:-stock_app}
+      STOCK_POSTGRES_RUNTIME_SCHEMA: ${STOCK_POSTGRES_RUNTIME_SCHEMA:-stock_runtime}
       STOCK_AGENT_MAX_CONCURRENT_TASKS: ${STOCK_AGENT_MAX_CONCURRENT_TASKS:-4}
       STOCK_AGENT_CORS_ORIGINS: ${STOCK_AGENT_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       STOCK_LOCAL_LLM_BASE_URL: ${STOCK_LOCAL_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
@@ -35,6 +41,7 @@ services:
       STOCK_LLM_PROMPT_DUMP_DIR: /app_runtime/llm_prompt_dumps
 
       WATCHFILES_FORCE_POLLING: "true"
+      AGENT_RUN_LOG_DIR: /app_run_logs
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -53,9 +60,6 @@ services:
 #        source: ./logs
 #        target: /app/logs
 #      - type: bind
-#        source: ./runtime
-#        target: /app/runtime
-#      - type: bind
 #        source: ./external_repos
 #        target: /app/external_repos
 #      - type: bind
@@ -64,12 +68,10 @@ services:
       - type: bind
         source: .
         target: /app
-      # High-frequency SQLite WAL must live on the Linux filesystem.
-      # Mounting /app/runtime separately shadows the runtime directory from
-      # the Windows project bind mount and prevents cross-filesystem WAL issues.
-      - type: volume
-        source: task_runtime_data
-        target: /app/runtime
+      - type: bind
+        source: ${STOCK_POSTGRES_SECRET_FILE:-D:/google/postgres_final/postgres_password.txt}
+        target: /run/secrets/postgres_password
+        read_only: true
       - type: bind
         source: ${STOCK_LLM_PROMPT_DUMP_HOST_DIR:-D:/google/llm_prompt_dumps}
         target: /app_runtime/llm_prompt_dumps
@@ -77,6 +79,12 @@ services:
         source: ${KRONOS_LAB_HOST_DIR:-D:/google/kronos_model_lab}
         target: /kronos_model_lab
         read_only: true
+      - type: bind
+        source: "${AGENT_RUN_LOG_HOST_DIR:-D:/stock_daily_app/outputs/agent_runs}"
+        target: /app_run_logs
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -87,6 +95,32 @@ services:
       timeout: 6s
       retries: 12
       start_period: 90s
+    stop_grace_period: 30s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "${STOCK_POSTGRES_HOST_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${STOCK_POSTGRES_DB:-stock_daily_app}
+      POSTGRES_USER: ${STOCK_POSTGRES_USER:-stock_app}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      TZ: Asia/Shanghai
+    volumes:
+      - type: volume
+        source: postgres_data
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: ${STOCK_POSTGRES_SECRET_FILE:-D:/google/postgres_final/postgres_password.txt}
+        target: /run/secrets/postgres_password
+        read_only: true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${STOCK_POSTGRES_USER:-stock_app} -d ${STOCK_POSTGRES_DB:-stock_daily_app}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     stop_grace_period: 30s
 
   frontend:
@@ -110,4 +144,4 @@ services:
     stop_grace_period: 10s
 
 volumes:
-  task_runtime_data: {name: stock_daily_app_task_runtime}
+  postgres_data: {name: stock_daily_app_postgres}

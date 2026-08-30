@@ -1,78 +1,53 @@
 from __future__ import annotations
 
-from contextlib import closing
-import sqlite3
-import re
-from pathlib import Path
+from contextlib import contextmanager
+from typing import Iterator
 
-from config import AGENT_QUANT_DB_PATH
+from database.postgres_config import PostgresSettings
 
 
-DATABASE_ROOT = Path(__file__).resolve().parent
-MIGRATIONS_DIR = DATABASE_ROOT / "migrations"
-ADD_COLUMN_RE = re.compile(
-    r"^\s*ALTER\s+TABLE\s+(?P<table>[A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+(?P<column>[A-Za-z_][A-Za-z0-9_]*)\b",
-    re.IGNORECASE,
-)
+def _driver():
+    try:
+        import psycopg  # type: ignore
+        from psycopg.rows import dict_row  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("psycopg_not_installed") from exc
+    return psycopg, dict_row
 
 
-def get_database_path(db_path: str | Path | None = None) -> Path:
-    return Path(db_path or AGENT_QUANT_DB_PATH)
-
-
-def get_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
-    path = get_database_path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+def get_connection(*, runtime: bool = False):
+    """Return a PostgreSQL connection with the application schema on search_path."""
+    settings = PostgresSettings.from_env()
+    psycopg, dict_row = _driver()
+    schema = settings.runtime_schema if runtime else settings.app_schema
+    conn = psycopg.connect(**settings.connection_kwargs(), row_factory=dict_row)
+    with conn.cursor() as cur:
+        cur.execute(f'SET search_path TO "{schema}", public')
     return conn
 
 
-def _applied_migrations(conn: sqlite3.Connection) -> set[str]:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version TEXT PRIMARY KEY,
-            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
-    return {str(row["version"]) for row in rows}
-
-
-def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(str(row["name"]).lower() == column.lower() for row in rows)
-
-
-def _execute_migration_sql(conn: sqlite3.Connection, sql: str) -> None:
-    statements = [statement.strip() for statement in sql.split(";") if statement.strip()]
-    for statement in statements:
-        match = ADD_COLUMN_RE.match(statement)
-        if match and _column_exists(conn, match.group("table"), match.group("column")):
-            continue
-        conn.execute(statement)
-
-
-def initialize_database(db_path: str | Path | None = None) -> Path:
-    path = get_database_path(db_path)
-    migration_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
-    if not migration_files:
-        raise FileNotFoundError(f"no migration files found in {MIGRATIONS_DIR}")
-
-    with closing(get_connection(path)) as conn:
-        applied = _applied_migrations(conn)
-        for migration_path in migration_files:
-            version = migration_path.stem
-            if version in applied:
-                continue
-            sql = migration_path.read_text(encoding="utf-8")
-            _execute_migration_sql(conn, sql)
-            conn.execute(
-                "INSERT INTO schema_migrations (version) VALUES (?)",
-                (version,),
-            )
+@contextmanager
+def transaction(*, runtime: bool = False) -> Iterator[object]:
+    conn = get_connection(runtime=runtime)
+    try:
+        yield conn
         conn.commit()
-    return path
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def verify_database(*, runtime: bool = False) -> dict[str, str]:
+    settings = PostgresSettings.from_env()
+    schema = settings.runtime_schema if runtime else settings.app_schema
+    with transaction(runtime=runtime) as conn:
+        row = conn.execute(
+            "SELECT current_database() AS database, current_user AS username, current_schema() AS schema"
+        ).fetchone()
+    return {
+        "database": str(row.get("database") or settings.database),
+        "username": str(row.get("username") or settings.user),
+        "schema": str(row.get("schema") or schema),
+    }

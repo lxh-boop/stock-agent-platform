@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from database.repositories import AgentRepository
 from runtime_paths import get_runtime_dir
+from storage_governance.lifecycle import maybe_prune_expired_artifact_payloads
 
 
 ARTIFACT_SCHEMA_VERSION = "artifact-v1"
@@ -301,6 +302,12 @@ class ArtifactStore:
                 },
             }
         )
+        # Physical payload retention is separate from the short reuse TTL.
+        # GC is best-effort and throttled; an artifact save must never fail because cleanup failed.
+        try:
+            maybe_prune_expired_artifact_payloads(root)
+        except Exception:
+            pass
         return {
             "artifact_id": artifact.artifact_id,
             "artifact_type": artifact.artifact_type,

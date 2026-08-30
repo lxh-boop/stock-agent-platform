@@ -30,7 +30,6 @@ from backtest import run_latest_t1_backtest
 from backtest_rebalance import calculate_topk_rebalance
 from config import (
     ANNOUNCEMENT_CACHE_PATH,
-    AGENT_QUANT_DB_PATH,
     BACKTEST_DAILY_PREDICTIONS_PATH,
     BACKTEST_METRICS_PATH,
     BACKTEST_NAV_PATH,
@@ -239,8 +238,7 @@ class DashboardApplicationService:
         from database.repositories import PredictionRepository
 
         del path
-        db_path = Path(AGENT_QUANT_DB_PATH)
-        rows = PredictionRepository(db_path).list_latest_predictions()
+        rows = PredictionRepository().list_latest_predictions()
         if not rows:
             return {
                 "exists": False,
@@ -251,7 +249,6 @@ class DashboardApplicationService:
                 "signal_date": "",
                 "prediction_date": "",
             }
-        stat = db_path.stat()
         first = rows[0]
         snapshot: dict[str, Any] = {
             "exists": True,
@@ -345,7 +342,7 @@ class DashboardApplicationService:
         from database.repositories import PredictionRepository
 
         del path
-        rows = PredictionRepository(AGENT_QUANT_DB_PATH).list_latest_predictions()
+        rows = PredictionRepository().list_latest_predictions()
         if not rows:
             return None
         frame = pd.DataFrame(rows)

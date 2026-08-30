@@ -48,6 +48,7 @@ from news_db_sync import sync_event_cache_to_agent_db
 from pipelines.daily_update_pipeline import run_daily_update_pipeline
 from pipelines.schemas import PipelineContext
 from ranking_probability_calibration import calibrate_ranking_probabilities
+from storage_governance.lifecycle import persist_recent_factor_cache
 from universe import get_stock_pool
 
 
@@ -249,10 +250,10 @@ def prepare_latest_feature_data(
     print(f"[Data] merged stock count = {raw_data['code'].nunique()}")
     print(f"[Data] merged date range = {raw_data['date'].min()} ~ {raw_data['date'].max()}")
 
-    feature_data = add_alpha158_features(
-        raw_data,
-        save_path=LATEST_FEATURE_DATA_PATH,
-    )
+    # Alpha158 remains the compute owner; persistence is owned by this daily-update
+    # path and stores only the recent cache window. Full raw market history remains
+    # available for deterministic factor rebuilds.
+    feature_data = add_alpha158_features(raw_data, save_path=None)
 
     if ENABLE_NEWS_FEATURES and include_news_features:
         news_start_date = max(
@@ -267,8 +268,17 @@ def prepare_latest_feature_data(
             start_date=news_start_date,
             end_date=raw_data["date"].max(),
         )
-        feature_data.to_csv(LATEST_FEATURE_DATA_PATH, index=False, encoding="utf-8-sig")
-        print(f"[Save] latest feature data with news events -> {LATEST_FEATURE_DATA_PATH}, shape={feature_data.shape}")
+
+    factor_cache_report = persist_recent_factor_cache(
+        feature_data,
+        LATEST_FEATURE_DATA_PATH,
+    )
+    print(
+        "[Save] recent Alpha158 factor cache -> "
+        f"{LATEST_FEATURE_DATA_PATH}, rows={factor_cache_report['persisted_rows']}, "
+        f"trading_days={factor_cache_report['persisted_trading_days']}/"
+        f"{factor_cache_report['keep_trading_days']}"
+    )
 
     if sync_news_db:
         refresh_news_cache_and_sync_db(
@@ -558,7 +568,7 @@ def dft_unet_external_daily_update(
         feature_data=feature_data,
         token=token,
     )
-    feature_data.to_csv(LATEST_FEATURE_DATA_PATH, index=False, encoding="utf-8-sig")
+    persist_recent_factor_cache(feature_data, LATEST_FEATURE_DATA_PATH)
 
     base_checkpoint = checkpoint_path or DEFAULT_DFT_UNET_CHECKPOINT_PATH
     load_checkpoint = DFT_UNET_LATEST_MODEL_PATH if os.path.exists(DFT_UNET_LATEST_MODEL_PATH) else base_checkpoint

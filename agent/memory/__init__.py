@@ -10,7 +10,6 @@ from .memory_context_bridge import (
     extract_memory_candidates_from_message_trace,
     get_memory_manager_for_output,
     list_memory_records_safe_page,
-    memory_store_path,
 )
 from .memory_context_selector import MemoryContextSelector
 from .memory_importance import MemoryImportanceScorer
@@ -30,10 +29,13 @@ from .memory_retrieval_types import (
 from .memory_retriever import MemoryRetriever, MemorySearchResult, score_record
 from .memory_sanitizer import MemorySanitizer
 from .memory_store import (
-    DEFAULT_MEMORY_STORE_PATH,
     GraphMemoryStore,
-    SQLiteMemoryStore,
+    MemoryStore,
+    MemoryStoreBackendNotConfigured,
     VectorMemoryStore,
+    create_memory_store,
+    register_memory_store_backend,
+    registered_memory_store_backends,
 )
 from .memory_tool import memory_get_summary_adapter, memory_search_adapter
 from .memory_types import (
@@ -49,13 +51,14 @@ __all__ = [
     "DEFAULT_MEMORY_CANDIDATE_TOP_N",
     "DEFAULT_MEMORY_CONTEXT_TOKEN_BUDGET",
     "DEFAULT_MEMORY_RELEVANCE_THRESHOLD",
-    "DEFAULT_MEMORY_STORE_PATH",
     "GraphMemoryStore",
     "MemoryCandidateExtractor",
     "MemoryConsolidator",
     "MemoryContextSelector",
     "MemoryImportanceScorer",
     "MemoryManager",
+    "MemoryStore",
+    "MemoryStoreBackendNotConfigured",
     "MemoryPolicy",
     "MemoryPruner",
     "MemoryRecord",
@@ -69,7 +72,6 @@ __all__ = [
     "MemoryType",
     "MemoryVisibility",
     "MemorySanitizer",
-    "SQLiteMemoryStore",
     "VectorMemoryStore",
     "build_memory_context_view",
     "build_memory_safe_summary",
@@ -81,6 +83,8 @@ __all__ = [
     "list_memory_records_safe_page",
     "memory_get_summary_adapter",
     "memory_search_adapter",
-    "memory_store_path",
+    "create_memory_store",
+    "register_memory_store_backend",
+    "registered_memory_store_backends",
     "score_record",
 ]

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from config import AGENT_QUANT_DB_PATH
 from database.repositories import PredictionRepository
 from local_config import load_local_config
 from scheduler.job_state import load_latest_job_status
@@ -58,7 +57,7 @@ def read_ranking_signal_date(output_dir: str | Path = "outputs") -> str:
     """从运行数据库读取当前排名信号日期。"""
 
     del output_dir
-    rows = PredictionRepository(AGENT_QUANT_DB_PATH).list_latest_predictions(
+    rows = PredictionRepository().list_latest_predictions(
         limit=1
     )
     if not rows:
@@ -190,7 +189,7 @@ def _run_configured_job(source: str = "scheduled") -> dict[str, Any]:
 
 
 def start_runtime_scheduler() -> Any | None:
-    """随 FastAPI 启动常驻调度器；测试环境默认禁用真实任务。"""
+    """随 FastAPI 启动常驻调度器；调度器失败不得拖垮 API liveness（存活性）。"""
 
     global _SCHEDULER
     if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -203,24 +202,42 @@ def start_runtime_scheduler() -> Any | None:
         return None
 
     with _LOCK:
-        if _SCHEDULER is None:
+        try:
+            if _SCHEDULER is None:
+                try:
+                    from apscheduler.schedulers.background import BackgroundScheduler
+                except ImportError as exc:
+                    runtime = _load_runtime_file()
+                    runtime.update(
+                        {
+                            "runtime_running": False,
+                            "last_status": "failed",
+                            "last_error": f"APScheduler unavailable: {exc}",
+                        }
+                    )
+                    _save_runtime_file(runtime)
+                    return None
+                _SCHEDULER = BackgroundScheduler(timezone=SCHEDULER_TIMEZONE)
+                _SCHEDULER.start()
+            reload_runtime_scheduler()
+            return _SCHEDULER
+        except Exception as exc:
+            # Scheduler（调度器）属于后台能力，不是 API 存活前置条件。
+            # 数据库切换、模型目录或外部依赖异常时记录降级状态，但 FastAPI
+            # 仍应启动并暴露 health / settings / diagnostic endpoints。
             try:
-                from apscheduler.schedulers.background import BackgroundScheduler
-            except ImportError as exc:
                 runtime = _load_runtime_file()
                 runtime.update(
                     {
-                        "runtime_running": False,
+                        "runtime_running": bool(_SCHEDULER and getattr(_SCHEDULER, "running", False)),
                         "last_status": "failed",
-                        "last_error": f"APScheduler unavailable: {exc}",
+                        "last_error": f"{type(exc).__name__}: {exc}"[:2000],
                     }
                 )
                 _save_runtime_file(runtime)
-                return None
-            _SCHEDULER = BackgroundScheduler(timezone=SCHEDULER_TIMEZONE)
-            _SCHEDULER.start()
-        reload_runtime_scheduler()
-        return _SCHEDULER
+            except Exception:
+                pass
+            return _SCHEDULER
 
 
 def reload_runtime_scheduler() -> dict[str, Any]:

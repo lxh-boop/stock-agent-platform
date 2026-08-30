@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from contextlib import closing
 import json
 from pathlib import Path
 import shutil
-import sqlite3
 import tempfile
 from typing import Any
 
@@ -458,18 +456,13 @@ def _execute_portfolio_rebalance_plan(
     )
     decision_time = now_text()
     portfolio_dir = storage.output_dir.resolve()
-    db_file = Path(db_path).resolve() if db_path is not None else None
 
     with tempfile.TemporaryDirectory(prefix="stock_daily_portfolio_commit_") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
         files_backup = temp_dir / "portfolio_files"
-        db_backup = temp_dir / "portfolio_before.db"
         portfolio_existed = portfolio_dir.exists()
         if portfolio_existed:
             shutil.copytree(portfolio_dir, files_backup)
-        if db_file is not None and db_file.exists():
-            with closing(sqlite3.connect(db_file)) as source, closing(sqlite3.connect(db_backup)) as destination:
-                source.backup(destination)
         try:
             executed = execute_paper_rebalance(
                 account=account,
@@ -521,9 +514,6 @@ def _execute_portfolio_rebalance_plan(
                 decision_time=_decision_time_token(decision_time),
             )
         except Exception as exc:
-            if db_file is not None and db_backup.exists():
-                with closing(sqlite3.connect(db_backup)) as source, closing(sqlite3.connect(db_file)) as destination:
-                    source.backup(destination)
             if portfolio_dir.exists():
                 shutil.rmtree(portfolio_dir)
             if portfolio_existed and files_backup.exists():
@@ -538,8 +528,8 @@ def _execute_portfolio_rebalance_plan(
                 )
             return ToolResult(
                 success=False,
-                message="Portfolio commit failed and all paper-account changes were rolled back.",
-                data={"plan_id": plan_id, "rollback": True},
+                message="Portfolio commit failed; file snapshots were restored and PostgreSQL write error was surfaced.",
+                data={"plan_id": plan_id, "file_snapshot_rollback": True},
                 errors=["portfolio_commit_rolled_back"],
                 permission=ToolPermission.WRITE,
                 tool_name="paper_trade_execute",

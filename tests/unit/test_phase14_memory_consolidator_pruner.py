@@ -8,8 +8,8 @@ from agent.memory import (
     MemoryRecord,
     MemoryScope,
     MemoryType,
-    SQLiteMemoryStore,
 )
+from agent.memory.in_memory_memory_store import InMemoryMemoryStore
 
 
 def _record(content: str, *, importance: float = 0.5, memory_id: str = "", valid_until: str = "") -> MemoryRecord:
@@ -45,8 +45,8 @@ def test_phase14_memory_consolidator_merges_duplicate_groups() -> None:
     assert merged[0].source_refs == [{"source_id": "msg_2"}]
 
 
-def test_phase14_memory_consolidator_store_soft_deletes_superseded(tmp_path) -> None:
-    store = SQLiteMemoryStore(tmp_path / "memory.sqlite")
+def test_phase14_memory_consolidator_store_soft_deletes_superseded() -> None:
+    store = InMemoryMemoryStore()
     first = store.upsert(_record("Prefer lower drawdown.", importance=0.7, memory_id="mem_first"))
     second = store.upsert(_record("Prefer lower drawdown with evidence.", importance=0.9, memory_id="mem_second"))
 
@@ -58,8 +58,8 @@ def test_phase14_memory_consolidator_store_soft_deletes_superseded(tmp_path) -> 
     assert store.get(second.memory_id, user_id="u1") is not None
 
 
-def test_phase14_memory_pruner_removes_expired_and_low_importance(tmp_path) -> None:
-    store = SQLiteMemoryStore(tmp_path / "memory.sqlite")
+def test_phase14_memory_pruner_removes_expired_and_low_importance() -> None:
+    store = InMemoryMemoryStore()
     expired_time = (datetime.now() - timedelta(days=1)).isoformat(timespec="seconds")
     expired = store.upsert(_record("expired memory", importance=0.8, memory_id="mem_expired", valid_until=expired_time))
     low = store.upsert(_record("low importance memory", importance=0.01, memory_id="mem_low"))

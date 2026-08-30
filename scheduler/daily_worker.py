@@ -4,7 +4,6 @@ import csv
 import json
 import os
 import shutil
-import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -12,7 +11,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 
-from config import AGENT_QUANT_DB_PATH, NEWS_EVENT_LOOKBACK_DAYS
+from config import NEWS_EVENT_LOOKBACK_DAYS
 from database.repositories import NewsRepository, PredictionRepository
 from scheduler.job_lock import JobLock, JobLockError
 from scheduler.job_state import run_recorded_step, save_job_status
@@ -47,7 +46,7 @@ def run_market_update_from_local_config(
     *,
     trade_date: str,
     output_dir: str | Path = "outputs",
-    db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+    db_path: str | Path | None = None,
     root: str | Path = ".",
     force: bool = False,
     dry_run: bool = False,
@@ -114,8 +113,7 @@ def run_market_update_from_local_config(
     environment = os.environ.copy()
     environment["PYTHONUTF8"] = "1"
     environment["PYTHONIOENCODING"] = "utf-8"
-    environment["STOCK_AGENT_DB_PATH"] = str(db_path or AGENT_QUANT_DB_PATH)
-
+    
     with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
         completed = subprocess.run(
             command,
@@ -223,29 +221,11 @@ def _count_news(db_path: str | Path | None) -> tuple[int, int]:
         return 0, 0
 
 
-def _latest_news_publish_time(db_path: str | Path | None) -> str:
-    """Read the newest news timestamp without mutating SQLite."""
-
-    path = Path(db_path or AGENT_QUANT_DB_PATH)
-    if not path.exists():
-        return ""
-    try:
-        uri = path.resolve().as_uri() + "?mode=ro"
-        with sqlite3.connect(uri, uri=True) as conn:
-            row = conn.execute(
-                """
-                SELECT MAX(
-                    CASE
-                        WHEN TRIM(COALESCE(publish_time, '')) <> '' THEN publish_time
-                        ELSE trade_date
-                    END
-                )
-                FROM news_event
-                """
-            ).fetchone()
-        return str((row or [""])[0] or "")
-    except Exception:
-        return ""
+def _latest_news_publish_time(db_path: str | Path | None = None) -> str:
+    del db_path
+    from database.postgres_store import PostgresStore
+    row = PostgresStore().fetch_one("SELECT COALESCE(MAX(publish_time),'') AS value FROM news_event")
+    return str((row or {}).get("value") or "")
 
 
 def _resolve_news_refresh_range(
@@ -276,7 +256,7 @@ def run_news_refresh_and_rebuild(
     *,
     trade_date: str,
     output_dir: str | Path = "outputs",
-    db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+    db_path: str | Path | None = None,
     root: str | Path = ".",
     dry_run: bool = False,
 ) -> dict[str, Any]:
@@ -288,9 +268,7 @@ def run_news_refresh_and_rebuild(
     """
 
     project_root = Path(root).resolve()
-    resolved_db = Path(db_path or AGENT_QUANT_DB_PATH)
-    if not resolved_db.is_absolute():
-        resolved_db = project_root / resolved_db
+    resolved_db = None
     resolved_output = _resolved_output_path(project_root, output_dir)
     start_date, end_date, latest_before = _resolve_news_refresh_range(trade_date, resolved_db)
     before_events, before_chunks = _count_news(resolved_db)
@@ -336,8 +314,6 @@ def run_news_refresh_and_rebuild(
     command = [
         sys.executable,
         str(script),
-        "--db-path",
-        str(resolved_db),
         "--output-dir",
         str(resolved_output),
         "--start-date",
@@ -470,7 +446,7 @@ def run_news_refresh_and_rebuild(
 def run_public_daily_tasks(
     trade_date: str,
     output_dir: str | Path = "outputs",
-    db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+    db_path: str | Path | None = None,
     force: bool = False,
     dry_run: bool = False,
     skip_training: bool = False,
@@ -589,7 +565,7 @@ def run_scheduled_daily_update(
     source: str = "manual",
     top_k: int = 50,
     output_dir: str | Path = "outputs",
-    db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+    db_path: str | Path | None = None,
     root: str | Path = ".",
     market_update_runner: Callable[..., dict[str, Any]] | None = None,
     public_task_runner: Callable[..., dict[str, Any]] | None = None,

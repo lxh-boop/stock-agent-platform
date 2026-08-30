@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .schema import NEWS_MAPPING_DB_PATH, get_connection, init_db
+from .schema import NEWS_MAPPING_DB_PATH, execute_many, get_connection, init_db
 
 
 DEFAULT_CONCEPT_RULES = {
@@ -152,7 +152,7 @@ def load_stock_master(db_path: str | Path = NEWS_MAPPING_DB_PATH) -> pd.DataFram
     init_db(db_path)
     with get_connection(db_path) as conn:
         return pd.read_sql_query(
-            "SELECT code, name, fullname, industry, area FROM stock_master",
+            "SELECT code, name, fullname, industry, area FROM news_mapping_stock_master",
             conn,
         )
 
@@ -195,16 +195,16 @@ def seed_default_concept_stock_map(db_path: str | Path = NEWS_MAPPING_DB_PATH) -
             )
 
     with get_connection(db_path) as conn:
-        conn.execute("DELETE FROM concept_stock_map WHERE source = 'default_rule'")
-        conn.executemany(
+        conn.execute("DELETE FROM news_mapping_concept_stock_map WHERE source = 'default_rule'")
+        execute_many(conn, 
             """
-            INSERT INTO concept_stock_map
+            INSERT INTO news_mapping_concept_stock_map
                 (concept, code, name, relation_type, confidence, evidence, source, updated_at)
             VALUES
-                (:concept, :code, :name, :relation_type, :confidence, :evidence, :source, :updated_at)
+                (%(concept)s, %(code)s, %(name)s, %(relation_type)s, %(confidence)s, %(evidence)s, %(source)s, %(updated_at)s)
             ON CONFLICT(concept, code, relation_type) DO UPDATE SET
                 name=excluded.name,
-                confidence=MAX(concept_stock_map.confidence, excluded.confidence),
+                confidence=GREATEST(news_mapping_concept_stock_map.confidence, excluded.confidence),
                 evidence=excluded.evidence,
                 source=excluded.source,
                 updated_at=excluded.updated_at
@@ -246,10 +246,10 @@ def map_concepts_to_stocks(
             result = conn.execute(
                 """
                 SELECT concept, code, name, relation_type, confidence, evidence, source
-                FROM concept_stock_map
-                WHERE concept = ?
+                FROM news_mapping_concept_stock_map
+                WHERE concept = %s
                 ORDER BY confidence DESC, code
-                LIMIT ?
+                LIMIT %s
                 """,
                 (concept, int(max_stocks_per_concept)),
             ).fetchall()

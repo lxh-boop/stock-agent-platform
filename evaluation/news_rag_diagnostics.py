@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from database.connection import get_connection, initialize_database
+from database.connection import get_connection
 from database.repositories import NewsRepository
 from news_db_sync import _chunk_statistics
 from rag.bm25_retriever import BM25Retriever
@@ -108,12 +108,11 @@ def _persist_dense_embeddings(
     chunks = list(getattr(dense, "chunks", []) or [])
     model_name = str(getattr(dense, "embedding_model_name", "") or getattr(dense, "model_name", "") or "")
     dim = int(getattr(dense, "embedding_dimension", 0) or 0)
-    if not db_path or not getattr(dense, "available", False) or embeddings is None or dim <= 0 or not chunks:
+    if not getattr(dense, "available", False) or embeddings is None or dim <= 0 or not chunks:
         return 0
     array = np.asarray(embeddings, dtype=np.float32)
     if array.ndim != 2 or array.shape[0] != len(chunks) or array.shape[1] <= 0:
         return 0
-    path = initialize_database(db_path)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows: list[dict[str, Any]] = []
     for chunk, vector in zip(chunks, array):
@@ -132,30 +131,23 @@ def _persist_dense_embeddings(
                 "created_at": now,
             }
         )
-    with get_connection(path) as conn:
+    with get_connection() as conn:
         # Keep the embedding table aligned with the current official dense
         # index for this model. This removes stale rows from interrupted or
         # previous wider index builds without touching other embedding models.
-        conn.execute("DELETE FROM news_embedding WHERE embedding_model = ?", (model_name,))
+        conn.execute("DELETE FROM news_embedding WHERE embedding_model = %s", (model_name,))
         conn.executemany(
             """
             INSERT INTO news_embedding (
                 embedding_id, chunk_id, embedding_model, embedding_dim,
                 embedding_path, embedding, created_at
-            )
-            VALUES (
-                :embedding_id, :chunk_id, :embedding_model, :embedding_dim,
-                :embedding_path, :embedding, :created_at
-            )
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (embedding_id) DO UPDATE SET
-                chunk_id = excluded.chunk_id,
-                embedding_model = excluded.embedding_model,
-                embedding_dim = excluded.embedding_dim,
-                embedding_path = excluded.embedding_path,
-                embedding = excluded.embedding,
-                created_at = excluded.created_at
+                chunk_id = excluded.chunk_id, embedding_model = excluded.embedding_model,
+                embedding_dim = excluded.embedding_dim, embedding_path = excluded.embedding_path,
+                embedding = excluded.embedding, created_at = excluded.created_at
             """,
-            rows,
+            [(r["embedding_id"], r["chunk_id"], r["embedding_model"], r["embedding_dim"], r["embedding_path"], r["embedding"], r["created_at"]) for r in rows],
         )
         conn.commit()
     return len(rows)

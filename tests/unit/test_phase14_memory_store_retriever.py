@@ -10,10 +10,10 @@ from agent.memory import (
     MemoryRetriever,
     MemoryScope,
     MemoryType,
-    SQLiteMemoryStore,
     VectorMemoryStore,
-    WorkingMemory,
 )
+from agent.memory.in_memory_memory_store import InMemoryMemoryStore
+from agent.memory.memory_store_contract import MemoryStore
 
 
 def _confirmed_preference(**kwargs) -> MemoryRecord:
@@ -35,8 +35,9 @@ def _confirmed_preference(**kwargs) -> MemoryRecord:
     return MemoryRecord(**data)
 
 
-def test_phase14_sqlite_memory_store_roundtrip_and_filters(tmp_path) -> None:
-    store = SQLiteMemoryStore(tmp_path / "memory.sqlite")
+def test_phase14_memory_store_contract_roundtrip_and_filters() -> None:
+    store = InMemoryMemoryStore()
+    assert isinstance(store, MemoryStore)
     record = store.upsert(_confirmed_preference())
     store.upsert(
         MemoryRecord(
@@ -50,10 +51,10 @@ def test_phase14_sqlite_memory_store_roundtrip_and_filters(tmp_path) -> None:
             metadata={"user_confirmed": True},
         )
     )
-
     loaded = store.get(record.memory_id, user_id="u1")
-    filtered = store.list_records(user_id="u1", memory_types=[MemoryType.SEMANTIC], topics=["risk"], stock_codes=["600519"])
-
+    filtered = store.list_records(
+        user_id="u1", memory_types=[MemoryType.SEMANTIC], topics=["risk"], stock_codes=["600519"]
+    )
     assert loaded is not None
     assert loaded.memory_id == record.memory_id
     assert [item.memory_id for item in filtered] == [record.memory_id]
@@ -61,11 +62,11 @@ def test_phase14_sqlite_memory_store_roundtrip_and_filters(tmp_path) -> None:
     assert "u2 private" not in str([item.to_dict() for item in filtered])
 
 
-def test_phase14_sqlite_memory_store_does_not_persist_secrets(tmp_path) -> None:
-    store = SQLiteMemoryStore(tmp_path / "memory.sqlite")
+def test_phase14_memory_store_does_not_persist_secrets() -> None:
+    store = InMemoryMemoryStore()
     stored = store.upsert(
         _confirmed_preference(
-            content="api_key=abc prefer lower drawdown D:\\stock_daily_app\\data\\agent_quant.db",
+            content=r"api_key=abc prefer lower drawdown D:\stock_daily_app\data\agent_quant.db",
             metadata={
                 "user_confirmed": True,
                 "confirmation_token": "secret",
@@ -75,7 +76,6 @@ def test_phase14_sqlite_memory_store_does_not_persist_secrets(tmp_path) -> None:
     )
     loaded = store.get(stored.memory_id, user_id="u1")
     encoded = json.dumps(loaded.to_dict(), ensure_ascii=False)
-
     assert "confirmation_token" not in encoded
     assert "api_key" not in encoded
     assert "agent_quant.db" not in encoded
@@ -83,33 +83,20 @@ def test_phase14_sqlite_memory_store_does_not_persist_secrets(tmp_path) -> None:
     assert loaded.metadata["evidence_summary"]["count"] == 1
 
 
-def test_phase14_memory_retriever_merges_working_and_sqlite_results(tmp_path) -> None:
-    working = WorkingMemory(default_ttl_seconds=60)
-    store = SQLiteMemoryStore(tmp_path / "memory.sqlite")
-    working_record = working.put(
-        MemoryRecord(
-            user_id="u1",
-            content="Current conversation mentions 000001 cash risk.",
-            stock_codes=["000001"],
-            topics=["cash"],
-            importance=0.6,
-        )
-    )
+def test_phase14_memory_retriever_uses_persistent_store_only() -> None:
+    store = InMemoryMemoryStore()
     stored_record = store.upsert(_confirmed_preference())
-    retriever = MemoryRetriever(working_memory=working, store=store)
-
-    results = retriever.retrieve(user_id="u1", query="600519 lower drawdown", stock_codes=["600519"], limit=5)
-    ids = [item.record.memory_id for item in results]
-
-    assert stored_record.memory_id in ids
-    assert working_record.memory_id not in ids
+    retriever = MemoryRetriever(store=store)
+    results = retriever.retrieve(
+        user_id="u1", query="600519 lower drawdown", stock_codes=["600519"], limit=5
+    )
+    assert results
     assert results[0].record.memory_id == stored_record.memory_id
     assert results[0].score_parts["entity"] == 1.0
 
 
-def test_phase14_sqlite_store_rejects_unconfirmed_long_term_preference(tmp_path) -> None:
-    store = SQLiteMemoryStore(tmp_path / "memory.sqlite")
-
+def test_phase14_store_rejects_unconfirmed_long_term_preference() -> None:
+    store = InMemoryMemoryStore()
     with pytest.raises(ValueError, match="long_term_user_fact_requires_confirmation"):
         store.upsert(
             MemoryRecord(
@@ -126,7 +113,6 @@ def test_phase14_sqlite_store_rejects_unconfirmed_long_term_preference(tmp_path)
 def test_phase14_graph_and_vector_stores_are_placeholders() -> None:
     graph = GraphMemoryStore()
     vector = VectorMemoryStore()
-
     assert graph.available() is False
     assert vector.available() is False
     with pytest.raises(NotImplementedError):

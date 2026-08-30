@@ -13,7 +13,6 @@ from typing import Any
 import pandas as pd
 
 from config import (
-    AGENT_QUANT_DB_PATH,
     BACKTEST_METRICS_PATH,
     BACKTEST_NAV_PATH,
     BACKTEST_TRADES_PATH,
@@ -22,7 +21,7 @@ from config import (
     OUTPUT_DIR,
     RANKING_LATEST_PATH,
 )
-from database.connection import get_connection, initialize_database
+from database.connection import get_connection
 from database.repositories import SystemMonitorRepository
 from database.schemas import json_loads
 from agent.runtime_reliability import collect_runtime_health_summary
@@ -82,17 +81,19 @@ def _file_version(path: str | Path) -> str:
     return hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
 
 
-def _table_exists(db_path: str | Path, table: str) -> bool:
-    with get_connection(db_path) as conn:
+def _table_exists(db_path: str | Path | None, table: str) -> bool:
+    del db_path
+    with get_connection() as conn:
         row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=%s",
             (table,),
         ).fetchone()
-        return row is not None
+    return row is not None
 
 
-def _query_all(db_path: str | Path, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    with get_connection(db_path) as conn:
+def _query_all(db_path: str | Path | None, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    del db_path
+    with get_connection() as conn:
         return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
 
@@ -438,7 +439,7 @@ def _load_current_position_rows(
             )
         return rows, "latest_position_file"
     rows = (
-        _query_all(db_path, "SELECT * FROM portfolio_position WHERE user_id=? ORDER BY updated_at", (user_id,))
+        _query_all(db_path, "SELECT * FROM portfolio_position WHERE user_id=%s ORDER BY updated_at", (user_id,))
         if _table_exists(db_path, "portfolio_position")
         else []
     )
@@ -451,11 +452,11 @@ def collect_portfolio_metrics(
     output_dir: str | Path = OUTPUT_DIR,
 ) -> tuple[dict[str, Any], list[str], str]:
     missing: list[str] = []
-    nav_rows = _query_all(db_path, "SELECT * FROM paper_nav_history WHERE user_id=? ORDER BY trade_date", (user_id,)) if _table_exists(db_path, "paper_nav_history") else []
+    nav_rows = _query_all(db_path, "SELECT * FROM paper_nav_history WHERE user_id=%s ORDER BY trade_date", (user_id,)) if _table_exists(db_path, "paper_nav_history") else []
     positions, position_source = _load_current_position_rows(db_path, user_id, output_dir)
-    orders = _query_all(db_path, "SELECT * FROM paper_order WHERE user_id=? ORDER BY created_at", (user_id,)) if _table_exists(db_path, "paper_order") else []
-    decisions = _query_all(db_path, "SELECT * FROM agent_decision_log WHERE user_id=? ORDER BY created_at", (user_id,)) if _table_exists(db_path, "agent_decision_log") else []
-    latest_snapshot = _query_one(db_path, "SELECT * FROM paper_account_snapshot WHERE user_id=? ORDER BY trade_date DESC, created_at DESC LIMIT 1", (user_id,)) if _table_exists(db_path, "paper_account_snapshot") else None
+    orders = _query_all(db_path, "SELECT * FROM paper_order WHERE user_id=%s ORDER BY created_at", (user_id,)) if _table_exists(db_path, "paper_order") else []
+    decisions = _query_all(db_path, "SELECT * FROM agent_decision_log WHERE user_id=%s ORDER BY created_at", (user_id,)) if _table_exists(db_path, "agent_decision_log") else []
+    latest_snapshot = _query_one(db_path, "SELECT * FROM paper_account_snapshot WHERE user_id=%s ORDER BY trade_date DESC, created_at DESC LIMIT 1", (user_id,)) if _table_exists(db_path, "paper_account_snapshot") else None
     if not nav_rows:
         missing.append("paper_nav_history")
     if not positions:
@@ -584,13 +585,13 @@ def _resolve_trade_date(explicit: str | None, ranking: pd.DataFrame) -> str:
 
 def build_system_monitor_snapshot(
     *,
-    db_path: str | Path = AGENT_QUANT_DB_PATH,
+    db_path: str | Path = None,
     user_id: str = "default",
     trade_date: str | None = None,
     output_dir: str | Path = OUTPUT_DIR,
     thresholds_path: str | Path = DEFAULT_THRESHOLDS_PATH,
 ) -> MonitorCollectionResult:
-    db = initialize_database(db_path)
+    db = None
     output_root = Path(output_dir)
     ranking = _read_csv(output_root / "ranking_latest.csv")
     resolved_trade_date = _resolve_trade_date(trade_date, ranking)
@@ -643,7 +644,7 @@ def build_system_monitor_snapshot(
 
 def collect_and_store_system_monitor_snapshot(
     *,
-    db_path: str | Path = AGENT_QUANT_DB_PATH,
+    db_path: str | Path = None,
     user_id: str = "default",
     trade_date: str | None = None,
     output_dir: str | Path = OUTPUT_DIR,
@@ -665,7 +666,7 @@ def collect_and_store_system_monitor_snapshot(
 
 
 def list_system_monitor_history(
-    db_path: str | Path = AGENT_QUANT_DB_PATH,
+    db_path: str | Path = None,
     user_id: str = "default",
     limit: int = 30,
 ) -> list[dict[str, Any]]:
@@ -673,7 +674,7 @@ def list_system_monitor_history(
 
 
 def list_system_monitor_alerts(
-    db_path: str | Path = AGENT_QUANT_DB_PATH,
+    db_path: str | Path = None,
     snapshot_id: str | None = None,
     user_id: str | None = None,
     limit: int = 100,

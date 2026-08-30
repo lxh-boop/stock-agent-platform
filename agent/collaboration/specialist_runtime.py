@@ -9,7 +9,7 @@ from typing import Any
 from core.llm import LLMService
 from agent.capabilities import BusinessParameterResolver, CapabilityContract, CapabilityContractValidator
 from agent.communication import MessageType, publish_agent_message
-from agent.console_trace import get_llm_execution_timing, get_tool_execution_timing
+from agent.console_trace import flow_event, get_llm_execution_timing, get_tool_execution_timing
 from agent.context.context_types import ContextBundle
 from agent.graph.impact_service import GraphImpactService
 from agent.graph.provider_adapter import GraphProviderAdapter
@@ -259,9 +259,39 @@ class SpecialistRuntime:
             formal_entry_used=True, formal_entry_name="agent.collaboration.specialist_runtime", task_id=task.task_id,
             worker_id=task.worker_id, agent_id=task.assigned_agent)
         task.status = TaskStatus.RUNNING
+        flow_event(
+            "WORKER_STARTED",
+            {
+                "worker_id": task.worker_id,
+                "agent_id": task.assigned_agent,
+                "boundary_id": task.boundary_id,
+                "attempt": task.attempt,
+                "status": "running",
+            },
+            run_id=task.run_id,
+            task_id=task.task_id,
+        )
         gate = self._parameter_gate(task, context, language)
         if gate is not None:
             task.status = TaskStatus.WAITING_CONTEXT
+            gate.metadata["duration_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+            flow_event(
+                "WORKER_NEED_CONTEXT",
+                {
+                    "worker_id": task.worker_id,
+                    "agent_id": task.assigned_agent,
+                    "boundary_id": task.boundary_id,
+                    "attempt": task.attempt,
+                    "status": gate.status.value,
+                    "duration_ms": gate.metadata.get("duration_ms", 0.0),
+                    "failure_kind": "user_input_required",
+                    "error_code": str((gate.error or {}).get("code") or "user_input_required"),
+                    "retryable": bool((gate.error or {}).get("retryable")),
+                },
+                run_id=task.run_id,
+                task_id=task.task_id,
+                level="WARNING",
+            )
             return gate
 
         reused = self._provider_reuse(task)
@@ -273,6 +303,19 @@ class SpecialistRuntime:
         working_context = {} if task.assigned_agent == ENTITY_ANALYST else self._working_context(execution_task)
         if reused is not None:
             result = reused
+            flow_event(
+                "WORKER_REUSED",
+                {
+                    "worker_id": task.worker_id,
+                    "agent_id": task.assigned_agent,
+                    "boundary_id": task.boundary_id,
+                    "attempt": task.attempt,
+                    "status": result.status.value,
+                    "reuse_source": "same_run_provider_result",
+                },
+                run_id=task.run_id,
+                task_id=task.task_id,
+            )
         else:
             try:
                 if task.assigned_agent == EVIDENCE_COLLECTOR:
@@ -383,6 +426,44 @@ class SpecialistRuntime:
         result.metadata["tool_execution_timing"] = tool_timing
         result.metadata["unattributed_worker_execution_ms"] = round(max(0.0, float(result.metadata["duration_ms"])
             - float(llm_timing.get("provider_transport_ms_sum") or 0.0) - float(tool_timing.get("wall_duration_ms") or 0.0)), 3)
+        terminal_event = (
+            "WORKER_COMPLETED"
+            if result.status in {ResultStatus.COMPLETED, ResultStatus.PROPOSAL_READY}
+            else "WORKER_PARTIAL"
+            if result.status == ResultStatus.PARTIAL
+            else "WORKER_NEED_CONTEXT"
+            if result.status == ResultStatus.NEED_CONTEXT
+            else "WORKER_FAILED"
+        )
+        terminal_level = (
+            "INFO"
+            if terminal_event == "WORKER_COMPLETED"
+            else "WARNING"
+            if terminal_event in {"WORKER_PARTIAL", "WORKER_NEED_CONTEXT"}
+            else "ERROR"
+        )
+        flow_event(
+            terminal_event,
+            {
+                "worker_id": task.worker_id,
+                "agent_id": task.assigned_agent,
+                "boundary_id": task.boundary_id,
+                "attempt": task.attempt,
+                "status": result.status.value,
+                "duration_ms": result.metadata.get("duration_ms", 0.0),
+                "failure_kind": str(result.metadata.get("failure_kind") or ""),
+                "error_code": str((result.error or {}).get("code") or (result.error or {}).get("error_id") or ""),
+                "retryable": bool((result.error or {}).get("retryable")),
+                "produced_data_names": produced,
+                "reusable": bool(result.metadata.get("reusable")),
+                "should_freeze": bool(result.metadata.get("should_freeze")),
+                "replan_recommended": bool(result.metadata.get("replan_recommended")),
+                "business_status": str((result.completion or {}).get("business_status") or ""),
+            },
+            run_id=task.run_id,
+            task_id=task.task_id,
+            level=terminal_level,
+        )
         publish_agent_message(output_dir=output_dir, user_id=task.user_id, conversation_id=task.session_id,
             run_id=task.run_id, task_id=task.task_id, sender=task.assigned_agent, receiver="COORDINATOR",
             message_type=MessageType.WORKER_RESULT_AVAILABLE,

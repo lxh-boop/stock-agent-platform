@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from database.connection import initialize_database
+from database.connection import get_connection
 from evaluation.news_rag_diagnostics import rebuild_news_rag_indexes
 from news_fulltext_ingestion import run_full_text_news_ingestion
 from rag.index_store import load_hybrid_index
@@ -39,46 +38,56 @@ def _json_default(value: Any) -> str:
     return str(value)
 
 
-def _verify_db(db_path: str | Path) -> dict[str, Any]:
-    path = initialize_database(db_path)
-    with sqlite3.connect(path) as conn:
-        conn.row_factory = sqlite3.Row
-        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(news_chunk)").fetchall()}
+def _verify_db() -> dict[str, Any]:
+    """Validate the PostgreSQL news/RAG persistence contract."""
+    with get_connection() as conn:
+        columns = {
+            str(row["column_name"])
+            for row in conn.execute(
+                """
+                SELECT column_name
+                  FROM information_schema.columns
+                 WHERE table_schema=current_schema()
+                   AND table_name='news_chunk'
+                """
+            ).fetchall()
+        }
         missing_columns = sorted(REQUIRED_CHUNK_COLUMNS - columns)
-        event_count = int(conn.execute("SELECT count(*) FROM news_event").fetchone()[0])
-        chunk_count = int(conn.execute("SELECT count(*) FROM news_chunk").fetchone()[0])
-        title_only_events = int(
-            conn.execute(
-                "SELECT count(*) FROM news_event WHERE COALESCE(content_level,'title_only')!='full_text'"
-            ).fetchone()[0]
+
+        def scalar(sql: str) -> int:
+            row = conn.execute(sql).fetchone()
+            return int((row or {}).get("value") or 0)
+
+        event_count = scalar("SELECT count(*) AS value FROM news_event")
+        chunk_count = scalar("SELECT count(*) AS value FROM news_chunk")
+        title_only_events = scalar(
+            "SELECT count(*) AS value FROM news_event "
+            "WHERE COALESCE(content_level,'title_only')!='full_text'"
         )
-        title_only_chunks = int(
-            conn.execute(
-                "SELECT count(*) FROM news_chunk WHERE COALESCE(content_level,'title_only')!='full_text'"
-            ).fetchone()[0]
+        title_only_chunks = scalar(
+            "SELECT count(*) AS value FROM news_chunk "
+            "WHERE COALESCE(content_level,'title_only')!='full_text'"
         )
-        metadata_missing = int(
-            conn.execute(
-                """
-                SELECT count(*) FROM news_chunk
-                WHERE content_level='full_text'
-                  AND (
+        metadata_missing = scalar(
+            """
+            SELECT count(*) AS value FROM news_chunk
+             WHERE content_level='full_text'
+               AND (
                     TRIM(COALESCE(title,''))=''
-                    OR TRIM(COALESCE(source,''))=''
-                    OR TRIM(COALESCE(publish_time,''))=''
-                    OR TRIM(COALESCE(stock_codes_json,''))=''
-                    OR TRIM(COALESCE(entities_json,''))=''
-                    OR TRIM(COALESCE(metadata_json,''))=''
-                  )
-                """
-            ).fetchone()[0]
+                 OR TRIM(COALESCE(source,''))=''
+                 OR TRIM(COALESCE(publish_time,''))=''
+                 OR TRIM(COALESCE(stock_codes_json,''))=''
+                 OR TRIM(COALESCE(entities_json,''))=''
+                 OR TRIM(COALESCE(metadata_json,''))=''
+               )
+            """
         )
-        latest = str(
-            conn.execute(
-                "SELECT COALESCE(MAX(publish_time),'') FROM news_event WHERE content_level='full_text'"
-            ).fetchone()[0]
-            or ""
-        )
+        row = conn.execute(
+            "SELECT COALESCE(MAX(publish_time),'') AS value "
+            "FROM news_event WHERE content_level='full_text'"
+        ).fetchone()
+        latest = str((row or {}).get("value") or "")
+
     return {
         "event_count": event_count,
         "chunk_count": chunk_count,
@@ -120,7 +129,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Full-text-first public news ingestion, title-only cleanup, structured chunks, and one RAG rebuild."
     )
-    parser.add_argument("--db-path", default="data/agent_quant.db")
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
@@ -146,7 +154,6 @@ def main(argv: list[str] | None = None) -> int:
         stock_pool=stock_pool,
         start_date=args.start_date,
         end_date=args.end_date,
-        db_path=args.db_path,
         output_dir=args.output_dir,
         workers=max(1, int(args.workers)),
         timeout=max(1.0, float(args.timeout)),
@@ -163,9 +170,9 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
     print("[News/RAG][3/5] Rebuild persisted BM25/Dense indexes once...", flush=True)
-    index_report = rebuild_news_rag_indexes(args.db_path, output_dir=args.output_dir)
+    index_report = rebuild_news_rag_indexes(None, output_dir=args.output_dir)
     print("[News/RAG][4/5] Validate full-text DB contract...", flush=True)
-    db_check = _verify_db(args.db_path)
+    db_check = _verify_db()
     print("[News/RAG][5/5] Run persisted retrieval smoke...", flush=True)
     smoke = _retrieval_smoke(args.output_dir, stock_code=args.smoke_stock_code)
 

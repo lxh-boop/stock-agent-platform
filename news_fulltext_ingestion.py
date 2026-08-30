@@ -15,10 +15,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import pandas as pd
 
 import news_data
-from database.connection import get_connection, initialize_database
+from database.connection import get_connection
 from news_content_fetcher import QUALITY_MIN_CHARS, article_text_quality, fetch_article
 from news_db_sync import _event_classification, _is_announcement, _trading_calendar
 from database.repositories.news_repository import assign_news_trade_date
+from database.postgres_config import PostgresSettings
 from rag.chunkers import chunk_announcement, chunk_news
 
 
@@ -61,7 +62,8 @@ class FullTextIngestionReport:
     announcement_full_text_written: int
     source_diagnostics: dict[str, Any]
     archive_path: str
-    db_path: str
+    database_backend: str
+    database_schema: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -207,12 +209,10 @@ def _fetch_listing(
 
 
 def _stock_metadata(
-    db_path: str | Path,
     stock_pool: dict[str, str],
     *,
     token: str | None = None,
 ) -> dict[str, dict[str, Any]]:
-    path = initialize_database(db_path)
     out: dict[str, dict[str, Any]] = {
         str(code).zfill(6): {
             "stock_code": str(code).zfill(6),
@@ -223,7 +223,7 @@ def _stock_metadata(
         }
         for code, name in (stock_pool or {}).items()
     }
-    with get_connection(path) as conn:
+    with get_connection() as conn:
         try:
             rows = conn.execute(
                 "SELECT stock_code, stock_name, full_name, industry, concepts FROM stock_basic"
@@ -367,16 +367,13 @@ def _group_articles(events: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 
-def _existing_title_only_articles(
-    db_path: str | Path,
-) -> list[dict[str, Any]]:
+def _existing_title_only_articles() -> list[dict[str, Any]]:
     """Return legacy title-only rows as article-level recovery candidates.
 
     These rows are read before the destructive cleanup gate. URL-backed rows can
     therefore be upgraded to validated full text instead of being discarded.
     """
-    path = initialize_database(db_path)
-    with get_connection(path) as conn:
+    with get_connection() as conn:
         events = [
             dict(row)
             for row in conn.execute(
@@ -593,17 +590,15 @@ def _enrich_articles(
 
 
 def _archive_and_purge_title_only(
-    db_path: str | Path,
     *,
     archive_dir: str | Path,
 ) -> dict[str, Any]:
-    path = initialize_database(db_path)
     archive_root = Path(archive_dir)
     archive_root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_path = archive_root / f"title_only_deleted_{stamp}.jsonl"
 
-    with get_connection(path) as conn:
+    with get_connection() as conn:
         events = [
             dict(row)
             for row in conn.execute(
@@ -624,7 +619,7 @@ def _archive_and_purge_title_only(
                 "archive_path": str(archive_path),
             }
 
-        placeholders = ",".join("?" for _ in news_ids)
+        placeholders = ",".join("%s" for _ in news_ids)
         chunks = [
             dict(row)
             for row in conn.execute(
@@ -642,7 +637,7 @@ def _archive_and_purge_title_only(
         chunk_ids = [str(row.get("chunk_id") or "") for row in chunks if str(row.get("chunk_id") or "")]
         embedding_rows = []
         if chunk_ids:
-            chunk_placeholders = ",".join("?" for _ in chunk_ids)
+            chunk_placeholders = ",".join("%s" for _ in chunk_ids)
             embedding_rows = [
                 dict(row)
                 for row in conn.execute(
@@ -669,7 +664,7 @@ def _archive_and_purge_title_only(
 
         embeddings_deleted = 0
         if chunk_ids:
-            chunk_placeholders = ",".join("?" for _ in chunk_ids)
+            chunk_placeholders = ",".join("%s" for _ in chunk_ids)
             cur = conn.execute(
                 f"DELETE FROM news_embedding WHERE chunk_id IN ({chunk_placeholders})",
                 chunk_ids,
@@ -702,7 +697,6 @@ def _archive_and_purge_title_only(
 
 
 def _sync_full_text_articles(
-    db_path: str | Path,
     output_dir: str | Path,
     stock_pool: dict[str, str],
     articles: list[dict[str, Any]],
@@ -712,8 +706,7 @@ def _sync_full_text_articles(
     if not articles:
         return {"events_written": 0, "chunks_written": 0, "mappings_written": 0}
 
-    path = initialize_database(db_path)
-    stock_meta = _stock_metadata(path, stock_pool, token=token)
+    stock_meta = _stock_metadata(stock_pool, token=token)
     rows_for_calendar = []
     for article in articles:
         for code in article.get("stock_codes") or []:
@@ -849,12 +842,12 @@ def _sync_full_text_articles(
                 }
             )
 
-    with get_connection(path) as conn:
+    with get_connection() as conn:
         # Replace only the articles participating in this ingestion. Existing full-text
         # historical rows outside the refresh window remain untouched.
         news_ids = [record["news_id"] for record in event_records]
         if news_ids:
-            placeholders = ",".join("?" for _ in news_ids)
+            placeholders = ",".join("%s" for _ in news_ids)
             old_chunk_ids = [
                 str(row["chunk_id"])
                 for row in conn.execute(
@@ -863,7 +856,7 @@ def _sync_full_text_articles(
                 ).fetchall()
             ]
             if old_chunk_ids:
-                cp = ",".join("?" for _ in old_chunk_ids)
+                cp = ",".join("%s" for _ in old_chunk_ids)
                 conn.execute(f"DELETE FROM news_embedding WHERE chunk_id IN ({cp})", old_chunk_ids)
             conn.execute(f"DELETE FROM news_chunk WHERE news_id IN ({placeholders})", news_ids)
             conn.execute(f"DELETE FROM news_stock_mapping WHERE news_id IN ({placeholders})", news_ids)
@@ -873,14 +866,15 @@ def _sync_full_text_articles(
                 return
             columns = list(records[0])
             column_sql = ", ".join(f'"{col}"' for col in columns)
-            placeholders_sql = ", ".join(f":{col}" for col in columns)
+            placeholders_sql = ", ".join(f"%({col})s" for col in columns)
             update_cols = [col for col in columns if col != pk]
-            update_sql = ", ".join(f'"{col}"=excluded."{col}"' for col in update_cols)
+            update_sql = ", ".join(f'"{col}"=EXCLUDED."{col}"' for col in update_cols)
             sql = (
                 f'INSERT INTO "{table}" ({column_sql}) VALUES ({placeholders_sql}) '
                 f'ON CONFLICT ("{pk}") DO UPDATE SET {update_sql}'
             )
-            conn.executemany(sql, records)
+            with conn.cursor() as cur:
+                cur.executemany(sql, records)
 
         upsert("news_event", event_records, "news_id")
         upsert("news_chunk", chunk_records, "chunk_id")
@@ -894,10 +888,9 @@ def _sync_full_text_articles(
     }
 
 
-def backfill_structured_chunk_metadata(db_path: str | Path, *, token: str | None = None) -> int:
-    path = initialize_database(db_path)
-    stock_meta = _stock_metadata(path, {}, token=token)
-    with get_connection(path) as conn:
+def backfill_structured_chunk_metadata(*, token: str | None = None) -> int:
+    stock_meta = _stock_metadata({}, token=token)
+    with get_connection() as conn:
         events = {
             str(row["news_id"]): dict(row)
             for row in conn.execute("SELECT * FROM news_event WHERE content_level='full_text'").fetchall()
@@ -960,20 +953,21 @@ def backfill_structured_chunk_metadata(db_path: str | Path, *, token: str | None
             )
 
         if updates:
-            conn.executemany(
-                """
-                UPDATE news_chunk
-                   SET title=:title,
-                       stock_code=:stock_code,
-                       stock_codes_json=:stock_codes_json,
-                       entities_json=:entities_json,
-                       metadata_json=:metadata_json,
-                       industry=:industry,
-                       event_type=:event_type
-                 WHERE chunk_id=:chunk_id
-                """,
-                updates,
-            )
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    UPDATE news_chunk
+                       SET title=%(title)s,
+                           stock_code=%(stock_code)s,
+                           stock_codes_json=%(stock_codes_json)s,
+                           entities_json=%(entities_json)s,
+                           metadata_json=%(metadata_json)s,
+                           industry=%(industry)s,
+                           event_type=%(event_type)s
+                     WHERE chunk_id=%(chunk_id)s
+                    """,
+                    updates,
+                )
             conn.commit()
     return len(updates)
 
@@ -1028,7 +1022,6 @@ def run_full_text_news_ingestion(
     stock_pool: dict[str, str],
     start_date: str,
     end_date: str,
-    db_path: str | Path = "data/agent_quant.db",
     output_dir: str | Path = "outputs",
     workers: int = 6,
     timeout: float = 15.0,
@@ -1048,7 +1041,7 @@ def run_full_text_news_ingestion(
         for item in fresh_articles
         if _is_announcement(str(item.get("source") or ""))
     }
-    legacy_title_only_articles = _existing_title_only_articles(db_path)
+    legacy_title_only_articles = _existing_title_only_articles()
     articles = _merge_article_candidates(fresh_articles, legacy_title_only_articles)
     legacy_candidate_ids = {
         str(item.get("news_id") or "")
@@ -1087,18 +1080,17 @@ def run_full_text_news_ingestion(
         "archive_path": "",
     }
     if purge_title_only:
-        purge_result = _archive_and_purge_title_only(db_path, archive_dir=cleanup_root)
+        purge_result = _archive_and_purge_title_only(archive_dir=cleanup_root)
 
-    write_result = _sync_full_text_articles(db_path, output_dir, stock_pool, enriched, token=token)
-    structured_updated = backfill_structured_chunk_metadata(db_path, token=token)
+    write_result = _sync_full_text_articles(output_dir, stock_pool, enriched, token=token)
+    structured_updated = backfill_structured_chunk_metadata(token=token)
     cache_news_rows, cache_announcement_rows = _rewrite_full_text_caches(
         enriched,
         archive_dir=cleanup_root,
     )
 
     latest_publish = ""
-    path = initialize_database(db_path)
-    with get_connection(path) as conn:
+    with get_connection() as conn:
         row = conn.execute(
             "SELECT MAX(publish_time) AS latest FROM news_event WHERE content_level='full_text'"
         ).fetchone()
@@ -1158,7 +1150,8 @@ def run_full_text_news_ingestion(
             "ordinary_news": ordinary_diag,
         },
         archive_path=str(purge_result.get("archive_path") or ""),
-        db_path=str(db_path),
+        database_backend="postgresql",
+        database_schema=PostgresSettings.from_env().app_schema,
     )
     report_dir = Path(output_dir) / "news_full_text"
     report_dir.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from .memory_candidate_extractor import MemoryCandidateExtractor
@@ -12,7 +11,7 @@ from .memory_pruner import MemoryPruner
 from .memory_retrieval_types import MemoryRetrievalRequest
 from .memory_retriever import MemoryRetriever
 from .memory_sanitizer import MemorySanitizer
-from .memory_store import SQLiteMemoryStore
+from .memory_store import MemoryStore, create_memory_store
 from .memory_types import (
     MemoryRecord,
     MemoryScope,
@@ -32,8 +31,7 @@ class MemoryManager:
     def __init__(
         self,
         *,
-        db_path: str | Path | None = None,
-        store: SQLiteMemoryStore | None = None,
+        store: MemoryStore | None = None,
         retriever: MemoryRetriever | None = None,
         selector: MemoryContextSelector | None = None,
         extractor: MemoryCandidateExtractor | None = None,
@@ -44,8 +42,7 @@ class MemoryManager:
     ) -> None:
         self.policy = policy or MemoryPolicy.default()
         self.sanitizer = sanitizer or MemorySanitizer(self.policy)
-        self.store = store or SQLiteMemoryStore(
-            db_path,
+        self.store = store or create_memory_store(
             policy=self.policy,
             sanitizer=self.sanitizer,
         )
@@ -117,7 +114,7 @@ class MemoryManager:
         source_type: str = "",
         ttl_seconds: int = 86400,
     ) -> list[MemoryRecord]:
-        """Persist non-retrievable candidates in SQLite until confirmed.
+        """Persist non-retrievable candidates in the configured MemoryStore until confirmed.
 
         Candidates keep their real memory type and use status=CANDIDATE. They
         are excluded from normal retrieval, survive process restarts, and expire
@@ -141,7 +138,7 @@ class MemoryManager:
             candidate.metadata = {
                 **dict(candidate.metadata or {}),
                 "candidate_original_type": candidate.memory_type.value,
-                "candidate_store": "sqlite",
+                "candidate_store": "persistent_memory_store",
                 "working_state_owner": "context_bundle",
             }
             stored.append(self.store.upsert(candidate))
@@ -314,7 +311,7 @@ class MemoryManager:
                 "long_term_user_facts_require_confirmation": True,
                 "memory_manager_has_no_commit_permission": True,
                 "working_memory_owner": "context_bundle_per_run",
-                "candidate_store": "sqlite_status_candidate",
+                "candidate_store": "persistent_status_candidate",
                 "context_admission": "relevance_threshold_then_entity_task_time_token_budget",
                 "fixed_top_k_context_admission": False,
                 "candidate_pool_top_n": req.candidate_top_n,

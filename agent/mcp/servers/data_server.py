@@ -10,7 +10,7 @@ from mcp.types import ToolAnnotations
 
 from agent.mcp.adapters import DataMCPAdapter
 from agent.mcp.tool_envelope import MCPToolEnvelope
-from config import AGENT_QUANT_DB_PATH, OUTPUT_DIR
+from config import OUTPUT_DIR
 
 
 READ_ONLY = ToolAnnotations(
@@ -83,10 +83,6 @@ def create_data_server(
 
 def main() -> None:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument(
-        "--db-path",
-        default=os.environ.get("STOCK_MCP_DB_PATH") or str(AGENT_QUANT_DB_PATH),
-    )
     parser.add_argument(
         "--output-dir",
         default=os.environ.get("STOCK_MCP_OUTPUT_DIR") or str(OUTPUT_DIR),

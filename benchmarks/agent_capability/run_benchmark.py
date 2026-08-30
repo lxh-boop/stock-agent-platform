@@ -23,6 +23,7 @@ from agent.runtime import load_run_snapshot
 from core.llm import LLMRuntimeSettings
 from evaluation.agent_harness.runner import _write_basic_fixture
 from portfolio.storage import PortfolioStorage
+from storage_governance.lifecycle import cleanup_checkpointed_benchmark_workspace, prune_stale_benchmark_workspaces
 
 from .case_dataset import DATASET_VERSION, build_cases, build_hidden_gold, ensure_case_files
 from .config import BENCHMARK_ROOT, BenchmarkRuntimeConfig, ensure_roots, load_llm_settings
@@ -185,7 +186,13 @@ def _run_one(case: dict[str, Any], iteration: int, config: BenchmarkRuntimeConfi
         "failure_classification": validity.get("failure_classification"),
         "score": score,
         "exception": exception[:800],
-        "isolated": {"new_user": True, "new_conversation": True, "new_sqlite": True, "production_data_used": False},
+        "isolated": {
+            "new_user": True,
+            "new_conversation": True,
+            "new_sqlite": True,
+            "production_data_used": False,
+            "workspace_rel": workspace.relative_to(BENCHMARK_ROOT).as_posix(),
+        },
     }
     # Keep hidden gold out of raw/normalized traces.  It is used only by the scorer/diagnostic.
     if case.get("split") != "hidden":
@@ -544,6 +551,9 @@ def _publish_repaired(rows: list[dict[str, Any]], config: BenchmarkRuntimeConfig
 def run_benchmark(*, split: str, iterations: int, workers: int, case_id: str = "") -> dict[str, Any]:
     ensure_case_files()
     ensure_roots(BENCHMARK_ROOT)
+    # Owner-side cleanup: prior interrupted workspaces get a forensic retention window.
+    # Canonical raw/normalized/failure evidence lives outside isolated_workspaces.
+    stale_cleanup = prune_stale_benchmark_workspaces(BENCHMARK_ROOT)
     settings, config = load_llm_settings()
     workers = 1 if config.deployment_mode == "local" else 2
     if not settings.is_configured:
@@ -569,10 +579,23 @@ def run_benchmark(*, split: str, iterations: int, workers: int, case_id: str = "
                 # batch, while this checkpoint makes resume immediately safe.
                 checkpoint_keys = {str(item.get("run_key")) for item in results}
                 _write_jsonl(raw_path, [row for row in existing if str(row.get("run_key")) not in checkpoint_keys] + results)
-                print(f"checkpoint {len(results)}/{len(pending)}: {case['case_id']} iteration {iteration}", flush=True)
+                # Canonical evidence is durable now, so the per-case SQLite/output workspace
+                # can be removed immediately. A crash before this point leaves it for 14-day cleanup.
+                workspace_rel = str(((results[-1].get("isolated") or {}).get("workspace_rel") or ""))
+                cleaned = cleanup_checkpointed_benchmark_workspace(workspace_rel, benchmark_root=BENCHMARK_ROOT) if workspace_rel else False
+                print(
+                    f"checkpoint {len(results)}/{len(pending)}: {case['case_id']} iteration {iteration}; workspace_cleaned={cleaned}",
+                    flush=True,
+                )
     merged = [row for row in existing if str(row.get("run_key")) not in {str(item.get("run_key")) for item in results}] + results
     summary = publish(merged, config)
-    summary.update({"executed": len(results), "resumed": len(pending) == 0, "pending_before_run": len(pending), "model_config_hash": config.config_hash})
+    summary.update({
+        "executed": len(results),
+        "resumed": len(pending) == 0,
+        "pending_before_run": len(pending),
+        "model_config_hash": config.config_hash,
+        "stale_workspaces_removed": int(stale_cleanup.get("removed_count") or 0),
+    })
     return summary
 
 

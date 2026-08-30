@@ -11,7 +11,7 @@ import pandas as pd
 
 from local_config import load_local_config
 from universe import get_stock_pool
-from .schema import NEWS_MAPPING_DB_PATH, get_connection, init_db
+from .schema import NEWS_MAPPING_DB_PATH, execute_many, get_connection, init_db
 
 
 SOURCE_TUSHARE_STOCK_BASIC = "tushare_stock_basic"
@@ -181,12 +181,12 @@ def upsert_stock_master_and_aliases(
             alias_rows.append({**alias, "updated_at": now})
 
     with get_connection(db_path) as conn:
-        conn.executemany(
+        execute_many(conn, 
             """
-            INSERT INTO stock_master
+            INSERT INTO news_mapping_stock_master
                 (code, ts_code, name, fullname, industry, area, list_date, aliases, updated_at)
             VALUES
-                (:code, :ts_code, :name, :fullname, :industry, :area, :list_date, :aliases, :updated_at)
+                (%(code)s, %(ts_code)s, %(name)s, %(fullname)s, %(industry)s, %(area)s, %(list_date)s, %(aliases)s, %(updated_at)s)
             ON CONFLICT(code) DO UPDATE SET
                 ts_code=excluded.ts_code,
                 name=excluded.name,
@@ -199,16 +199,16 @@ def upsert_stock_master_and_aliases(
             """,
             stock_rows,
         )
-        conn.executemany(
+        execute_many(conn, 
             """
-            INSERT INTO stock_alias
+            INSERT INTO news_mapping_stock_alias
                 (alias, code, name, source, confidence, updated_at)
             VALUES
-                (:alias, :code, :name, :source, :confidence, :updated_at)
+                (%(alias)s, %(code)s, %(name)s, %(source)s, %(confidence)s, %(updated_at)s)
             ON CONFLICT(alias, code) DO UPDATE SET
                 name=excluded.name,
                 source=excluded.source,
-                confidence=MAX(stock_alias.confidence, excluded.confidence),
+                confidence=GREATEST(news_mapping_stock_alias.confidence, excluded.confidence),
                 updated_at=excluded.updated_at
             """,
             alias_rows,

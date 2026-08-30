@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from config import AGENT_QUANT_DB_PATH
 from database.repositories import NewsRepository
 from evaluation.ragas_eval.schemas import (
     EvaluationCase,
@@ -33,7 +32,7 @@ class ProjectRagAdapter:
         chunks: list[RagChunk | dict[str, Any]] | None = None,
         retriever: Any | None = None,
     ) -> None:
-        self.db_path = Path(db_path or AGENT_QUANT_DB_PATH)
+        self.db_path = None
         self.warnings: list[str] = []
         if retriever is None and chunks is None:
             try:
@@ -53,7 +52,7 @@ class ProjectRagAdapter:
 
     def _load_chunks(self) -> list[RagChunk]:
         try:
-            rows = NewsRepository(self.db_path).list_news_chunks()
+            rows = NewsRepository().list_news_chunks()
             return [RagChunk.from_mapping(row) for row in rows]
         except Exception as exc:
             self.warnings.append(f"failed to load news chunks from {self.db_path}: {type(exc).__name__}: {exc}")

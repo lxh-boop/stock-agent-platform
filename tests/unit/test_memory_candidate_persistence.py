@@ -1,10 +1,11 @@
 from agent.memory.memory_manager import MemoryManager
+from agent.memory.in_memory_memory_store import InMemoryMemoryStore
 from agent.memory.memory_types import MemoryStatus, MemoryType
 
 
-def test_candidate_persists_in_sqlite_and_is_not_retrieved(tmp_path):
-    db_path = tmp_path / "memory.sqlite"
-    manager = MemoryManager(db_path=db_path)
+def test_candidate_persists_via_store_contract_and_is_not_retrieved():
+    store = InMemoryMemoryStore()
+    manager = MemoryManager(store=store)
     candidates = manager.remember_candidate(
         "以后请记住我偏好稳健投资",
         user_id="u1",
@@ -15,7 +16,7 @@ def test_candidate_persists_in_sqlite_and_is_not_retrieved(tmp_path):
     assert candidate.status == MemoryStatus.CANDIDATE
     assert candidate.memory_type == MemoryType.SEMANTIC
 
-    reloaded = MemoryManager(db_path=db_path)
+    reloaded = MemoryManager(store=store)
     pending = reloaded.list_candidates(user_id="u1")
     assert [item.memory_id for item in pending] == [candidate.memory_id]
     assert reloaded.retrieve_for_context(

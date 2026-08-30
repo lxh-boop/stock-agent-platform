@@ -6,7 +6,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from database.schemas import json_dumps, json_loads
-from database.sqlite_store import SQLiteStore
+from database.postgres_store import PostgresStore
 
 
 def _now() -> str:
@@ -17,7 +17,7 @@ class RuntimeStateRepository:
     """Database authority for small live state payloads without a domain table."""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        self.store = SQLiteStore(db_path)
+        self.store = PostgresStore()
 
     def put(
         self,

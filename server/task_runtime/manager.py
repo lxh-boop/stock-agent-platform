@@ -32,10 +32,8 @@ ALLOWED_TASK_TYPES = {
 
 class TaskManager:
     def __init__(self, db_path: str | Path | None = None) -> None:
-        path = Path(db_path or os.environ.get("STOCK_AGENT_TASK_DB") or "runtime/task_runtime.sqlite3")
-        if not path.is_absolute():
-            path = Path.cwd() / path
-        self.store = TaskStore(path)
+        del db_path
+        self.store = TaskStore()
         self._lock = threading.RLock()
         self._processes: dict[str, subprocess.Popen[Any]] = {}
         # IMPORTANT: construction must be side-effect free for persisted task state.
@@ -43,10 +41,6 @@ class TaskManager:
         # TaskManager while the real API owns live tasks. Startup recovery is
         # therefore explicit and is invoked only by the real API lifespan.
         self._startup_recovery_done = False
-
-    @property
-    def db_path(self) -> Path:
-        return self.store.db_path
 
     def recover_on_api_startup(self) -> list[str]:
         """Mark stale active tasks interrupted exactly once for this API manager.
@@ -107,8 +101,6 @@ class TaskManager:
             "server.task_runtime.worker",
             "--task-id",
             task_id,
-            "--db-path",
-            str(self.db_path),
             "--parent-pid",
             str(os.getpid()),
         ]

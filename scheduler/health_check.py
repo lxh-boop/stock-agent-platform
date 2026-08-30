@@ -4,16 +4,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from config import AGENT_QUANT_DB_PATH
-from database.connection import initialize_database
+from database.connection import verify_database
+from database.postgres_config import PostgresSettings
 from scheduler.job_state import load_latest_job_status
 from scheduler.trading_calendar import get_latest_trading_day, is_trading_day
 
 
-def run_health_check(
-    root: str | Path = ".",
-    db_path: str | Path | None = AGENT_QUANT_DB_PATH,
-) -> dict[str, Any]:
+def run_health_check(root: str | Path = ".", db_path=None) -> dict[str, Any]:
+    del db_path
     root_path = Path(root)
     checks: dict[str, Any] = {
         "python": sys.executable,
@@ -25,9 +23,12 @@ def run_health_check(
         "latest_status_exists": bool(load_latest_job_status(root_path)),
     }
     try:
-        db_file = initialize_database(db_path)
+        settings = PostgresSettings.from_env()
+        verify_database()
         checks["database_ok"] = True
-        checks["database_path"] = str(db_file)
+        checks["database_backend"] = "postgresql"
+        checks["database_name"] = settings.database
+        checks["database_schema"] = settings.app_schema
     except Exception as exc:
         checks["database_ok"] = False
         checks["database_error"] = str(exc)

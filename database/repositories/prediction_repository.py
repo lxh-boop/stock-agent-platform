@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from contextlib import closing
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-from database.connection import get_connection
 from database.schemas import json_dumps, json_loads
-from database.sqlite_store import SQLiteStore, run_with_sqlite_lock_retry
+from database.postgres_store import PostgresStore
 
 
 def _now() -> str:
@@ -44,7 +42,7 @@ class PredictionRepository:
     """Database authority for live ranking/model-prediction results."""
 
     def __init__(self, db_path: str | Path | None = None):
-        self.store = SQLiteStore(db_path)
+        self.store = PostgresStore()
 
     @staticmethod
     def normalize_ranking_record(record: dict[str, Any], *, source_kind: str = "ranking") -> dict[str, Any]:
@@ -141,25 +139,16 @@ class PredictionRepository:
             for row in normalized
         }
 
-        def operation() -> None:
-            with closing(get_connection(self.store.db_path)) as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                for trade_date, model_name, kind in snapshot_keys:
-                    conn.execute(
-                        """DELETE FROM model_prediction
-                           WHERE trade_date=? AND model_name=? AND source_kind=?""",
-                        (trade_date, model_name, kind),
-                    )
-                for row in normalized:
-                    columns = list(row)
-                    placeholders = ",".join("?" for _ in columns)
-                    conn.execute(
-                        f"INSERT INTO model_prediction ({','.join(columns)}) VALUES ({placeholders})",
-                        [row[column] for column in columns],
-                    )
-                conn.commit()
+        with self.store.transaction() as conn:
+            for trade_date, model_name, kind in snapshot_keys:
+                self.store.delete_where(
+                    "model_prediction",
+                    {"trade_date": trade_date, "model_name": model_name, "source_kind": kind},
+                    connection=conn,
+                )
+            for row in normalized:
+                self.store.insert("model_prediction", row, connection=conn)
 
-        run_with_sqlite_lock_retry(operation)
         return normalized
 
     def get_prediction(self, prediction_id: str) -> dict[str, Any] | None:
@@ -174,25 +163,24 @@ class PredictionRepository:
         model_name: str | None = None,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        clauses = ["source_kind=?"]
+        clauses = ["source_kind=%s"]
         params: list[Any] = [str(source_kind)]
         if stock_code:
-            clauses.append("stock_code=?")
+            clauses.append("stock_code=%s")
             params.append(_code(stock_code))
         if model_name:
-            clauses.append("lower(model_name) LIKE ?")
+            clauses.append("lower(model_name) LIKE %s")
             params.append(f"%{str(model_name).lower()}%")
         where = " AND ".join(clauses)
         sql = f"""SELECT * FROM model_prediction
                   WHERE {where}
-                    AND trade_date=(SELECT MAX(trade_date) FROM model_prediction WHERE source_kind=?)
+                    AND trade_date=(SELECT MAX(trade_date) FROM model_prediction WHERE source_kind=%s)
                   ORDER BY CASE WHEN pred_rank IS NULL THEN 1 ELSE 0 END, pred_rank, pred_score DESC"""
         params.append(str(source_kind))
         if limit is not None:
-            sql += " LIMIT ?"
+            sql += " LIMIT %s"
             params.append(max(0, int(limit)))
-        with closing(get_connection(self.store.db_path)) as conn:
-            rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+        rows = self.store.fetch_all(sql, params)
         return [self._hydrate(row) for row in rows]
 
     def list_predictions(
@@ -215,7 +203,7 @@ class PredictionRepository:
 
 class RecommendationRepository:
     def __init__(self, db_path: str | Path | None = None) -> None:
-        self.store = SQLiteStore(db_path)
+        self.store = PostgresStore()
 
     def replace_snapshot(self, user_id: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         user = str(user_id or "default")
@@ -253,38 +241,28 @@ class RecommendationRepository:
             raise ValueError("recommendation_snapshot_trade_date_required")
         trade_date = next(iter(dates))
 
-        def operation() -> None:
-            with closing(get_connection(self.store.db_path)) as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                conn.execute(
-                    "DELETE FROM portfolio_recommendation_result WHERE user_id=? AND trade_date=?",
-                    (user, trade_date),
-                )
-                for row in normalized:
-                    columns = list(row)
-                    placeholders = ",".join("?" for _ in columns)
-                    conn.execute(
-                        f"INSERT INTO portfolio_recommendation_result ({','.join(columns)}) VALUES ({placeholders})",
-                        [row[column] for column in columns],
-                    )
-                conn.commit()
+        with self.store.transaction() as conn:
+            self.store.delete_where(
+                "portfolio_recommendation_result",
+                {"user_id": user, "trade_date": trade_date},
+                connection=conn,
+            )
+            for row in normalized:
+                self.store.insert("portfolio_recommendation_result", row, connection=conn)
 
-        run_with_sqlite_lock_retry(operation)
         return normalized
 
     def list_latest(self, user_id: str) -> list[dict[str, Any]]:
-        with closing(get_connection(self.store.db_path)) as conn:
-            rows = conn.execute(
-                """SELECT * FROM portfolio_recommendation_result
-                   WHERE user_id=? AND trade_date=(
-                       SELECT MAX(trade_date) FROM portfolio_recommendation_result WHERE user_id=?
-                   )
-                   ORDER BY CASE WHEN original_rank IS NULL THEN 1 ELSE 0 END, original_rank""",
-                (str(user_id or "default"), str(user_id or "default")),
-            ).fetchall()
+        rows = self.store.fetch_all(
+            """SELECT * FROM portfolio_recommendation_result
+               WHERE user_id=%s AND trade_date=(
+                   SELECT MAX(trade_date) FROM portfolio_recommendation_result WHERE user_id=%s
+               )
+               ORDER BY CASE WHEN original_rank IS NULL THEN 1 ELSE 0 END, original_rank""",
+            (str(user_id or "default"), str(user_id or "default")),
+        )
         output: list[dict[str, Any]] = []
-        for raw in rows:
-            row = dict(raw)
+        for row in rows:
             payload = json_loads(row.pop("payload_json", "{}"), default={})
             output.append({**dict(payload or {}), **row})
         return output
@@ -311,7 +289,7 @@ class RecommendationRepository:
 
 class RuntimeDataImportAuditRepository:
     def __init__(self, db_path: str | Path | None = None) -> None:
-        self.store = SQLiteStore(db_path)
+        self.store = PostgresStore()
 
     def upsert(self, record: dict[str, Any]) -> dict[str, Any]:
         payload = dict(record)

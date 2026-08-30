@@ -7,19 +7,17 @@ from typing import Any
 from .memory_manager import MemoryManager
 from .memory_retrieval_types import MemoryRetrievalRequest
 from .memory_sanitizer import MemorySanitizer
-from .memory_store import DEFAULT_MEMORY_STORE_PATH, SQLiteMemoryStore
 
 _STOCK_RE = re.compile(r"(?<!\d)\d{6}(?!\d)")
-
-
-def memory_store_path(output_dir: str | Path = "outputs") -> Path:
-    return Path(output_dir) / "memory" / DEFAULT_MEMORY_STORE_PATH.name
 
 
 def get_memory_manager_for_output(
     output_dir: str | Path = "outputs",
 ) -> MemoryManager:
-    return MemoryManager(db_path=memory_store_path(output_dir))
+    # output_dir remains an application-context argument only. Persistent memory
+    # location is owned by the configured MemoryStore backend.
+    del output_dir
+    return MemoryManager()
 
 
 def build_memory_context_view(
@@ -87,16 +85,18 @@ def build_memory_store_health_summary(
     output_dir: str | Path = "outputs",
 ) -> dict[str, Any]:
     try:
-        path = memory_store_path(output_dir)
-        store = SQLiteMemoryStore(path)
+        manager = get_memory_manager_for_output(output_dir)
+        store = manager.store
+        descriptor = dict(store.describe() or {})
         total_count = store.count()
         user_count = store.count(user_id=user_id)
         candidate_count = store.count(user_id=user_id, status="CANDIDATE")
         latest = store.list_records(user_id=user_id, limit=5)
         return {
             "status": "ok",
-            "store": "outputs/memory/memory_store.sqlite",
-            "exists": path.exists(),
+            "store": str(descriptor.get("backend_name") or getattr(store, "backend_name", "memory_store")),
+            "storage_kind": str(descriptor.get("storage_kind") or "unknown"),
+            "exists": bool(descriptor.get("available", True)),
             "total_count": total_count,
             "user_count": user_count,
             "candidate_count": candidate_count,
@@ -110,7 +110,8 @@ def build_memory_store_health_summary(
     except Exception as exc:
         return {
             "status": "unavailable",
-            "store": "outputs/memory/memory_store.sqlite",
+            "store": "memory_store",
+            "storage_kind": "unknown",
             "exists": False,
             "total_count": 0,
             "user_count": 0,
@@ -150,7 +151,7 @@ def list_memory_records_safe_page(
     offset: int = 0,
 ) -> dict[str, Any]:
     try:
-        store = SQLiteMemoryStore(memory_store_path(output_dir))
+        store = get_memory_manager_for_output(output_dir).store
         total = store.count(user_id=user_id)
         start = max(0, int(offset or 0))
         page_size = max(1, min(50, int(limit or 5)))
@@ -250,5 +251,4 @@ __all__ = [
     "extract_memory_candidates_from_message_trace",
     "get_memory_manager_for_output",
     "list_memory_records_safe_page",
-    "memory_store_path",
 ]

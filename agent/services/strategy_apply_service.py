@@ -672,10 +672,10 @@ class StrategyApplyService:
             path.unlink()
         if self.db_path is not None:
             try:
-                with get_connection(self.db_path) as connection:
+                with get_connection() as connection:
                     connection.execute(
                         "DELETE FROM strategy_registry "
-                        "WHERE strategy_id=? AND version=?",
+                        "WHERE strategy_id=%s AND version=%s",
                         (strategy_id, version),
                     )
                     connection.commit()

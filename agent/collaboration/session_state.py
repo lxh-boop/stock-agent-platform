@@ -3,12 +3,14 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 import re
-import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+
+from database.connection import get_connection
+from database.runtime_schema import ensure_runtime_schema
 
 from .models import SessionStateItem, new_id, now_text
 
@@ -124,11 +126,7 @@ class MemoryPutOutcome:
 
 
 class SessionStateStore:
-    """SQLite-backed, conversation-scoped structured session state.
-
-    It is intentionally separate from long-term user memory and Run checkpoints.
-    Every item is session-scoped, expires automatically and is versioned.
-    """
+    """PostgreSQL-backed, conversation-scoped structured session state."""
 
     def __init__(
         self,
@@ -138,24 +136,16 @@ class SessionStateStore:
         default_ttl_hours: int = DEFAULT_TTL_HOURS,
     ) -> None:
         self.output_dir = Path(output_dir)
-        self.db_path = Path(db_path) if db_path else self.output_dir / "session_state" / "session_state.sqlite"
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        del db_path
         self.default_ttl_hours = max(1, int(default_ttl_hours or DEFAULT_TTL_HOURS))
         self._lock = threading.RLock()
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self.db_path), timeout=30.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=30000")
-        return connection
+    def _connect(self):
+        return get_connection(runtime=True)
 
     @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
-        """Open a transaction-scoped connection and always release the Windows file handle."""
-
+    def _connection(self) -> Iterator[object]:
         connection = self._connect()
         try:
             yield connection
@@ -167,57 +157,13 @@ class SessionStateStore:
             connection.close()
 
     def _init_schema(self) -> None:
-        with self._lock, self._connection() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS agent_session_state_items (
-                    memory_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    memory_key TEXT NOT NULL,
-                    value_json TEXT NOT NULL,
-                    value_type TEXT NOT NULL DEFAULT 'json',
-                    summary TEXT NOT NULL DEFAULT '',
-                    source_type TEXT NOT NULL DEFAULT '',
-                    source_ref TEXT NOT NULL DEFAULT '',
-                    confirmed INTEGER NOT NULL DEFAULT 0,
-                    confidence REAL NOT NULL DEFAULT 0.8,
-                    version INTEGER NOT NULL DEFAULT 1,
-                    status TEXT NOT NULL DEFAULT 'active',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    UNIQUE(session_id, memory_key, version)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_agent_session_state_lookup
-                ON agent_session_state_items(session_id, memory_key, status, version DESC);
-
-                CREATE INDEX IF NOT EXISTS idx_agent_session_state_expiry
-                ON agent_session_state_items(expires_at, status);
-
-                CREATE TABLE IF NOT EXISTS agent_session_state_access_log (
-                    access_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    run_id TEXT NOT NULL DEFAULT '',
-                    task_id TEXT NOT NULL DEFAULT '',
-                    agent_id TEXT NOT NULL DEFAULT '',
-                    operation TEXT NOT NULL,
-                    query_text TEXT NOT NULL DEFAULT '',
-                    matched_keys_json TEXT NOT NULL DEFAULT '[]',
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_agent_session_state_access_task
-                ON agent_session_state_access_log(session_id, run_id, task_id, created_at);
-
-                """
-            )
+        ensure_runtime_schema()
 
     def _expires_at(self, ttl_hours: int | None = None) -> str:
         hours = max(1, int(ttl_hours or self.default_ttl_hours))
         return (_utcnow() + timedelta(hours=hours)).isoformat(timespec="seconds")
 
-    def _row_to_item(self, row: sqlite3.Row | dict[str, Any]) -> SessionStateItem:
+    def _row_to_item(self, row: dict[str, Any]) -> SessionStateItem:
         data = dict(row)
         return SessionStateItem(
             memory_id=str(data.get("memory_id") or ""),
@@ -241,8 +187,8 @@ class SessionStateStore:
         now = _utcnow().isoformat(timespec="seconds")
         with self._lock, self._connection() as connection:
             memory_count = connection.execute(
-                "UPDATE agent_session_state_items SET status='expired', updated_at=? "
-                "WHERE status='active' AND expires_at <= ?",
+                "UPDATE agent_session_state_items SET status='expired', updated_at=%s "
+                "WHERE status='active' AND expires_at <= %s",
                 (now, now),
             ).rowcount
         return {"state_items": int(memory_count or 0)}
@@ -252,7 +198,7 @@ class SessionStateStore:
         status_clause = "" if include_expired else "AND status='active'"
         with self._connection() as connection:
             row = connection.execute(
-                f"SELECT * FROM agent_session_state_items WHERE session_id=? AND memory_key=? "
+                f"SELECT * FROM agent_session_state_items WHERE session_id=%s AND memory_key=%s "
                 f"{status_clause} ORDER BY version DESC, updated_at DESC LIMIT 1",
                 (str(session_id or ""), str(key or "")),
             ).fetchone()
@@ -290,18 +236,17 @@ class SessionStateStore:
             new_confidence = 0.8
 
         with self._lock, self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT * FROM agent_session_state_items WHERE session_id=? AND memory_key=? "
+                "SELECT * FROM agent_session_state_items WHERE session_id=%s AND memory_key=%s "
                 "AND status='active' ORDER BY version DESC LIMIT 1",
                 (session, memory_key),
             ).fetchone()
             previous = self._row_to_item(row) if row else None
             if previous and _dumps(previous.value) == value_json:
                 connection.execute(
-                    "UPDATE agent_session_state_items SET updated_at=?, expires_at=?, confidence=MAX(confidence, ?), "
-                    "confirmed=MAX(confirmed, ?), summary=CASE WHEN summary='' THEN ? ELSE summary END "
-                    "WHERE memory_id=?",
+                    "UPDATE agent_session_state_items SET updated_at=%s, expires_at=%s, confidence=GREATEST(confidence, %s), "
+                    "confirmed=GREATEST(confirmed, %s), summary=CASE WHEN summary='' THEN %s ELSE summary END "
+                    "WHERE memory_id=%s",
                     (now, expires, new_confidence, int(bool(confirmed)), new_summary, previous.memory_id),
                 )
                 refreshed = SessionStateItem(
@@ -338,7 +283,7 @@ class SessionStateStore:
                 conflict = previous.confirmed and bool(confirmed)
                 next_version = previous.version + 1
                 connection.execute(
-                    "UPDATE agent_session_state_items SET status='superseded', updated_at=? WHERE memory_id=?",
+                    "UPDATE agent_session_state_items SET status='superseded', updated_at=%s WHERE memory_id=%s",
                     (now, previous.memory_id),
                 )
             else:
@@ -364,7 +309,7 @@ class SessionStateStore:
             connection.execute(
                 "INSERT INTO agent_session_state_items (memory_id, session_id, memory_key, value_json, value_type, "
                 "summary, source_type, source_ref, confirmed, confidence, version, status, created_at, updated_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     item.memory_id,
                     item.session_id,
@@ -392,10 +337,10 @@ class SessionStateStore:
             rows = connection.execute(
                 "SELECT item.* FROM agent_session_state_items item "
                 "JOIN (SELECT memory_key, MAX(version) AS version FROM agent_session_state_items "
-                "WHERE session_id=? AND status='active' GROUP BY memory_key) latest "
+                "WHERE session_id=%s AND status='active' GROUP BY memory_key) latest "
                 "ON item.memory_key=latest.memory_key AND item.version=latest.version "
-                "WHERE item.session_id=? AND item.status='active' "
-                "ORDER BY item.confirmed DESC, item.updated_at DESC LIMIT ?",
+                "WHERE item.session_id=%s AND item.status='active' "
+                "ORDER BY item.confirmed DESC, item.updated_at DESC LIMIT %s",
                 (str(session_id or ""), str(session_id or ""), max(1, min(1000, int(limit or 100)))),
             ).fetchall()
         return [self._row_to_item(row) for row in rows]
@@ -524,7 +469,7 @@ class SessionStateStore:
         with self._lock, self._connection() as connection:
             connection.execute(
                 "INSERT INTO agent_session_state_access_log (access_id, session_id, run_id, task_id, agent_id, operation, "
-                "query_text, matched_keys_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "query_text, matched_keys_json, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     new_id("mem_access"),
                     str(session_id or ""),
@@ -541,7 +486,7 @@ class SessionStateStore:
     def access_count(self, session_id: str, task_id: str) -> int:
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT COUNT(*) AS count FROM agent_session_state_access_log WHERE session_id=? AND task_id=?",
+                "SELECT COUNT(*) AS count FROM agent_session_state_access_log WHERE session_id=%s AND task_id=%s",
                 (str(session_id or ""), str(task_id or "")),
             ).fetchone()
         return int(row["count"] if row else 0)
@@ -551,18 +496,18 @@ class SessionStateStore:
         with self._lock, self._connection() as connection:
             if hard:
                 access = connection.execute(
-                    "DELETE FROM agent_session_state_access_log WHERE session_id=?",
+                    "DELETE FROM agent_session_state_access_log WHERE session_id=%s",
                     (session,),
                 ).rowcount
                 state = connection.execute(
-                    "DELETE FROM agent_session_state_items WHERE session_id=?",
+                    "DELETE FROM agent_session_state_items WHERE session_id=%s",
                     (session,),
                 ).rowcount
             else:
                 now = now_text()
                 state = connection.execute(
-                    "UPDATE agent_session_state_items SET status='expired', updated_at=? "
-                    "WHERE session_id=? AND status='active'",
+                    "UPDATE agent_session_state_items SET status='expired', updated_at=%s "
+                    "WHERE session_id=%s AND status='active'",
                     (now, session),
                 ).rowcount
                 access = 0
@@ -572,7 +517,7 @@ class SessionStateStore:
         with self._connection() as connection:
             state = connection.execute(
                 "SELECT COUNT(*) AS count FROM agent_session_state_items "
-                "WHERE session_id=? AND status='active'",
+                "WHERE session_id=%s AND status='active'",
                 (str(session_id or ""),),
             ).fetchone()
         return {
@@ -580,5 +525,5 @@ class SessionStateStore:
             "active_state_item_count": int(state["count"] if state else 0),
             "temporary": True,
             "default_ttl_hours": self.default_ttl_hours,
-            "store": str(self.db_path),
+            "store": "postgresql:stock_runtime",
         }

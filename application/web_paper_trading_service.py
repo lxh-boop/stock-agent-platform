@@ -4,7 +4,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from config import AGENT_QUANT_DB_PATH, DEFAULT_INITIAL_CASH, OUTPUT_DIR
+from config import DEFAULT_INITIAL_CASH, OUTPUT_DIR
 
 class WebPaperTradingApplicationService:
     """Browser-facing application facade for Stage 6.3.
@@ -18,7 +18,7 @@ class WebPaperTradingApplicationService:
         self,
         *,
         output_dir: str | Path = OUTPUT_DIR,
-        db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+        db_path: str | Path | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.db_path = Path(db_path) if db_path else None

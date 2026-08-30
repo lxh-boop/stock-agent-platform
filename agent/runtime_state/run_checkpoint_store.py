@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
-import sqlite3
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Literal
+
+from database.connection import get_connection
+from database.runtime_schema import ensure_runtime_schema
 
 
 def _now() -> str:
@@ -61,45 +63,15 @@ class RequestCheckpoint:
 
 class RunCheckpointStore:
     def __init__(self, output_dir: str | Path) -> None:
-        root = Path(output_dir); root.mkdir(parents=True, exist_ok=True)
-        self.path = root / "agent_runtime_state.db"
+        del output_dir
         self._lock = threading.RLock()
-        with self._connection() as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
-                    run_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    checkpoint_json TEXT NOT NULL,
-                    version INTEGER NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                "CREATE INDEX IF NOT EXISTS idx_agent_run_checkpoints_session_status ON agent_run_checkpoints(session_id, status)"
-            )
-            connection.execute(
-                """CREATE TABLE IF NOT EXISTS agent_request_checkpoints (
-                    run_id TEXT NOT NULL, request_id TEXT NOT NULL, status TEXT NOT NULL,
-                    checkpoint_json TEXT NOT NULL, updated_at TEXT NOT NULL,
-                    PRIMARY KEY(run_id, request_id)
-                )"""
-            )
-            connection.commit()
+        ensure_runtime_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
-        connection.row_factory = sqlite3.Row
-        return connection
+    def _connect(self):
+        return get_connection(runtime=True)
 
     @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
-        """Open a transaction-scoped connection and always release the Windows file handle."""
-
+    def _connection(self) -> Iterator[object]:
         connection = self._connect()
         try:
             yield connection
@@ -114,7 +86,7 @@ class RunCheckpointStore:
         checkpoint.updated_at = _now()
         with self._lock, self._connection() as connection:
             previous = connection.execute(
-                "SELECT version, created_at FROM agent_run_checkpoints WHERE run_id=?",
+                "SELECT version, created_at FROM agent_run_checkpoints WHERE run_id=%s",
                 (checkpoint.run_id,),
             ).fetchone()
             if previous:
@@ -123,7 +95,7 @@ class RunCheckpointStore:
             connection.execute(
                 """
                 INSERT INTO agent_run_checkpoints(run_id,session_id,user_id,status,checkpoint_json,version,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT(run_id) DO UPDATE SET
                   session_id=excluded.session_id,user_id=excluded.user_id,status=excluded.status,
                   checkpoint_json=excluded.checkpoint_json,version=excluded.version,updated_at=excluded.updated_at
@@ -152,14 +124,14 @@ class RunCheckpointStore:
     def load(self, run_id: str) -> RunCheckpoint | None:
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT checkpoint_json FROM agent_run_checkpoints WHERE run_id=?", (str(run_id),)
+                "SELECT checkpoint_json FROM agent_run_checkpoints WHERE run_id=%s", (str(run_id),)
             ).fetchone()
         return self._checkpoint_from_json(row["checkpoint_json"]) if row else None
 
     def pending_for_session(self, session_id: str) -> list[RunCheckpoint]:
         with self._connection() as connection:
             rows = connection.execute(
-                "SELECT checkpoint_json FROM agent_run_checkpoints WHERE session_id=? AND status IN ('waiting_user_input','waiting_context','waiting_approval') ORDER BY updated_at DESC",
+                "SELECT checkpoint_json FROM agent_run_checkpoints WHERE session_id=%s AND status IN ('waiting_user_input','waiting_context','waiting_approval') ORDER BY updated_at DESC",
                 (str(session_id),),
             ).fetchall()
         return [self._checkpoint_from_json(row["checkpoint_json"]) for row in rows]
@@ -169,7 +141,7 @@ class RunCheckpointStore:
         with self._lock, self._connection() as connection:
             connection.execute(
                 """INSERT INTO agent_request_checkpoints(run_id,request_id,status,checkpoint_json,updated_at)
-                VALUES(?,?,?,?,?)
+                VALUES(%s,%s,%s,%s,%s)
                 ON CONFLICT(run_id,request_id) DO UPDATE SET
                   status=excluded.status,checkpoint_json=excluded.checkpoint_json,updated_at=excluded.updated_at""",
                 (checkpoint.run_id, checkpoint.request_id, checkpoint.status,
@@ -180,7 +152,7 @@ class RunCheckpointStore:
     def requests_for_run(self, run_id: str) -> list[RequestCheckpoint]:
         with self._connection() as connection:
             rows = connection.execute(
-                "SELECT checkpoint_json FROM agent_request_checkpoints WHERE run_id=? ORDER BY request_id",
+                "SELECT checkpoint_json FROM agent_request_checkpoints WHERE run_id=%s ORDER BY request_id",
                 (str(run_id),),
             ).fetchall()
         return [RequestCheckpoint(**json.loads(row["checkpoint_json"])) for row in rows]

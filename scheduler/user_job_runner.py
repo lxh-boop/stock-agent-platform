@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from config import AGENT_QUANT_DB_PATH
 from database.repositories import UserRepository
 from evaluation.evaluation_pipeline import evaluate_due_adjustments, update_ai_reliability
 from portfolio.cash_flow import apply_cash_flows_to_account, list_cash_flows
@@ -43,7 +42,7 @@ def _safe_user_id(value: Any) -> str:
 
 
 def get_active_user_ids(
-    db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+    db_path: str | Path | None = None,
     output_dir: str | Path = "outputs",
 ) -> list[str]:
     del output_dir
@@ -62,7 +61,7 @@ def has_existing_orders_for_trade_date(
     user_id: str,
     trade_date: str,
     output_dir: str | Path = "outputs",
-    db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+    db_path: str | Path | None = None,
 ) -> bool:
     del output_dir
     from database.repositories import PortfolioRepository
@@ -80,7 +79,7 @@ def apply_due_cash_flows_for_user(
     user_id: str,
     trade_date: str,
     output_dir: str | Path = "outputs",
-    db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+    db_path: str | Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     storage = PortfolioStorage(db_path, output_dir=portfolio_user_dir(user_id, output_dir), use_database=not dry_run)
@@ -110,7 +109,7 @@ def run_user_daily_job(
     user_id: str,
     trade_date: str,
     output_dir: str | Path = "outputs",
-    db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+    db_path: str | Path | None = None,
     top_k: int = 50,
     dry_run: bool = False,
     skip_news: bool = False,

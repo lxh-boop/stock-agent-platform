@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from database.sqlite_store import SQLiteStore
+from database.postgres_store import PostgresStore
 
 
 class EvaluationRepository:
     def __init__(self, db_path: str | Path | None = None):
-        self.store = SQLiteStore(db_path)
+        self.store = PostgresStore()
 
     def insert_backtest_evaluation(self, record: dict[str, Any]) -> dict[str, Any]:
         return self.store.upsert("backtest_evaluation", record)

@@ -255,8 +255,3 @@ LOCAL_TRAIN_CSV_PATH = r"data\local_train_stock_data.csv"
 # Paper trading defaults
 DEFAULT_INITIAL_CASH = 150000.0
 DEFAULT_PAPER_TRADING_START_DATE = "2026-04-01"
-AGENT_QUANT_DB_PATH = (
-    str(get_database_dir() / "agent_quant.db")
-    if is_frozen_app()
-    else os.path.join(DATA_DIR, "agent_quant.db")
-)

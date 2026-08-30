@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from database.schemas import json_dumps, json_loads
-from database.sqlite_store import SQLiteStore
+from database.postgres_store import PostgresStore
 
 
 SNAPSHOT_JSON_FIELDS = [
@@ -30,7 +30,7 @@ SNAPSHOT_JSON_ALIASES = {
 
 class SystemMonitorRepository:
     def __init__(self, db_path: str | Path | None = None):
-        self.store = SQLiteStore(db_path)
+        self.store = PostgresStore()
 
     def _encode_snapshot(self, record: dict[str, Any]) -> dict[str, Any]:
         payload = dict(record)

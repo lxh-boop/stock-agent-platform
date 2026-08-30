@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
-import sqlite3
-from pathlib import Path
 from typing import Any, Iterator, Sequence
 
-from database.connection import get_connection, initialize_database
+from database.connection import get_connection
 
 
 def _json(value: Any) -> str:
@@ -19,22 +17,21 @@ def _json(value: Any) -> str:
     )
 
 
-def _dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+def _dict(row: dict[str, Any] | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
 class ProposalRepository:
-    """SQLite persistence boundary for the canonical Agent Proposal runtime."""
+    """PostgreSQL persistence boundary for the canonical Agent Proposal runtime."""
 
-    def __init__(self, db_path: str | Path | None = None) -> None:
-        self.path = initialize_database(db_path)
+    def __init__(self) -> None:
+        pass
 
     @contextmanager
-    def _connect(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
-        conn = get_connection(self.path)
+    def _connect(self, *, immediate: bool = False) -> Iterator[object]:
+        del immediate
+        conn = get_connection()
         try:
-            if immediate:
-                conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception:
@@ -44,13 +41,13 @@ class ProposalRepository:
             conn.close()
 
     @staticmethod
-    def _hydrate(conn: sqlite3.Connection, row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _hydrate(conn, row: dict[str, Any] | None) -> dict[str, Any] | None:
         if row is None:
             return None
         record = dict(row)
         version = conn.execute(
             """SELECT payload_json FROM proposal_versions
-               WHERE proposal_id=? AND version=?""",
+               WHERE proposal_id=%s AND version=%s""",
             (record["proposal_id"], int(record["current_version"])),
         ).fetchone()
         record["payload"] = json.loads(str(version["payload_json"] or "{}")) if version else {}
@@ -61,7 +58,7 @@ class ProposalRepository:
     def get(self, proposal_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM proposals WHERE proposal_id=?",
+                "SELECT * FROM proposals WHERE proposal_id=%s",
                 (str(proposal_id or ""),),
             ).fetchone()
             return self._hydrate(conn, row)
@@ -77,15 +74,15 @@ class ProposalRepository:
             if session_id is None:
                 rows = conn.execute(
                     """SELECT * FROM proposals
-                       WHERE user_id=? AND status='pending_approval'
-                       ORDER BY updated_at DESC LIMIT ?""",
+                       WHERE user_id=%s AND status='pending_approval'
+                       ORDER BY updated_at DESC LIMIT %s""",
                     (str(user_id), int(limit)),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     """SELECT * FROM proposals
-                       WHERE user_id=? AND session_id=? AND status='pending_approval'
-                       ORDER BY updated_at DESC LIMIT ?""",
+                       WHERE user_id=%s AND session_id=%s AND status='pending_approval'
+                       ORDER BY updated_at DESC LIMIT %s""",
                     (str(user_id), str(session_id), int(limit)),
                 ).fetchall()
             return [record for row in rows if (record := self._hydrate(conn, row)) is not None]
@@ -93,9 +90,9 @@ class ProposalRepository:
     def expire_due(self, *, now: str) -> int:
         with self._connect(immediate=True) as conn:
             cursor = conn.execute(
-                """UPDATE proposals SET status='expired', updated_at=?
+                """UPDATE proposals SET status='expired', updated_at=%s
                    WHERE status='pending_approval' AND expires_at<>''
-                     AND datetime(expires_at) <= datetime(?)""",
+                     AND NULLIF(expires_at, '')::timestamptz <= %s::timestamptz""",
                 (str(now), str(now)),
             )
             return int(cursor.rowcount or 0)
@@ -118,7 +115,7 @@ class ProposalRepository:
     ) -> tuple[dict[str, Any], bool]:
         with self._connect(immediate=True) as conn:
             existing = conn.execute(
-                "SELECT * FROM proposals WHERE proposal_id=?",
+                "SELECT * FROM proposals WHERE proposal_id=%s",
                 (str(proposal_id),),
             ).fetchone()
             if existing is not None:
@@ -130,7 +127,7 @@ class ProposalRepository:
                     proposal_id, proposal_type, user_id, session_id, source_run_id,
                     source_request_id, current_version, status, current_payload_hash,
                     approval_binding_json, created_at, updated_at, expires_at, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, 1, 'pending_approval', ?, '{}', ?, ?, ?, ?)""",
+                ) VALUES (%s, %s, %s, %s, %s, %s, 1, 'pending_approval', %s, '{}', %s, %s, %s, %s)""",
                 (
                     proposal_id,
                     proposal_type,
@@ -149,10 +146,10 @@ class ProposalRepository:
                 """INSERT INTO proposal_versions (
                     proposal_id, version, payload_hash, payload_json, created_at,
                     created_by, revision_reason, base_version, metadata_json
-                ) VALUES (?, 1, ?, ?, ?, ?, '', 0, '{}')""",
+                ) VALUES (%s, 1, %s, %s, %s, %s, '', 0, '{}')""",
                 (proposal_id, payload_hash, _json(payload), now, created_by),
             )
-            row = conn.execute("SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
+            row = conn.execute("SELECT * FROM proposals WHERE proposal_id=%s", (proposal_id,)).fetchone()
             hydrated = self._hydrate(conn, row)
             assert hydrated is not None
             return hydrated, True
@@ -170,7 +167,7 @@ class ProposalRepository:
         allowed_statuses: Sequence[str],
     ) -> tuple[dict[str, Any] | None, str]:
         with self._connect(immediate=True) as conn:
-            row = conn.execute("SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
+            row = conn.execute("SELECT * FROM proposals WHERE proposal_id=%s", (proposal_id,)).fetchone()
             if row is None:
                 return None, "not_found"
             if str(row["user_id"]) != str(user_id):
@@ -185,7 +182,7 @@ class ProposalRepository:
                 """INSERT INTO proposal_versions (
                     proposal_id, version, payload_hash, payload_json, created_at,
                     created_by, revision_reason, base_version, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}')""",
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '{}')""",
                 (
                     proposal_id,
                     next_version,
@@ -198,12 +195,12 @@ class ProposalRepository:
                 ),
             )
             conn.execute(
-                """UPDATE proposals SET current_version=?, current_payload_hash=?,
-                   status='pending_approval', approval_binding_json='{}', updated_at=?
-                   WHERE proposal_id=?""",
+                """UPDATE proposals SET current_version=%s, current_payload_hash=%s,
+                   status='pending_approval', approval_binding_json='{}', updated_at=%s
+                   WHERE proposal_id=%s""",
                 (next_version, payload_hash, now, proposal_id),
             )
-            updated = conn.execute("SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
+            updated = conn.execute("SELECT * FROM proposals WHERE proposal_id=%s", (proposal_id,)).fetchone()
             return self._hydrate(conn, updated), "revised"
 
     def transition(
@@ -216,7 +213,7 @@ class ProposalRepository:
         now: str,
     ) -> tuple[dict[str, Any] | None, str]:
         with self._connect(immediate=True) as conn:
-            row = conn.execute("SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
+            row = conn.execute("SELECT * FROM proposals WHERE proposal_id=%s", (proposal_id,)).fetchone()
             if row is None:
                 return None, "not_found"
             if str(row["user_id"]) != str(user_id):
@@ -226,10 +223,10 @@ class ProposalRepository:
             if str(row["status"]) not in set(allowed_from):
                 return self._hydrate(conn, row), "status_forbidden"
             conn.execute(
-                "UPDATE proposals SET status=?, updated_at=? WHERE proposal_id=?",
+                "UPDATE proposals SET status=%s, updated_at=%s WHERE proposal_id=%s",
                 (target, now, proposal_id),
             )
-            updated = conn.execute("SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
+            updated = conn.execute("SELECT * FROM proposals WHERE proposal_id=%s", (proposal_id,)).fetchone()
             return self._hydrate(conn, updated), "transitioned"
 
     def claim_execution(
@@ -243,7 +240,7 @@ class ProposalRepository:
         now: str,
     ) -> tuple[dict[str, Any] | None, str]:
         with self._connect(immediate=True) as conn:
-            row = conn.execute("SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
+            row = conn.execute("SELECT * FROM proposals WHERE proposal_id=%s", (proposal_id,)).fetchone()
             if row is None:
                 return None, "not_found"
             hydrated = self._hydrate(conn, row)
@@ -256,18 +253,18 @@ class ProposalRepository:
             if str(row["current_payload_hash"]) != str(expected_payload_hash):
                 return hydrated, "payload_hash_changed"
             conn.execute(
-                """UPDATE proposals SET status='executing', approval_binding_json=?, updated_at=?
-                   WHERE proposal_id=?""",
+                """UPDATE proposals SET status='executing', approval_binding_json=%s, updated_at=%s
+                   WHERE proposal_id=%s""",
                 (_json(approval_binding), now, proposal_id),
             )
-            updated = conn.execute("SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
+            updated = conn.execute("SELECT * FROM proposals WHERE proposal_id=%s", (proposal_id,)).fetchone()
             return self._hydrate(conn, updated), "claimed"
 
     def get_action(self, *, user_id: str, idempotency_key: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
                 """SELECT * FROM proposal_action_requests
-                   WHERE user_id=? AND idempotency_key=?""",
+                   WHERE user_id=%s AND idempotency_key=%s""",
                 (user_id, idempotency_key),
             ).fetchone()
             record = _dict(row)
@@ -290,7 +287,7 @@ class ProposalRepository:
         with self._connect(immediate=True) as conn:
             existing = conn.execute(
                 """SELECT * FROM proposal_action_requests
-                   WHERE user_id=? AND idempotency_key=?""",
+                   WHERE user_id=%s AND idempotency_key=%s""",
                 (user_id, idempotency_key),
             ).fetchone()
             if existing is not None:
@@ -301,7 +298,7 @@ class ProposalRepository:
                 """INSERT INTO proposal_action_requests (
                     action_request_id, proposal_id, user_id, session_id, action_type,
                     idempotency_key, request_hash, status, result_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'in_progress', '{}', ?, ?)""",
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'in_progress', '{}', %s, %s)""",
                 (
                     action_request_id,
                     proposal_id,
@@ -315,7 +312,7 @@ class ProposalRepository:
                 ),
             )
             row = conn.execute(
-                "SELECT * FROM proposal_action_requests WHERE action_request_id=?",
+                "SELECT * FROM proposal_action_requests WHERE action_request_id=%s",
                 (action_request_id,),
             ).fetchone()
             record = dict(row)
@@ -333,7 +330,7 @@ class ProposalRepository:
         with self._connect(immediate=True) as conn:
             conn.execute(
                 """UPDATE proposal_action_requests
-                   SET status=?, result_json=?, updated_at=?, completed_at=?
-                   WHERE action_request_id=?""",
+                   SET status=%s, result_json=%s, updated_at=%s, completed_at=%s
+                   WHERE action_request_id=%s""",
                 (status, _json(result), now, now, action_request_id),
             )

@@ -23,6 +23,7 @@ _SENSITIVE_SEED_DIRS = {
     "runtime",
     "config",
 }
+_DATABASE_FILE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 
 
 def is_frozen_app() -> bool:
@@ -109,6 +110,8 @@ def _skip_seed_path(path: Path) -> bool:
     lowered_name = path.name.lower()
     if lowered_name in _SENSITIVE_SEED_FILENAMES:
         return True
+    if path.suffix.lower() in _DATABASE_FILE_SUFFIXES:
+        return True
     return any(part.lower() in _SENSITIVE_SEED_DIRS for part in path.parts)
 
 
@@ -139,14 +142,6 @@ def _copy_missing_tree(source: Path, target: Path, skip_names: set[str] | None =
     return copied
 
 
-def _copy_missing_file(source: Path, target: Path) -> bool:
-    if not source.exists() or target.exists():
-        return False
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
-    return True
-
-
 def seed_user_data_from_bundle() -> None:
     if not is_frozen_app():
         return
@@ -156,24 +151,16 @@ def seed_user_data_from_bundle() -> None:
         return
 
     copied = {
-        "database": 0,
         "data": 0,
         "models": 0,
         "outputs": 0,
     }
 
-    bundled_db = seed_root / "database" / "agent_quant.db"
-    fallback_db = seed_root / "data" / "agent_quant.db"
-    if _copy_missing_file(
-        bundled_db if bundled_db.exists() else fallback_db,
-        get_database_dir() / "agent_quant.db",
-    ):
-        copied["database"] += 1
-
+    # PostgreSQL-only: bundled seed may contain non-database demo/cache data,
+    # but local SQLite database files are never restored into user data.
     copied["data"] += _copy_missing_tree(
         seed_root / "data",
         get_data_dir(),
-        skip_names={"agent_quant.db"},
     )
     copied["models"] += _copy_missing_tree(seed_root / "models", get_models_dir())
     copied["outputs"] += _copy_missing_tree(seed_root / "outputs", get_outputs_dir())

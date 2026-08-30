@@ -76,7 +76,7 @@ def load_alias_table(db_path: str | Path = NEWS_MAPPING_DB_PATH) -> pd.DataFrame
         return pd.read_sql_query(
             """
             SELECT alias, code, name, source, confidence
-            FROM stock_alias
+            FROM news_mapping_stock_alias
             WHERE alias IS NOT NULL AND alias != ''
             """,
             conn,
@@ -89,7 +89,7 @@ def load_stock_master(db_path: str | Path = NEWS_MAPPING_DB_PATH) -> pd.DataFram
         return pd.read_sql_query(
             """
             SELECT code, name, fullname, industry, area
-            FROM stock_master
+            FROM news_mapping_stock_master
             """,
             conn,
         )
@@ -268,9 +268,9 @@ def main() -> None:
         news = pd.read_sql_query(
             """
             SELECT news_id, title, content
-            FROM news_items
+            FROM news_mapping_news_items
             ORDER BY publish_time DESC
-            LIMIT ?
+            LIMIT %s
             """,
             conn,
             params=(args.limit,),

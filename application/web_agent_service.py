@@ -6,7 +6,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from config import AGENT_QUANT_DB_PATH, OUTPUT_DIR
+from config import OUTPUT_DIR
 from application.agent_service import AgentApplicationService
 from application.handoff_service import build_handoff_safe_summary
 from application.reflection_service import build_reflection_safe_summary
@@ -304,7 +304,7 @@ class WebAgentApplicationService:
         self,
         *,
         output_dir: str | Path = OUTPUT_DIR,
-        db_path: str | Path | None = AGENT_QUANT_DB_PATH,
+        db_path: str | Path | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.db_path = Path(db_path) if db_path else None

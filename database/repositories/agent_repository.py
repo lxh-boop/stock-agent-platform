@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from database.schemas import json_dumps, json_loads
-from database.sqlite_store import SQLiteStore
+from database.postgres_store import PostgresStore
 
 
 AGENT_DECISION_JSON_FIELDS = [
@@ -70,7 +70,7 @@ JSON_ALIASES: dict[str, str] = {
 
 class AgentRepository:
     def __init__(self, db_path: str | Path | None = None):
-        self.store = SQLiteStore(db_path)
+        self.store = PostgresStore()
 
     def _encode_runtime_record(self, table: str, record: dict[str, Any]) -> dict[str, Any]:
         payload = dict(record)

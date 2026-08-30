@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from database.schemas import calculate_mapping_confidence, json_dumps, json_loads
-from database.sqlite_store import SQLiteStore
+from database.postgres_store import PostgresStore
 
 
 def _parse_datetime(value: str | datetime) -> datetime:
@@ -67,7 +67,7 @@ def assign_news_trade_date(
 
 class NewsRepository:
     def __init__(self, db_path: str | Path | None = None):
-        self.store = SQLiteStore(db_path)
+        self.store = PostgresStore()
 
     def insert_news_event(self, record: dict[str, Any]) -> dict[str, Any]:
         return self.store.upsert("news_event", record)

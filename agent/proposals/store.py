@@ -76,8 +76,8 @@ class ProposalStore:
         # Retained for the frozen Stage 6 caller signature. Proposal state is no
         # longer stored below outputs/.
         del output_dir
-        self.repository = ProposalRepository(db_path)
-        self.path = self.repository.path
+        del db_path
+        self.repository = ProposalRepository()
 
     @staticmethod
     def deterministic_id(

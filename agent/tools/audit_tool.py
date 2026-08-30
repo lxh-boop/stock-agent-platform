@@ -6,7 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from database.schemas import json_dumps
-from database.sqlite_store import SQLiteStore
+from database.postgres_store import PostgresStore
 
 from agent.tools._common import now_text, to_serializable
 
@@ -62,7 +62,7 @@ def write_agent_action_log(
         db_record = dict(record)
         for key in ["tool_input", "tool_output_summary"]:
             db_record[key] = json_dumps(db_record[key])
-        SQLiteStore(db_path).upsert("agent_action_log", db_record)
+        PostgresStore().upsert("agent_action_log", db_record)
     except Exception:
         pass
     return record
@@ -95,7 +95,7 @@ def write_agent_tool_call_log(
         db_record = dict(record)
         for key in ["tool_input", "tool_output_summary"]:
             db_record[key] = json_dumps(db_record[key])
-        SQLiteStore(db_path).upsert("agent_tool_call_log", db_record)
+        PostgresStore().upsert("agent_tool_call_log", db_record)
     except Exception:
         pass
     return record
@@ -126,7 +126,7 @@ def write_agent_confirmation_log(
     }
     _append_jsonl(_audit_dir(output_dir, record["user_id"]) / "agent_confirmation_log.jsonl", record)
     try:
-        SQLiteStore(db_path).upsert("agent_confirmation_log", record)
+        PostgresStore().upsert("agent_confirmation_log", record)
     except Exception:
         pass
     return record

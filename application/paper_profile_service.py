@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import pandas as pd
-from config import AGENT_QUANT_DB_PATH, OUTPUT_DIR
+from config import OUTPUT_DIR
 from portfolio.trading_permissions import (
     DEFAULT_TRADING_PERMISSIONS,
     normalize_trading_permissions,
@@ -125,8 +125,7 @@ def load_classic_ranking_with_ai_adjustment(
     ranking_path=None,
     recommendations_path=None,
     sort_by="original_rank",
-    db_path=AGENT_QUANT_DB_PATH,
-):
+    db_path=None):
     from agent.services.market_analysis_service import market_analysis_service
 
     result = market_analysis_service.get_signal_summary(

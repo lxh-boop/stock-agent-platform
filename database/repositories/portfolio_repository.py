@@ -4,13 +4,12 @@ from pathlib import Path
 from typing import Any
 
 from database.schemas import json_dumps, json_loads
-from database.connection import get_connection
-from database.sqlite_store import SQLiteStore, quote_identifier, run_with_sqlite_lock_retry
+from database.postgres_store import PostgresStore
 
 
 class PortfolioRepository:
     def __init__(self, db_path: str | Path | None = None):
-        self.store = SQLiteStore(db_path)
+        self.store = PostgresStore()
 
     def insert_position(self, record: dict[str, Any]) -> dict[str, Any]:
         return self.store.upsert("portfolio_position", record)
@@ -21,27 +20,10 @@ class PortfolioRepository:
         if any(str(record.get("user_id") or "") != user for record in payloads):
             raise ValueError("position_owner_mismatch")
 
-        def operation() -> None:
-            conn = get_connection(self.store.db_path)
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                conn.execute("DELETE FROM portfolio_position WHERE user_id=?", (user,))
-                for record in payloads:
-                    columns = list(record)
-                    column_sql = ", ".join(quote_identifier(column) for column in columns)
-                    placeholders = ", ".join("?" for _ in columns)
-                    conn.execute(
-                        f"INSERT INTO portfolio_position ({column_sql}) VALUES ({placeholders})",
-                        [record[column] for column in columns],
-                    )
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                conn.close()
-
-        run_with_sqlite_lock_retry(operation)
+        with self.store.transaction() as conn:
+            self.store.delete_where("portfolio_position", {"user_id": user}, connection=conn)
+            for record in payloads:
+                self.store.insert("portfolio_position", record, connection=conn)
         return payloads
 
     def get_position(self, position_id: str) -> dict[str, Any] | None:
@@ -97,29 +79,10 @@ class PortfolioRepository:
         if any(str(record.get("user_id") or "") != user for record in payloads):
             raise ValueError("paper_order_owner_mismatch")
 
-        def operation() -> None:
-            conn = get_connection(self.store.db_path)
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                conn.execute("DELETE FROM paper_order WHERE user_id=?", (user,))
-                for record in payloads:
-                    columns = list(record)
-                    column_sql = ", ".join(
-                        quote_identifier(column) for column in columns
-                    )
-                    placeholders = ", ".join("?" for _ in columns)
-                    conn.execute(
-                        f"INSERT INTO paper_order ({column_sql}) VALUES ({placeholders})",
-                        [record[column] for column in columns],
-                    )
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                conn.close()
-
-        run_with_sqlite_lock_retry(operation)
+        with self.store.transaction() as conn:
+            self.store.delete_where("paper_order", {"user_id": user}, connection=conn)
+            for record in payloads:
+                self.store.insert("paper_order", record, connection=conn)
         return payloads
 
     def get_paper_order(self, order_id: str) -> dict[str, Any] | None:

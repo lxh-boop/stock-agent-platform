@@ -229,6 +229,20 @@ class ToolDagExecutor:
         }
         succeeded = set(results)
         failed: set[str] = set()
+        run_id = str(execution_context.get("run_id") or "")
+        flow_event(
+            "TOOL_DAG_EXECUTION_STARTED",
+            {
+                "worker_task_id": plan.worker_task_id,
+                "worker_role": plan.worker_role,
+                "status": "running",
+                "tool_node_count": len(by_id),
+                "preexisting_result_count": len(preexisting_ids),
+                "selected_task_count": len(pending),
+            },
+            run_id=run_id,
+            task_id=plan.worker_task_id,
+        )
 
         while pending:
             ready = sorted(
@@ -261,7 +275,23 @@ class ToolDagExecutor:
                         level="WARNING",
                     )
                     continue
-                raise RuntimeError("tool_dag_execution_stalled:" + ",".join(sorted(pending)))
+                stalled_ids = sorted(pending)
+                flow_event(
+                    "TOOL_DAG_EXECUTION_FAILED",
+                    {
+                        "worker_task_id": plan.worker_task_id,
+                        "worker_role": plan.worker_role,
+                        "status": "failed",
+                        "failure_kind": "tool_dag_execution_stalled",
+                        "error_code": "tool_dag_execution_stalled",
+                        "retryable": True,
+                        "pending_tool_task_ids": stalled_ids,
+                    },
+                    run_id=run_id,
+                    task_id=plan.worker_task_id,
+                    level="ERROR",
+                )
+                raise RuntimeError("tool_dag_execution_stalled:" + ",".join(stalled_ids))
 
             execution_batches.append(ready)
             flow_event(
@@ -357,6 +387,24 @@ class ToolDagExecutor:
                 )
                 for task_id in plan.final_output_task_ids
             )
+        )
+        flow_event(
+            "TOOL_DAG_EXECUTION_COMPLETED",
+            {
+                "worker_task_id": plan.worker_task_id,
+                "worker_role": plan.worker_role,
+                "status": "completed" if success else "partial",
+                "success": bool(success),
+                "tool_node_count": len(by_id),
+                "executed_node_count": len(node_records),
+                "reused_result_count": len(preexisting_ids),
+                "failed_node_count": len([record for record in node_records if record.status != "succeeded"]),
+                "execution_batch_count": len(execution_batches),
+                "final_output_task_ids": list(plan.final_output_task_ids),
+            },
+            run_id=run_id,
+            task_id=plan.worker_task_id,
+            level="INFO" if success else "WARNING",
         )
         return ToolDagExecutionResult(
             plan=plan,

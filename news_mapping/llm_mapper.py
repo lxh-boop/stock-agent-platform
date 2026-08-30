@@ -253,8 +253,8 @@ def load_news_item(news_id: str, db_path: str | Path = NEWS_MAPPING_DB_PATH) -> 
         row = conn.execute(
             """
             SELECT news_id, date, publish_time, title, content, source, url
-            FROM news_items
-            WHERE news_id = ?
+            FROM news_mapping_news_items
+            WHERE news_id = %s
             """,
             (news_id,),
         ).fetchone()
@@ -269,7 +269,7 @@ def load_latest_news_item(db_path: str | Path = NEWS_MAPPING_DB_PATH) -> dict:
         row = conn.execute(
             """
             SELECT news_id, date, publish_time, title, content, source, url
-            FROM news_items
+            FROM news_mapping_news_items
             ORDER BY publish_time DESC
             LIMIT 1
             """

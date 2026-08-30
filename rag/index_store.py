@@ -6,11 +6,15 @@ from uuid import uuid4
 
 from rag.bm25_retriever import BM25Retriever
 from rag.dense_retriever import DenseRetriever
+from storage_governance.lifecycle import prune_stale_atomic_temp_files
 
 
 def _atomic_save(save_func, path: str | Path) -> Path:
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # The active BM25/Dense path remains the sole index source of truth. Remove
+    # only stale temp siblings left by interrupted atomic saves.
+    prune_stale_atomic_temp_files(out_path)
     tmp_path = out_path.with_name(f"{out_path.name}.{uuid4().hex}.tmp")
     try:
         save_func(tmp_path)

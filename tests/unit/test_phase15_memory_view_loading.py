@@ -8,14 +8,17 @@ from agent.memory import (
     MemoryType,
     list_memory_records_safe_page,
 )
+from agent.memory.in_memory_memory_store import InMemoryMemoryStore
+import agent.memory.memory_context_bridge as memory_bridge
 
 
 def _encoded(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
-def test_phase15_memory_safe_page_is_paginated_and_redacted(tmp_path) -> None:
-    manager = MemoryManager(db_path=tmp_path / "memory" / "memory_store.sqlite")
+def test_phase15_memory_safe_page_is_paginated_and_redacted(monkeypatch) -> None:
+    manager = MemoryManager(store=InMemoryMemoryStore())
+    monkeypatch.setattr(memory_bridge, "get_memory_manager_for_output", lambda _output_dir="outputs": manager)
     for index in range(7):
         manager.remember(
             user_id="u1",
@@ -34,7 +37,7 @@ def test_phase15_memory_safe_page_is_paginated_and_redacted(tmp_path) -> None:
             user_confirmed=True,
         )
 
-    page = list_memory_records_safe_page(user_id="u1", output_dir=tmp_path, limit=5, offset=0)
+    page = list_memory_records_safe_page(user_id="u1", output_dir="ignored", limit=5, offset=0)
     encoded = _encoded(page)
 
     assert page["status"] == "ok"
@@ -47,8 +50,10 @@ def test_phase15_memory_safe_page_is_paginated_and_redacted(tmp_path) -> None:
     assert r"D:\stock_daily_app" not in encoded
 
 
-def test_phase15_memory_safe_page_handles_missing_store(tmp_path) -> None:
-    page = list_memory_records_safe_page(user_id="missing", output_dir=tmp_path, limit=3, offset=10)
+def test_phase15_memory_safe_page_handles_empty_store(monkeypatch) -> None:
+    manager = MemoryManager(store=InMemoryMemoryStore())
+    monkeypatch.setattr(memory_bridge, "get_memory_manager_for_output", lambda _output_dir="outputs": manager)
+    page = list_memory_records_safe_page(user_id="missing", output_dir="ignored", limit=3, offset=10)
     encoded = _encoded(page)
 
     assert page["status"] == "ok"

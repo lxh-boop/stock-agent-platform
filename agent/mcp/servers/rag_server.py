@@ -10,7 +10,7 @@ from mcp.types import ToolAnnotations
 
 from agent.mcp.adapters import RagMCPAdapter
 from agent.mcp.tool_envelope import MCPToolEnvelope
-from config import AGENT_QUANT_DB_PATH, OUTPUT_DIR
+from config import OUTPUT_DIR
 
 
 READ_ONLY = ToolAnnotations(
@@ -71,15 +71,11 @@ def create_rag_server(
 def main() -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
-        "--db-path",
-        default=os.environ.get("STOCK_MCP_DB_PATH") or str(AGENT_QUANT_DB_PATH),
-    )
-    parser.add_argument(
         "--output-dir",
         default=os.environ.get("STOCK_MCP_OUTPUT_DIR") or str(OUTPUT_DIR),
     )
     args = parser.parse_args()
-    create_rag_server(db_path=args.db_path, output_dir=args.output_dir).run("stdio")
+    create_rag_server(output_dir=args.output_dir).run("stdio")
 
 
 if __name__ == "__main__":

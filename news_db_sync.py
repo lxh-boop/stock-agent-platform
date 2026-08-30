@@ -8,9 +8,8 @@ from typing import Any
 
 import pandas as pd
 
-from database.connection import get_connection, initialize_database
 from database.repositories.news_repository import assign_news_trade_date
-from database.sqlite_store import quote_identifier
+from database.postgres_store import PostgresStore
 from database.table_registry import primary_key_for
 from event_rules import classify_event_title
 from news_data import EVENT_COLUMNS, load_event_cache, refresh_news_event_cache
@@ -281,38 +280,27 @@ def _is_announcement(source: str) -> int:
 def _bulk_upsert(db_path: str | Path | None, table: str, records: list[dict[str, Any]]) -> None:
     if not records:
         return
-    path = initialize_database(db_path)
-    pk_columns = primary_key_for(table)
-    columns = list(records[0])
-    table_sql = quote_identifier(table)
-    column_sql = ", ".join(quote_identifier(col) for col in columns)
-    placeholders = ", ".join(f":{col}" for col in columns)
-    conflict_sql = ", ".join(quote_identifier(col) for col in pk_columns)
-    update_columns = [col for col in columns if col not in pk_columns]
-    update_sql = ", ".join(
-        f"{quote_identifier(col)}=excluded.{quote_identifier(col)}"
-        for col in update_columns
-    )
-    sql = (
-        f"INSERT INTO {table_sql} ({column_sql}) VALUES ({placeholders}) "
-        f"ON CONFLICT ({conflict_sql}) DO UPDATE SET {update_sql}"
-    )
-    with get_connection(path) as conn:
-        conn.executemany(sql, records)
-        conn.commit()
+    _ = db_path
+    store = PostgresStore()
+    with store.transaction() as conn:
+        for record in records:
+            store.upsert(table, record, connection=conn)
 
 
 def _delete_chunks_for_news_ids(db_path: str | Path | None, news_ids: list[str]) -> None:
     ids = [str(item or "") for item in news_ids if str(item or "").strip()]
     if not ids:
         return
-    path = initialize_database(db_path)
-    with get_connection(path) as conn:
+    _ = db_path
+    store = PostgresStore()
+    with store.transaction() as conn:
         for start in range(0, len(ids), 500):
             batch = ids[start : start + 500]
-            placeholders = ", ".join("?" for _ in batch)
-            conn.execute(f"DELETE FROM news_chunk WHERE news_id IN ({placeholders})", batch)
-        conn.commit()
+            placeholders = ", ".join("%s" for _ in batch)
+            conn.execute(
+                f"DELETE FROM news_chunk WHERE news_id IN ({placeholders})",
+                batch,
+            )
 
 
 def _protected_full_text_news_ids(
@@ -327,12 +315,12 @@ def _protected_full_text_news_ids(
     ]
     if not ids:
         return set()
-    path = initialize_database(db_path)
+    _ = db_path
     protected: set[str] = set()
-    with get_connection(path) as conn:
+    with PostgresStore().transaction() as conn:
         for start in range(0, len(ids), 500):
             batch = ids[start : start + 500]
-            placeholders = ", ".join("?" for _ in batch)
+            placeholders = ", ".join("%s" for _ in batch)
             rows = conn.execute(
                 f"""
                 SELECT news_id, content

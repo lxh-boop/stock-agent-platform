@@ -45,7 +45,10 @@ def memory_search_adapter(args: dict[str, Any], context: dict[str, Any]) -> dict
         "warnings": [],
         "errors": [],
         "sources": [],
-        "metadata": {"read_only": True, "store": "outputs/memory/memory_store.sqlite"},
+        "metadata": {
+            "read_only": True,
+            "store": str(manager.store.describe().get("backend_name") or "memory_store"),
+        },
     }
 
 
@@ -61,5 +64,8 @@ def memory_get_summary_adapter(args: dict[str, Any], context: dict[str, Any]) ->
         "warnings": [],
         "errors": [],
         "sources": [],
-        "metadata": {"read_only": True, "store": "outputs/memory/memory_store.sqlite"},
+        "metadata": {
+            "read_only": True,
+            "store": str(summary.get("store") or "memory_store"),
+        },
     }

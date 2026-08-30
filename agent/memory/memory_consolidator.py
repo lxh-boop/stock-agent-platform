@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from .memory_store import SQLiteMemoryStore
+from .memory_store import MemoryStore
 from .memory_types import MemoryRecord
 
 
@@ -41,7 +41,7 @@ class MemoryConsolidator:
             consolidated.append(merged)
         return consolidated
 
-    def consolidate_store(self, store: SQLiteMemoryStore, *, user_id: str, limit: int = 500) -> dict[str, Any]:
+    def consolidate_store(self, store: MemoryStore, *, user_id: str, limit: int = 500) -> dict[str, Any]:
         records = store.list_records(user_id=user_id, limit=limit)
         consolidated = self.consolidate(records)
         consolidated_ids = {record.memory_id for record in consolidated}

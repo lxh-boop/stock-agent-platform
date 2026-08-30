@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .memory_store import SQLiteMemoryStore
+from .memory_store import MemoryStore
 from .memory_types import MemoryRecord, is_record_expired
 
 
@@ -21,7 +21,7 @@ class MemoryPruner:
         overflow = active_sorted[: max(0, len(active_sorted) - self.max_records_per_user)]
         return [*expired, *low_importance, *overflow]
 
-    def prune_store(self, store: SQLiteMemoryStore, *, user_id: str, hard: bool = False, limit: int = 2000) -> dict[str, Any]:
+    def prune_store(self, store: MemoryStore, *, user_id: str, hard: bool = False, limit: int = 2000) -> dict[str, Any]:
         records = store.list_records(user_id=user_id, include_expired=True, limit=limit)
         prunable = self.select_prunable(records)
         deleted = 0

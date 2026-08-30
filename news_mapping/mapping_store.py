@@ -8,7 +8,7 @@ from pathlib import Path
 from .concept_mapper import map_concepts_to_stocks
 from .entity_extractor import extract_entities_for_news_row
 from .llm_mapper import load_news_item, map_news_with_llm
-from .schema import NEWS_MAPPING_DB_PATH, get_connection, init_db
+from .schema import NEWS_MAPPING_DB_PATH, execute_many, get_connection, init_db
 from local_config import load_local_config
 
 
@@ -71,12 +71,12 @@ def save_news_stock_links(
 
     if rows:
         with get_connection(db_path) as conn:
-            conn.executemany(
+            execute_many(conn, 
                 """
-                INSERT INTO news_stock_links
+                INSERT INTO news_mapping_news_stock_links
                     (news_id, code, name, link_type, confidence, reason, evidence, mapper, status, created_at)
                 VALUES
-                    (:news_id, :code, :name, :link_type, :confidence, :reason, :evidence, :mapper, :status, :created_at)
+                    (%(news_id)s, %(code)s, %(name)s, %(link_type)s, %(confidence)s, %(reason)s, %(evidence)s, %(mapper)s, %(status)s, %(created_at)s)
                 ON CONFLICT(news_id, code, mapper) DO UPDATE SET
                     name=excluded.name,
                     link_type=excluded.link_type,
@@ -199,25 +199,25 @@ def update_link_status(
     with get_connection(db_path) as conn:
         row = conn.execute(
             """
-            SELECT status FROM news_stock_links
-            WHERE news_id=? AND code=? AND mapper=?
+            SELECT status FROM news_mapping_news_stock_links
+            WHERE news_id=%s AND code=%s AND mapper=%s
             """,
             (news_id, code, mapper),
         ).fetchone()
         old_status = row["status"] if row else ""
         conn.execute(
             """
-            UPDATE news_stock_links
-            SET status=?
-            WHERE news_id=? AND code=? AND mapper=?
+            UPDATE news_mapping_news_stock_links
+            SET status=%s
+            WHERE news_id=%s AND code=%s AND mapper=%s
             """,
             (new_status, news_id, code, mapper),
         )
         conn.execute(
             """
-            INSERT INTO mapping_feedback
+            INSERT INTO news_mapping_mapping_feedback
                 (news_id, code, old_status, new_status, comment, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (news_id, code, old_status, new_status, comment, now),
         )

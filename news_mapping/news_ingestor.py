@@ -12,7 +12,7 @@ import pandas as pd
 from local_config import load_local_config
 from news_data import load_event_cache, refresh_news_event_cache
 from universe import get_stock_pool
-from .schema import NEWS_MAPPING_DB_PATH, get_connection, init_db
+from .schema import NEWS_MAPPING_DB_PATH, execute_many, get_connection, init_db
 
 
 NEWS_COLUMNS = [
@@ -127,12 +127,12 @@ def save_news_items(
 
     rows = data.to_dict(orient="records")
     with get_connection(db_path) as conn:
-        conn.executemany(
+        execute_many(conn, 
             """
-            INSERT INTO news_items
+            INSERT INTO news_mapping_news_items
                 (news_id, date, publish_time, title, content, source, url, raw_text_hash, created_at)
             VALUES
-                (:news_id, :date, :publish_time, :title, :content, :source, :url, :raw_text_hash, :created_at)
+                (%(news_id)s, %(date)s, %(publish_time)s, %(title)s, %(content)s, %(source)s, %(url)s, %(raw_text_hash)s, %(created_at)s)
             ON CONFLICT(news_id) DO UPDATE SET
                 date=excluded.date,
                 publish_time=excluded.publish_time,

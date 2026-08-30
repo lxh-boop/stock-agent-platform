@@ -9,6 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from local_config import load_local_config, save_local_config
 from scheduler.runtime_scheduler import reload_runtime_scheduler, start_runtime_scheduler
+from storage_governance.lifecycle import append_bounded_text_log
 
 from runtime_paths import (
     ensure_runtime_directories,
@@ -30,10 +31,8 @@ DFT_UNET_BACKEND = "dft_unet_external"
 
 def write_log(text: str):
     log_path = LOG_DIR / "auto_retrain.log"
-
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(text)
-        f.write("\n")
+    # Keep the original scheduler log owner and path; only bound its lifecycle.
+    append_bounded_text_log(log_path, text)
 
 
 def run_command(cmd):

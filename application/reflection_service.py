@@ -11,7 +11,6 @@ FORBIDDEN_TEXT = (
     "confirmation_token",
     "api_key",
     "tushare_token",
-    "agent_quant.db",
     "raw_positions",
     "raw_evidence",
     "raw_tool_payload",

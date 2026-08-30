@@ -15,8 +15,7 @@ from typing import Any
 
 import requests
 
-from database.connection import get_connection, initialize_database
-from database.sqlite_store import quote_identifier
+from database.postgres_store import PostgresStore
 from news_db_sync import classify_content_level
 from rag.chunkers import chunk_announcement, chunk_news
 
@@ -251,11 +250,9 @@ def _write_raw_html(output_dir: str | Path, news_id: str, html_text: str) -> Pat
 
 
 def _select_candidates(db_path: str | Path, *, limit: int = 50) -> list[dict[str, Any]]:
-    path = initialize_database(db_path)
-    with get_connection(path) as conn:
-        rows = [
-            dict(row)
-            for row in conn.execute(
+    _ = db_path
+    store = PostgresStore()
+    rows = store.fetch_all(
                 """
                 SELECT *
                 FROM news_event
@@ -263,8 +260,7 @@ def _select_candidates(db_path: str | Path, *, limit: int = 50) -> list[dict[str
                   AND COALESCE(url, '') LIKE 'http%'
                 ORDER BY COALESCE(publish_time, created_at, '') DESC
                 """
-            ).fetchall()
-        ]
+    )
     if limit <= 0 or len(rows) <= limit:
         return rows
     by_source: dict[str, list[dict[str, Any]]] = {}
@@ -284,7 +280,7 @@ def _select_candidates(db_path: str | Path, *, limit: int = 50) -> list[dict[str
 
 def _existing_stock_code(conn, news_id: str) -> str:
     row = conn.execute(
-        "SELECT stock_code FROM news_chunk WHERE news_id = ? AND COALESCE(stock_code, '') != '' LIMIT 1",
+        "SELECT stock_code FROM news_chunk WHERE news_id = %s AND COALESCE(stock_code, '') != '' LIMIT 1",
         (news_id,),
     ).fetchone()
     return str(row["stock_code"] if row else "")
@@ -293,16 +289,9 @@ def _existing_stock_code(conn, news_id: str) -> str:
 def _upsert_chunks(conn, records: list[dict[str, Any]]) -> None:
     if not records:
         return
-    columns = list(records[0])
-    column_sql = ", ".join(quote_identifier(col) for col in columns)
-    placeholders = ", ".join(f":{col}" for col in columns)
-    update_columns = [col for col in columns if col != "chunk_id"]
-    update_sql = ", ".join(f"{quote_identifier(col)}=excluded.{quote_identifier(col)}" for col in update_columns)
-    sql = (
-        f"INSERT INTO news_chunk ({column_sql}) VALUES ({placeholders}) "
-        f"ON CONFLICT (chunk_id) DO UPDATE SET {update_sql}"
-    )
-    conn.executemany(sql, records)
+    store = PostgresStore()
+    for record in records:
+        store.upsert("news_chunk", record, connection=conn)
 
 
 def _apply_success(conn, event: dict[str, Any], result: FetchResult) -> int:
@@ -324,16 +313,16 @@ def _apply_success(conn, event: dict[str, Any], result: FetchResult) -> int:
     conn.execute(
         """
         UPDATE news_event
-           SET content = ?,
+           SET content = %s,
                content_level = 'full_text',
-               content_hash = ?,
+               content_hash = %s,
                raw_content_saved = 1,
-               raw_file_path = ?
-         WHERE news_id = ?
+               raw_file_path = %s
+         WHERE news_id = %s
         """,
         (_clean_text(result.content), _content_hash(title, summary, result.content, source, url), result.raw_file_path, news_id),
     )
-    conn.execute("DELETE FROM news_chunk WHERE news_id = ?", (news_id,))
+    conn.execute("DELETE FROM news_chunk WHERE news_id = %s", (news_id,))
     chunk_input = {
         "news_id": news_id,
         "title": title,
@@ -364,7 +353,7 @@ def _apply_success(conn, event: dict[str, Any], result: FetchResult) -> int:
 
 def backfill_news_full_text(
     *,
-    db_path: str | Path = "data/agent_quant.db",
+    db_path: str | Path | None = None,
     output_dir: str | Path = "outputs/news_full_text",
     limit: int = 50,
     workers: int = 4,
@@ -392,13 +381,12 @@ def backfill_news_full_text(
 
     chunk_rows = 0
     if not dry_run:
-        path = initialize_database(db_path)
+        _ = db_path
         by_id = {str(row.get("news_id") or ""): row for row in candidates}
-        with get_connection(path) as conn:
+        with PostgresStore().transaction() as conn:
             for result in results:
                 if result.status == "success":
                     chunk_rows += _apply_success(conn, by_id.get(result.news_id, {}), result)
-            conn.commit()
 
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -445,7 +433,7 @@ def backfill_news_full_text(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Backfill real article text for URL-backed news events.")
-    parser.add_argument("--db-path", default="data/agent_quant.db")
+    parser.add_argument("--db-path", default="")
     parser.add_argument("--output-dir", default="outputs/news_full_text")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--workers", type=int, default=4)

@@ -2128,6 +2128,19 @@ class AgentCollaborationCoordinator:
             before_unsatisfied = sum(
                 1 for item in observations if not item.get("semantic_satisfied")
             )
+            flow_event(
+                "WORKER_FORWARD_REPLAN_STARTED",
+                {
+                    "replan_round": replan_round,
+                    "status": "running",
+                    "candidate_task_ids": [str(item.get("task_id") or "") for item in replan_candidates],
+                    "candidate_failure_kinds": [str(item.get("failure_kind") or "") for item in replan_candidates],
+                    "before_unsatisfied": before_unsatisfied,
+                    "error_history_count": len(recovery_error_history),
+                },
+                run_id=run_id,
+                level="WARNING",
+            )
             try:
                 full_tasks, new_tasks, replan_meta = self.planner.replan_forward(
                     query=query,
@@ -2169,13 +2182,23 @@ class AgentCollaborationCoordinator:
                 if isinstance(item, dict)
             ]
             if not new_tasks:
-                replan_audit.append(
+                no_patch = {
+                    "round": replan_round,
+                    "status": "no_patch",
+                    "reason": "forward_replan_returned_no_new_tasks",
+                    "meta": replan_meta,
+                }
+                replan_audit.append(no_patch)
+                flow_event(
+                    "WORKER_FORWARD_REPLAN_NO_PATCH",
                     {
-                        "round": replan_round,
+                        "replan_round": replan_round,
                         "status": "no_patch",
                         "reason": "forward_replan_returned_no_new_tasks",
-                        "meta": replan_meta,
-                    }
+                        "error_history_count": len(recovery_error_history),
+                    },
+                    run_id=run_id,
+                    level="WARNING",
                 )
                 break
             _bind_authoritative_task_context(full_tasks, entity_catalog=entity_catalog)
@@ -2251,6 +2274,18 @@ class AgentCollaborationCoordinator:
                 "meta": replan_meta,
             }
             replan_audit.append(audit)
+            reused_task_ids = [str(value) for value in replan_meta.get("reused_task_ids") or [] if str(value)]
+            if reused_task_ids:
+                flow_event(
+                    "WORKER_RESULTS_REUSED",
+                    {
+                        "replan_round": replan_round,
+                        "status": "reused",
+                        "reused_task_ids": reused_task_ids,
+                        "reason": "successful_worker_results_frozen_and_reused",
+                    },
+                    run_id=run_id,
+                )
             flow_event(
                 "WORKER_FORWARD_REPLAN_EXECUTED",
                 audit,
@@ -2264,6 +2299,21 @@ class AgentCollaborationCoordinator:
 
         tasks = active_tasks
         final_observations = self._build_task_observations(tasks, results)
+        executed_replan_count = len([item for item in replan_audit if item.get("status") == "executed"])
+        remaining_unsatisfied = [item for item in final_observations if not item.get("semantic_satisfied")]
+        if executed_replan_count >= max_replan_rounds and remaining_unsatisfied:
+            flow_event(
+                "WORKER_FORWARD_REPLAN_EXHAUSTED",
+                {
+                    "replan_round": max_replan_rounds,
+                    "status": "exhausted",
+                    "replan_count": executed_replan_count,
+                    "remaining_unsatisfied_task_ids": [str(item.get("task_id") or "") for item in remaining_unsatisfied],
+                    "remaining_failure_kinds": [str(item.get("failure_kind") or "") for item in remaining_unsatisfied],
+                },
+                run_id=run_id,
+                level="WARNING",
+            )
         need_completion = evaluate_need_completion(
             dict(plan_meta.get("request_need_contract") or {}),
             final_observations,

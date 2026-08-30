@@ -25,3 +25,4 @@ jieba
 pyyaml
 mcp>=2,<3
 jsonschema>=4.20,<5
+psycopg[binary]>=3.2,<4

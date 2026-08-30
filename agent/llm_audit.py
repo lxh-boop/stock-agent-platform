@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from agent.console_trace import sanitize_for_trace
+from agent.console_trace import append_unified_event, sanitize_for_trace, unified_event_path
 
 
 _CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
@@ -79,12 +79,9 @@ def activate_llm_audit_context(
 def _event_path(context: dict[str, Any]) -> Path | None:
     run_id = str(context.get("run_id") or "").strip()
     output_dir = str(context.get("output_dir") or "").strip()
-    if not run_id or not output_dir:
+    if not run_id:
         return None
-    safe_run_id = "".join(char for char in run_id if char.isalnum() or char in {"_", "-"})
-    if not safe_run_id:
-        return None
-    return Path(output_dir) / "agent_llm_events" / f"{safe_run_id}.jsonl"
+    return unified_event_path(run_id, output_dir or None)
 
 
 def record_llm_call(
@@ -173,10 +170,11 @@ def record_llm_call(
         "thinking_disabled": bool(thinking_disabled),
         "timing": sanitize_for_trace(dict(timing or {})),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _LOCK:
-        with path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(sanitize_for_trace(event), ensure_ascii=False, sort_keys=True) + "\n")
+    append_unified_event(
+        sanitize_for_trace(event),
+        run_id=str(context.get("run_id") or ""),
+        output_dir=str(context.get("output_dir") or "") or None,
+    )
     try:
         from agent.console_trace import record_llm_timing
 
@@ -218,9 +216,11 @@ def record_schema_result(event_id: str, valid: bool) -> None:
         "response_schema_valid": bool(valid),
         "recorded_at": _utc_now(),
     }
-    with _LOCK:
-        with path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(update, ensure_ascii=False, sort_keys=True) + "\n")
+    append_unified_event(
+        update,
+        run_id=str(context.get("run_id") or ""),
+        output_dir=str(context.get("output_dir") or "") or None,
+    )
 
 
 def load_llm_events(output_dir: str | Path, run_id: str) -> list[dict[str, Any]]:

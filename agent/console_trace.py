@@ -11,6 +11,8 @@ import traceback
 from typing import Any
 import uuid
 
+from agent.observability.contracts import build_event_envelope
+
 
 _CURRENT_RUN_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
     "agent_flow_current_run_id",
@@ -25,6 +27,8 @@ _RUN_TOOL_EXECUTIONS: dict[str, list[dict[str, Any]]] = {}
 _RUN_LLM_EXECUTIONS: dict[str, list[dict[str, Any]]] = {}
 _RUN_DEBUG_FILES: dict[str, Path] = {}
 _RUN_DEBUG_SEQUENCE: dict[str, int] = {}
+_RUN_EVENT_FILES: dict[str, Path] = {}
+_RUN_EVENT_SEQUENCE: dict[str, int] = {}
 
 _SECRET_KEY_PATTERN = re.compile(
     r"(?:api[_-]?key|token|secret|password|passwd|credential|"
@@ -144,10 +148,99 @@ def runtime_debug_enabled() -> bool:
 
 
 def _runtime_debug_directory() -> Path:
+    """Legacy runtime-debug directory used only when explicitly configured.
+
+    Production Stage 3.4 uses AGENT_RUN_LOG_DIR and writes runtime diagnostics
+    into the per-run unified events stream instead.
+    """
     configured = str(os.getenv("AGENT_RUNTIME_DEBUG_DIR", "")).strip()
     path = Path(configured) if configured else Path.cwd() / "outputs" / "agent_runtime_debug"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _run_log_root(output_dir: str | Path | None = None) -> Path:
+    """Return the root for per-run logs without introducing a new store.
+
+    Priority:
+    1. AGENT_RUN_LOG_DIR (production / explicit override)
+    2. caller output_dir/agent_runs (LLM audit / benchmark compatibility)
+    3. legacy AGENT_FLOW_MARKDOWN_DIR/agent_runs (test compatibility)
+    4. <cwd>/outputs/agent_runs
+    """
+    configured = str(os.getenv("AGENT_RUN_LOG_DIR", "")).strip()
+    if configured:
+        root = Path(configured)
+    elif output_dir not in (None, ""):
+        root = Path(output_dir) / "agent_runs"
+    else:
+        legacy_flow = str(os.getenv("AGENT_FLOW_MARKDOWN_DIR", "")).strip()
+        root = (Path(legacy_flow) / "agent_runs") if legacy_flow else (Path.cwd() / "outputs" / "agent_runs")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def run_log_directory(run_id: str, output_dir: str | Path | None = None) -> Path:
+    safe_run_id = _safe_file_name(str(run_id or "").strip() or _new_fallback_run_id())
+    path = _run_log_root(output_dir) / safe_run_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def unified_event_path(run_id: str, output_dir: str | Path | None = None) -> Path:
+    return run_log_directory(run_id, output_dir) / "events.jsonl"
+
+
+def append_unified_event(
+    event: dict[str, Any],
+    *,
+    run_id: str,
+    output_dir: str | Path | None = None,
+) -> str:
+    """Append one redacted event to the single per-run JSONL stream.
+
+    FLOW_EVENT, RUNTIME_DEBUG, LLM_CALL and LLM_CALL_SCHEMA all share this
+    file.  The existing Markdown remains the human-readable view.
+    """
+    canonical_run_id = str(run_id or "").strip()
+    if not canonical_run_id:
+        return ""
+    try:
+        with _LOCK:
+            path = unified_event_path(canonical_run_id, output_dir)
+            cache_key = f"{path.resolve()}"
+            cached = _RUN_EVENT_FILES.get(cache_key)
+            if cached is None:
+                _RUN_EVENT_FILES[cache_key] = path
+                sequence = 0
+                if path.exists():
+                    try:
+                        for raw in reversed(path.read_text(encoding="utf-8").splitlines()):
+                            try:
+                                row = json.loads(raw)
+                            except json.JSONDecodeError:
+                                continue
+                            sequence = max(0, int(row.get("sequence") or 0))
+                            break
+                    except OSError:
+                        sequence = 0
+                _RUN_EVENT_SEQUENCE[cache_key] = sequence
+            sequence = _RUN_EVENT_SEQUENCE.get(cache_key, 0) + 1
+            _RUN_EVENT_SEQUENCE[cache_key] = sequence
+            raw_record = dict(event or {})
+            raw_record.setdefault("event_type", "RUNTIME_EVENT")
+            time_value = str(raw_record.get("time") or datetime.now().isoformat(timespec="milliseconds"))
+            record = build_event_envelope(
+                raw_record,
+                run_id=canonical_run_id,
+                sequence=sequence,
+                time_value=time_value,
+            )
+            with path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(_debug_safe(record), ensure_ascii=False, sort_keys=False, default=str) + "\n")
+            return str(path)
+    except Exception:
+        return ""
 
 
 def _safe_source_file(filename: str) -> str:
@@ -211,37 +304,52 @@ def runtime_debug_event(
     level: str = "DEBUG",
     metadata: dict[str, Any] | None = None,
 ) -> str:
-    """Write one code-level runtime diagnostic event as JSONL.
+    """Write one code-level diagnostic event.
 
-    This log is deliberately separate from the human-readable Agent flow Markdown.
-    It records compiler/binder/gate/state-machine inputs and outputs without
-    exposing secrets or absolute local paths.
+    Stage 3.4 writes production diagnostics into the unified per-run
+    ``events.jsonl`` stream.  The old AGENT_RUNTIME_DEBUG_DIR layout remains
+    available only when that legacy variable is explicitly configured and the
+    new AGENT_RUN_LOG_DIR is absent.
     """
     if not runtime_debug_enabled():
         return ""
     try:
         canonical_run_id = _resolve_run_id(str(stage or "DEBUG").upper(), payload, run_id)
-        with _LOCK:
-            path = _RUN_DEBUG_FILES.get(canonical_run_id)
-            if path is None:
-                path = _runtime_debug_directory() / f"{_safe_file_name(canonical_run_id)}.jsonl"
-                _RUN_DEBUG_FILES[canonical_run_id] = path
-                _RUN_DEBUG_SEQUENCE[canonical_run_id] = 0
-            seq = _RUN_DEBUG_SEQUENCE.get(canonical_run_id, 0) + 1
-            _RUN_DEBUG_SEQUENCE[canonical_run_id] = seq
-            record = {
-                "sequence": seq,
-                "time": datetime.now().isoformat(timespec="milliseconds"),
-                "run_id": canonical_run_id,
+        unified_root = str(os.getenv("AGENT_RUN_LOG_DIR", "")).strip()
+        legacy_dir = str(os.getenv("AGENT_RUNTIME_DEBUG_DIR", "")).strip()
+        if legacy_dir and not unified_root:
+            with _LOCK:
+                path = _RUN_DEBUG_FILES.get(canonical_run_id)
+                if path is None:
+                    path = _runtime_debug_directory() / f"{_safe_file_name(canonical_run_id)}.jsonl"
+                    _RUN_DEBUG_FILES[canonical_run_id] = path
+                    _RUN_DEBUG_SEQUENCE[canonical_run_id] = 0
+                seq = _RUN_DEBUG_SEQUENCE.get(canonical_run_id, 0) + 1
+                _RUN_DEBUG_SEQUENCE[canonical_run_id] = seq
+                record = {
+                    "sequence": seq,
+                    "time": datetime.now().isoformat(timespec="milliseconds"),
+                    "run_id": canonical_run_id,
+                    "task_id": str(task_id or ""),
+                    "stage": str(stage or "DEBUG"),
+                    "level": str(level or "DEBUG"),
+                    "payload": _debug_safe(payload),
+                    "metadata": _debug_safe(dict(metadata or {})),
+                }
+                with path.open("a", encoding="utf-8", newline="\n") as handle:
+                    handle.write(json.dumps(record, ensure_ascii=False, sort_keys=False, default=str) + "\n")
+                return str(path)
+        return append_unified_event(
+            {
+                "event_type": "RUNTIME_DEBUG",
                 "task_id": str(task_id or ""),
                 "stage": str(stage or "DEBUG"),
                 "level": str(level or "DEBUG"),
                 "payload": _debug_safe(payload),
                 "metadata": _debug_safe(dict(metadata or {})),
-            }
-            with path.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=False, default=str) + "\n")
-            return str(path)
+            },
+            run_id=canonical_run_id,
+        )
     except Exception:
         return ""
 
@@ -438,7 +546,10 @@ def _question_filename_stem(question: str) -> str:
 
 def _output_directory() -> Path:
     configured = str(os.getenv("AGENT_FLOW_MARKDOWN_DIR", "")).strip()
-    path = Path(configured) if configured else Path.cwd() / "outputs" / "agent_flow"
+    if configured and not str(os.getenv("AGENT_RUN_LOG_DIR", "")).strip():
+        path = Path(configured)
+    else:
+        path = _run_log_root()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -570,7 +681,12 @@ def _path_for_run(
             question = _extract_question_text(payload)
             question_stem = _question_filename_stem(question)
             run_stem = _safe_file_name(run_id or _new_fallback_run_id())
-            path = _output_directory() / f"{question_stem}__{run_stem}.md"
+            legacy_flow_dir = str(os.getenv("AGENT_FLOW_MARKDOWN_DIR", "")).strip()
+            unified_root = str(os.getenv("AGENT_RUN_LOG_DIR", "")).strip()
+            if legacy_flow_dir and not unified_root:
+                path = _output_directory() / f"{question_stem}__{run_stem}.md"
+            else:
+                path = run_log_directory(run_id) / "flow.md"
             _RUN_FILES[run_id] = path
             _RUN_SEQUENCE[run_id] = 0
             if not path.exists():
@@ -657,6 +773,19 @@ def _append_event(
         with path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write("\n".join(details))
 
+        append_unified_event(
+            {
+                "event_type": "FLOW_EVENT",
+                "flow_sequence": sequence,
+                "task_id": str(task_id or ""),
+                "stage": stage_name,
+                "level": str(level or "INFO"),
+                "trace_kind": trace_kind,
+                "payload": combined_payload,
+            },
+            run_id=canonical_run_id,
+        )
+
     return str(path)
 
 
@@ -685,14 +814,9 @@ def flow_event(
             metadata=metadata,
             trace_kind="AGENT-FLOW",
         )
-        runtime_debug_event(
-            stage,
-            event_payload,
-            run_id=run_id,
-            task_id=task_id,
-            level=level,
-            metadata=metadata,
-        )
+        # FLOW_EVENT is the canonical semantic runtime fact.  Do not mirror the
+        # same payload into RUNTIME_DEBUG; debug events are reserved for extra
+        # diagnostics emitted explicitly by call sites.
         return path
     except Exception:
         return ""
@@ -1426,6 +1550,13 @@ def get_flow_markdown_path(run_id: str | None = None) -> str:
     path = _RUN_FILES.get(target)
     return str(path) if path is not None else ""
 
+
+
+def get_run_log_directory(run_id: str | None = None) -> str:
+    target = str(run_id or "").strip() or _CURRENT_RUN_ID.get()
+    if not target:
+        return ""
+    return str(run_log_directory(target))
 
 def reset_flow_context() -> None:
     _CURRENT_RUN_ID.set("")

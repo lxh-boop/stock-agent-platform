@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from database.schemas import json_dumps
-from database.sqlite_store import SQLiteStore
+from database.postgres_store import PostgresStore
 from strategies.adapters.hierarchical_top10_strategy import (
     HierarchicalTop10Strategy,
 )
@@ -120,8 +120,6 @@ class StrategyRegistry:
         )
 
     def _persist_db(self, manifest: StrategyManifest) -> None:
-        if self.db_path is None:
-            return
         record = {
             "strategy_id": manifest.strategy_id,
             "version": manifest.version,
@@ -145,7 +143,7 @@ class StrategyRegistry:
             "metadata_json": json_dumps(manifest.metadata),
         }
         try:
-            SQLiteStore(self.db_path).upsert("strategy_registry", record)
+            PostgresStore().upsert("strategy_registry", record)
         except Exception:
             return
 
