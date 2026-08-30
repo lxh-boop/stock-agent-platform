@@ -258,7 +258,7 @@ class WebReadApplicationService:
             ("ranking", "最新排名", getattr(config, "RANKING_LATEST_PATH", "")),
             ("metrics", "主动排名模型指标", getattr(config, "ACTIVE_RANKING_MODEL_METRICS_PATH", "")),
             ("raw_data", "最新行情", getattr(config, "LATEST_RAW_DATA_PATH", "")),
-            ("feature_data", "最新特征", getattr(config, "LATEST_FEATURE_DATA_PATH", "")),
+            ("feature_data", "最新特征（按需计算）", getattr(config, "LATEST_RAW_DATA_PATH", "")),
             ("ranker_features", "截面排名特征缓存", getattr(config, "ACTIVE_RANKING_FEATURE_DIR", "")),
             ("news", "新闻缓存", getattr(config, "NEWS_CACHE_PATH", "")),
             ("announcement", "公告缓存", getattr(config, "ANNOUNCEMENT_CACHE_PATH", "")),
@@ -281,7 +281,7 @@ class WebReadApplicationService:
                         if stat is not None
                         else None
                     ),
-                    "size_bytes": int(stat.st_size) if stat is not None and path.is_file() else None,
+                    "size_bytes": (None if key == "feature_data" else int(stat.st_size) if stat is not None and path.is_file() else None),
                 }
             )
         return rows

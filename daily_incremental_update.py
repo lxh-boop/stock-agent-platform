@@ -8,11 +8,10 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from alpha158 import add_alpha158_features
+from factor_provider import build_alpha158
 from config import (
     ACTIVE_RANKING_MODEL_METRICS_PATH,
     ENABLE_NEWS_FEATURES,
-    LATEST_FEATURE_DATA_PATH,
     LATEST_RAW_DATA_PATH,
     OUTPUT_DIR,
     RANKING_LATEST_PATH,
@@ -38,7 +37,6 @@ from ranking_runtime import (
     generate_active_ranking,
 )
 from ranking_runtime.tushare_features import refresh_ranker_features_for_date
-from storage_governance.lifecycle import persist_recent_factor_cache
 from universe import get_stock_pool
 
 
@@ -185,7 +183,9 @@ def prepare_latest_feature_data(
     print(f"[Data] merged raw shape = {raw_data.shape}")
     print(f"[Data] merged date range = {raw_data['date'].min()} ~ {raw_data['date'].max()}")
 
-    feature_data = add_alpha158_features(raw_data, save_path=None)
+    # Stage 3.7: Alpha158 is a derived in-memory view of the current raw data.
+    # No factor CSV is read or written, and build_alpha158 has no factor cache.
+    feature_data = build_alpha158(raw_data)
     if ENABLE_NEWS_FEATURES and include_news_features:
         news_start_date = max(
             pd.to_datetime(raw_data["date"].min()),
@@ -199,11 +199,7 @@ def prepare_latest_feature_data(
             start_date=news_start_date,
             end_date=raw_data["date"].max(),
         )
-    cache_report = persist_recent_factor_cache(feature_data, LATEST_FEATURE_DATA_PATH)
-    print(
-        "[Save] recent Alpha158 factor cache -> "
-        f"{LATEST_FEATURE_DATA_PATH}, rows={cache_report['persisted_rows']}"
-    )
+    print(f"[Factor] Alpha158 recomputed in memory, rows={len(feature_data)}")
     if sync_news_db:
         refresh_news_cache_and_sync_db(
             feature_data,

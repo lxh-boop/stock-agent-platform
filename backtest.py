@@ -7,14 +7,13 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from alpha158 import add_alpha158_features
+from factor_provider import build_alpha158
 from config import (
     BACKTEST_DAILY_PREDICTIONS_PATH,
     BACKTEST_METRICS_PATH,
     BACKTEST_NAV_PATH,
     BACKTEST_TRADES_PATH,
     DEFAULT_DFT_UNET_CHECKPOINT_PATH,
-    LATEST_FEATURE_DATA_PATH,
     LATEST_RAW_DATA_PATH,
     MODEL_PRED_COL,
     RAW_DATA_PATH,
@@ -436,7 +435,7 @@ def run_latest_t1_backtest(
         fetch_trade_days=fetch_trade_days,
     )
 
-    feature_data = add_alpha158_features(raw_data, save_path=LATEST_FEATURE_DATA_PATH)
+    feature_data = build_alpha158(raw_data)
 
     if ENABLE_NEWS_FEATURES:
         news_start_date = max(
@@ -451,7 +450,6 @@ def run_latest_t1_backtest(
             start_date=news_start_date,
             end_date=raw_data["date"].max(),
         )
-        feature_data.to_csv(LATEST_FEATURE_DATA_PATH, index=False, encoding="utf-8-sig")
 
     feature_data = add_t1_labels(feature_data)
     daily_predictions = make_daily_predictions(

@@ -4,7 +4,6 @@ import pandas as pd
 from config import (
     ALPHA_WINDOWS,
     EPS,
-    FEATURE_DATA_PATH,
     LABEL_RET_CLIP,
     LABEL_ZSCORE_CLIP,
     MODEL_REG_LABEL_COL,
@@ -244,7 +243,7 @@ def add_future_score_label(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def add_alpha158_features(df: pd.DataFrame, save_path: str | None = None) -> pd.DataFrame:
+def add_alpha158_features(df: pd.DataFrame) -> pd.DataFrame:
     results = []
 
     for code, g in df.groupby("code"):
@@ -256,9 +255,6 @@ def add_alpha158_features(df: pd.DataFrame, save_path: str | None = None) -> pd.
     data = data.replace([np.inf, -np.inf], np.nan)
     data = add_future_score_label(data)
 
-    if save_path:
-        data.to_csv(save_path, index=False, encoding="utf-8-sig")
-        print(f"[Save] feature data -> {save_path}, shape={data.shape}")
 
     return data
 

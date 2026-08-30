@@ -16,11 +16,11 @@ from config import (
     BACKTEST_METRICS_PATH,
     BACKTEST_NAV_PATH,
     BACKTEST_TRADES_PATH,
-    LATEST_FEATURE_DATA_PATH,
     LATEST_RAW_DATA_PATH,
     OUTPUT_DIR,
     RANKING_LATEST_PATH,
 )
+from factor_provider import latest_alpha158
 from database.connection import get_connection
 from database.repositories import SystemMonitorRepository
 from database.schemas import json_loads
@@ -180,7 +180,10 @@ def collect_data_metrics(db_path: str | Path, output_dir: str | Path = OUTPUT_DI
     missing: list[str] = []
     ranking = _read_csv(Path(output_dir) / "ranking_latest.csv")
     raw = _read_csv(LATEST_RAW_DATA_PATH)
-    features = _read_csv(LATEST_FEATURE_DATA_PATH)
+    try:
+        features = latest_alpha158()
+    except Exception:
+        features = pd.DataFrame()
     stock_count = int(ranking["code"].nunique()) if "code" in ranking.columns and not ranking.empty else 0
     raw_stock_count = int(raw["code"].nunique()) if "code" in raw.columns and not raw.empty else stock_count
     universe_count = max(300, stock_count, raw_stock_count)

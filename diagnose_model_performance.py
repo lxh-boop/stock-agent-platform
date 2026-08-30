@@ -19,11 +19,11 @@ from config import (
     PRED_HORIZON,
     RANKING_LATEST_PATH,
     TEST_PREDICTIONS_PATH,
-    TRAIN_FEATURE_DATA_PATH,
     ensure_dirs,
 )
 from news_features import get_news_event_feature_cols
 from universe import get_stock_pool
+from factor_provider import training_alpha158
 
 
 REPORT_PATH = Path(OUTPUT_DIR) / "model_diagnosis_report.md"
@@ -540,9 +540,9 @@ def main() -> None:
     ensure_dirs()
     generated_at = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    feature_df = read_csv_if_exists(TRAIN_FEATURE_DATA_PATH)
+    feature_df = training_alpha158()
     if feature_df is None or feature_df.empty:
-        raise FileNotFoundError(f"训练特征文件不存在或为空：{TRAIN_FEATURE_DATA_PATH}")
+        raise RuntimeError("训练原始数据无法生成 Alpha158 特征")
 
     feature_df["date"] = pd.to_datetime(feature_df["date"])
     feature_df["code"] = feature_df["code"].astype(str).str.zfill(6)
@@ -558,7 +558,7 @@ def main() -> None:
     stats = {
         "generated_at": generated_at,
         "paths": {
-            "train_feature_data": TRAIN_FEATURE_DATA_PATH,
+            "train_feature_data": "on_demand_from_raw",
             "test_predictions": TEST_PREDICTIONS_PATH,
             "latest_ranking": RANKING_LATEST_PATH,
             "evaluation_metrics": EVAL_METRICS_PATH,

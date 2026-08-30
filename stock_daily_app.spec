@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from fnmatch import fnmatch
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
@@ -25,6 +26,7 @@ root_modules = [
     "data_tushare",
     "daily_incremental_update",
     "event_rules",
+    "factor_provider",
     "llm_client",
     "llm_explainer",
     "llm_prompts",
@@ -92,6 +94,11 @@ for directory in [
         datas.append((str(path), directory))
 
 DATABASE_FILE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
+ALPHA158_FACTOR_PATTERNS = ("*feature_stock_data_alpha158.csv",)
+
+
+def _is_alpha158_factor_file(path: Path) -> bool:
+    return any(fnmatch(path.name.lower(), pattern.lower()) for pattern in ALPHA158_FACTOR_PATTERNS)
 
 for source_dir, target_dir in [
     ("data", "bundled_seed/data"),
@@ -105,6 +112,8 @@ for source_dir, target_dir in [
         if not file_path.is_file():
             continue
         if file_path.suffix.lower() in DATABASE_FILE_SUFFIXES:
+            continue
+        if _is_alpha158_factor_file(file_path):
             continue
         rel = file_path.relative_to(path)
         destination = str(Path(target_dir) / rel.parent)

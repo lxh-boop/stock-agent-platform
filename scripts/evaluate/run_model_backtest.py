@@ -22,7 +22,8 @@ from backtest_metrics import (  # noqa: E402
     calc_win_rate,
     summarize_ic,
 )
-from config import LATEST_FEATURE_DATA_PATH, LATEST_RAW_DATA_PATH  # noqa: E402
+from config import LATEST_RAW_DATA_PATH  # noqa: E402
+from factor_provider import build_alpha158  # noqa: E402
 from model_zoo.metadata import get_model_metadata  # noqa: E402
 from model_zoo.registry import get_model_entry  # noqa: E402
 from model_zoo_backend import predict_zoo_scores_for_dates  # noqa: E402
@@ -145,17 +146,13 @@ def parse_topk_list(value: str) -> list[int]:
 
 def load_cached_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     raw_path = Path(LATEST_RAW_DATA_PATH)
-    feature_path = Path(LATEST_FEATURE_DATA_PATH)
     if not raw_path.exists():
         raise FileNotFoundError(f"missing raw data cache: {raw_path}")
-    if not feature_path.exists():
-        raise FileNotFoundError(f"missing feature data cache: {feature_path}")
 
     raw = pd.read_csv(raw_path, dtype={"code": str}, encoding="utf-8-sig")
-    feature = pd.read_csv(feature_path, dtype={"code": str}, encoding="utf-8-sig")
-    for frame in [raw, feature]:
-        frame["date"] = pd.to_datetime(frame["date"])
-        frame["code"] = frame["code"].astype(str).str.zfill(6)
+    raw["date"] = pd.to_datetime(raw["date"])
+    raw["code"] = raw["code"].astype(str).str.zfill(6)
+    feature = build_alpha158(raw, output_trading_days=120)
     return raw, feature
 
 

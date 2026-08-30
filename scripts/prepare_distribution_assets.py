@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from fnmatch import fnmatch
 import sys
 from pathlib import Path
 
@@ -19,6 +20,11 @@ from runtime_paths import (
 )
 
 DATABASE_FILE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
+ALPHA158_FACTOR_PATTERNS = ("*feature_stock_data_alpha158.csv",)
+
+
+def _is_alpha158_factor_file(path: Path) -> bool:
+    return any(fnmatch(path.name.lower(), pattern.lower()) for pattern in ALPHA158_FACTOR_PATTERNS)
 
 
 def _repo_root() -> Path:
@@ -42,6 +48,18 @@ def _database_seed_files(root: Path) -> list[str]:
             continue
         for path in base.rglob("*"):
             if path.is_file() and path.suffix.lower() in DATABASE_FILE_SUFFIXES:
+                hits.append(path.relative_to(root).as_posix())
+    return sorted(hits)
+
+
+def _alpha158_seed_files(root: Path) -> list[str]:
+    hits: list[str] = []
+    for rel in ("data", "models", "outputs"):
+        base = root / rel
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if path.is_file() and _is_alpha158_factor_file(path):
                 hits.append(path.relative_to(root).as_posix())
     return sorted(hits)
 
@@ -89,6 +107,11 @@ def main() -> int:
         )
         print(json.dumps(database_seed_files, ensure_ascii=False, indent=2))
 
+    alpha158_seed_files = _alpha158_seed_files(root)
+    if alpha158_seed_files:
+        print("[Alpha158 Seed] Derived factor CSVs exist in source trees; PyInstaller excludes them:")
+        print(json.dumps(alpha158_seed_files, ensure_ascii=False, indent=2))
+
     root_sensitive = [
         root / ".env",
         root / "local_app_config.json",
@@ -112,6 +135,7 @@ def main() -> int:
                     "outputs/ -> bundled_seed/outputs/ (database files excluded)",
                 ],
                 "forbidden_bundled_database_suffixes": sorted(DATABASE_FILE_SUFFIXES),
+                "forbidden_bundled_factor_patterns": list(ALPHA158_FACTOR_PATTERNS),
                 "excluded_sensitive_files": [
                     "logs/",
                     "runtime/",

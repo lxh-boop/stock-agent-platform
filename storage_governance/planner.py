@@ -119,6 +119,16 @@ class GovernancePlanner:
                 "news_raw_html_recent",
             )
 
+        # Stage 3.7: Alpha158 values are derived from authoritative raw market data.
+        # This must run before the historical protected-until-refactor rules.
+        if low.endswith("feature_stock_data_alpha158.csv"):
+            return GovernanceRuleResult(
+                GovernanceDecision.CLEANUP,
+                "rebuildable Alpha158 values are computed from raw market data on demand",
+                "alpha158_on_demand",
+                auto_apply_allowed=True,
+            )
+
         # 1) Hard live protections.
         if path in p.protected_exact:
             return GovernanceRuleResult(GovernanceDecision.PROTECT, "authoritative/live exact path", "protected_exact")
@@ -135,8 +145,6 @@ class GovernancePlanner:
                 "derived model feature matrix; candidate for removal after rebuild-chain verification",
                 "derived_feature_review",
             )
-        if low.endswith("feature_stock_data_alpha158.csv"):
-            return GovernanceRuleResult(GovernanceDecision.CACHE, "rebuildable Alpha158 factor cache", "factor_cache")
 
         # 3) Explicit review patterns.
         for pattern in p.review_globs:

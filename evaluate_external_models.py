@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 
 from backtest_metrics import summarize_ic
-from config import LATEST_FEATURE_DATA_PATH, LATEST_RAW_DATA_PATH
+from config import LATEST_RAW_DATA_PATH
+from factor_provider import build_alpha158
 from model_zoo.metadata import get_model_metadata
 from model_zoo.registry import get_model_entry
 from model_zoo_backend import load_zoo_adapter
@@ -22,18 +23,13 @@ PREDICTION_DIR = Path("outputs") / "external_model_predictions"
 
 def _load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     raw_path = Path(LATEST_RAW_DATA_PATH)
-    feature_path = Path(LATEST_FEATURE_DATA_PATH)
     if not raw_path.exists():
         raise FileNotFoundError(f"missing raw data cache: {raw_path}")
-    if not feature_path.exists():
-        raise FileNotFoundError(f"missing feature data cache: {feature_path}")
 
     raw = pd.read_csv(raw_path, dtype={"code": str}, encoding="utf-8-sig")
-    feature = pd.read_csv(feature_path, dtype={"code": str}, encoding="utf-8-sig")
     raw["date"] = pd.to_datetime(raw["date"])
-    feature["date"] = pd.to_datetime(feature["date"])
     raw["code"] = raw["code"].astype(str).str.zfill(6)
-    feature["code"] = feature["code"].astype(str).str.zfill(6)
+    feature = build_alpha158(raw, output_trading_days=120)
     return raw, feature
 
 
