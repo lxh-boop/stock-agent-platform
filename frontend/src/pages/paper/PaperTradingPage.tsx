@@ -61,6 +61,7 @@ export function PaperTradingPage() {
   }
 
   const data = snapshot.data
+  const modelContext = data.model_context ?? {}
   const historyDates = [
     ...data.position_snapshot_dates,
     ...data.order_snapshot_dates,
@@ -92,6 +93,12 @@ export function PaperTradingPage() {
         showIcon
         message="仅用于模拟和项目展示，不构成投资建议"
         description="所有资金、持仓和画像变更均以服务端为唯一真相；受保护写操作需要预览、二次确认和重新校验。"
+      />
+      <Alert
+        type={modelContext.account_stale ? 'warning' : 'success'}
+        showIcon
+        message={modelContext.account_stale ? '模拟盘快照落后于最新模型排名' : '模拟盘已对齐最新模型排名'}
+        description={`主动模型 ${String(modelContext.model_name ?? '—')} · 排名信号日 ${String(modelContext.ranking_signal_date ?? '—')} · 预测目标日 ${String(modelContext.ranking_prediction_date ?? '—')} · 账户更新时间 ${String(modelContext.account_updated_at ?? '—')}${modelContext.account_stale ? '。可使用“更新 AI 模拟盘”通过 Task API 生成并执行新的模拟盘计划。' : ''}`}
       />
       <AccountSummary account={data.account} available={data.is_available} />
       <PaperTaskActions profileComplete={data.profile_complete} />

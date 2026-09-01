@@ -38,6 +38,44 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
+def _bool_or_none(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "y"}:
+        return True
+    if text in {"0", "false", "no", "n"}:
+        return False
+    return None
+
+
+_RANKING_FLOAT_FIELDS = {
+    "score", "pred_score", "raw_score", "model_score", "member_1_raw_score",
+    "member_1_rank_pct", "member_2_raw_score", "member_2_rank_pct", "close",
+    "open", "high", "low", "amount", "volume", "pct_chg", "ret_5", "ret_20",
+    "vol_20", "drawdown_20", "pred_return", "pred_5d_ret", "up_prob",
+    "up_prob_calibrated", "historical_rank_bucket_up_rate",
+    "top5_daily_average_up_rate", "top10_daily_average_up_rate",
+    "top15_daily_average_up_rate", "risk_score", "confidence_score",
+}
+_RANKING_INT_FIELDS = {
+    "rank", "pred_rank", "top15_observation_days", "top15_complete_days",
+    "top15_observation_count", "top15_rise_count", "calibration_top_k",
+}
+_RANKING_BOOL_FIELDS = {"top15_up_signal", "calibrated", "up_prob_calibrated_available"}
+
+
+def _normalize_payload_types(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    for key in _RANKING_FLOAT_FIELDS.intersection(normalized):
+        normalized[key] = _float_or_none(normalized.get(key))
+    for key in _RANKING_INT_FIELDS.intersection(normalized):
+        normalized[key] = _int_or_none(normalized.get(key))
+    for key in _RANKING_BOOL_FIELDS.intersection(normalized):
+        normalized[key] = _bool_or_none(normalized.get(key))
+    return normalized
+
+
 class PredictionRepository:
     """Database authority for live ranking/model-prediction results."""
 
@@ -46,7 +84,7 @@ class PredictionRepository:
 
     @staticmethod
     def normalize_ranking_record(record: dict[str, Any], *, source_kind: str = "ranking") -> dict[str, Any]:
-        payload = dict(record or {})
+        payload = _normalize_payload_types(dict(record or {}))
         trade_date = _date(payload.get("trade_date") or payload.get("date"))
         predict_for_date = _date(
             payload.get("prediction_for_date")

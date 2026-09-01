@@ -27,6 +27,7 @@ def present_snapshot(value: dict[str, Any]) -> dict[str, Any]:
         "backfill_status": to_browser_value(data.get("backfill_status") or {}),
         "ai_reliability": to_browser_value(data.get("ai_reliability") or {}),
         "scheduler": to_browser_value(data.get("scheduler") or {}),
+        "model_context": to_browser_value(data.get("model_context") or {}),
     }
 
 

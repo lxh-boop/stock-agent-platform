@@ -42,4 +42,9 @@ def test_paper_trading_pipeline_dry_run_generates_plan_only(tmp_path) -> None:
     assert result.status == PipelineStatus.SUCCESS
     assert result.orders == []
     assert result.plan is not None
+    assert result.graph_sync == {
+        "success": True,
+        "status": "skipped_plan_only",
+    }
+    assert not any("graph_sync_failed" in warning for warning in result.warnings)
     assert not (tmp_path / "outputs" / "portfolio" / "paper_orders.csv").exists()

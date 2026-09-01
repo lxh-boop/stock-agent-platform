@@ -385,6 +385,17 @@ class DashboardApplicationService:
     def load_backtest_outputs() -> tuple[Any, Any, Any, Any]:
         nav_df = trades_df = predictions_df = None
         metrics_data = None
+        if Path(BACKTEST_METRICS_PATH).exists():
+            try:
+                candidate_metrics = json.loads(
+                    Path(BACKTEST_METRICS_PATH).read_text(encoding="utf-8")
+                )
+                if str(candidate_metrics.get("model_name") or "").strip() == ACTIVE_MODEL_NAME:
+                    metrics_data = candidate_metrics
+            except Exception:
+                metrics_data = None
+        if metrics_data is None:
+            return None, None, None, None
         if Path(BACKTEST_NAV_PATH).exists():
             nav_df = pd.read_csv(BACKTEST_NAV_PATH)
             if "date" in nav_df.columns:
@@ -392,11 +403,6 @@ class DashboardApplicationService:
         if Path(BACKTEST_TRADES_PATH).exists():
             trades_df = pd.read_csv(BACKTEST_TRADES_PATH, dtype={"code": str})
             trades_df["code"] = trades_df["code"].astype(str).str.zfill(6)
-        if Path(BACKTEST_METRICS_PATH).exists():
-            try:
-                metrics_data = json.loads(Path(BACKTEST_METRICS_PATH).read_text(encoding="utf-8"))
-            except Exception:
-                metrics_data = None
         if Path(BACKTEST_DAILY_PREDICTIONS_PATH).exists():
             predictions_df = pd.read_csv(BACKTEST_DAILY_PREDICTIONS_PATH, dtype={"code": str})
             predictions_df["code"] = predictions_df["code"].astype(str).str.zfill(6)

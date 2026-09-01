@@ -176,3 +176,29 @@ def test_ranking_page_joins_signal_date_ohlc() -> None:
     assert bool(records[0]["ohlc_available"]) is True
     assert records[1]["high"] == 1520.0
     assert records[1]["low"] == 1490.0
+
+
+def test_ranking_page_coerces_registered_scores_and_preserves_panel_close() -> None:
+    service = WebReadApplicationService()
+    service.ranking = lambda: pd.DataFrame([
+        {
+            "rank": "1",
+            "code": "300759",
+            "date": "2026-08-28",
+            "model_score": "0.99542964",
+            "member_1_rank_pct": "0.9908592",
+            "member_2_rank_pct": "1.0",
+            "historical_rank_bucket_up_rate": "0.5652173758",
+            "close": "43.7800026",
+        }
+    ])
+    service.load_signal_ohlc_data = lambda: pd.DataFrame()
+
+    record = service.ranking_page(offset=0, limit=10)["records"].iloc[0]
+    assert record["model_score"] == 0.99542964
+    assert record["member_1_rank_pct"] == 0.9908592
+    assert record["member_2_rank_pct"] == 1.0
+    assert record["historical_rank_bucket_up_rate"] == 0.5652173758
+    assert record["close"] == 43.7800026
+    assert record["close_source"] == "model_panel_close"
+    assert bool(record["ohlc_available"]) is False

@@ -115,19 +115,34 @@ class WebReadApplicationService:
         return dashboard_service.load_latest_raw_data()
 
     def _attach_signal_date_ohlc(self, ranking: Any) -> Any:
+        import pandas as pd
+
         data = ranking.copy()
+        existing_close = pd.to_numeric(
+            data.get("close", pd.Series(index=data.index, dtype=float)),
+            errors="coerce",
+        )
         for column in ("open", "high", "low", "close"):
             if column in data.columns:
                 data = data.drop(columns=[column])
             data[column] = None
+        data["_ranking_close"] = existing_close
         data["ohlc_available"] = False
         if "code" not in data.columns or "date" not in data.columns:
-            return data
+            data["close"] = data["_ranking_close"]
+            data["close_source"] = data["close"].notna().map(
+                {True: "model_panel_close", False: "missing"}
+            )
+            return data.drop(columns=["_ranking_close"])
 
         raw = self.load_signal_ohlc_data()
         required = {"code", "date", "open", "high", "low", "close"}
         if raw is None or getattr(raw, "empty", True) or not required.issubset(set(raw.columns)):
-            return data
+            data["close"] = data["_ranking_close"]
+            data["close_source"] = data["close"].notna().map(
+                {True: "model_panel_close", False: "missing"}
+            )
+            return data.drop(columns=["_ranking_close"])
 
         market = raw.loc[:, ["code", "date", "open", "high", "low", "close"]].copy()
         market["_signal_code"] = self._normalized_code_series(market["code"])
@@ -144,9 +159,16 @@ class WebReadApplicationService:
             validate="many_to_one",
         )
         data["ohlc_available"] = data[["open", "high", "low", "close"]].notna().all(axis=1)
-        return data.drop(columns=["_signal_code", "_signal_date"])
+        market_close = pd.to_numeric(data["close"], errors="coerce")
+        data["close"] = market_close.fillna(data["_ranking_close"])
+        data["close_source"] = "missing"
+        data.loc[data["_ranking_close"].notna(), "close_source"] = "model_panel_close"
+        data.loc[market_close.notna(), "close_source"] = "signal_ohlc"
+        return data.drop(columns=["_signal_code", "_signal_date", "_ranking_close"])
 
     def ranking_page(self, *, offset: int = 0, limit: int = 100) -> dict[str, Any]:
+        import pandas as pd
+
         metrics = self.metrics()
         validation = metrics.get("historical_validation", {}) if isinstance(metrics, dict) else {}
         target_validation = None
@@ -196,6 +218,15 @@ class WebReadApplicationService:
                 "target_validation": target_validation,
             }
         data = self._attach_signal_date_ohlc(frame)
+        numeric_columns = {
+            "rank", "pred_rank", "score", "pred_score", "raw_score", "model_score",
+            "member_1_raw_score", "member_1_rank_pct", "member_2_raw_score",
+            "member_2_rank_pct", "historical_rank_bucket_up_rate", "close", "open",
+            "high", "low", "amount", "volume", "pct_chg", "ret_5", "ret_20",
+            "vol_20", "drawdown_20", "risk_score", "confidence_score",
+        }
+        for column in numeric_columns.intersection(data.columns):
+            data[column] = pd.to_numeric(data[column], errors="coerce")
         if "pred_score" not in data.columns:
             data["pred_score"] = None
         for source_column in ("raw_score", "model_score", "prediction_score", "pred_5d_ret"):

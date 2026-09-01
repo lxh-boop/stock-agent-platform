@@ -22,6 +22,7 @@ export interface PaperTradingSnapshot {
   backfill_status: GenericRecord
   ai_reliability: GenericRecord
   scheduler: GenericRecord
+  model_context: GenericRecord
 }
 
 export interface PaperTradingHistorySummary {
@@ -31,6 +32,7 @@ export interface PaperTradingHistorySummary {
   sell_count: number
   ohlc_matched_count: number
   ohlc_missing_count: number
+  close_matched_count: number
 }
 
 export interface PaperTradingDayHistory {

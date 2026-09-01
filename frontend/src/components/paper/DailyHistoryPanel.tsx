@@ -62,9 +62,9 @@ const marketColumns: ColumnsType<GenericRecord> = [
   { title: '收盘', dataIndex: 'close', width: 90, align: 'right', render: moneyValue },
   {
     title: '行情匹配',
-    dataIndex: 'ohlc_available',
+    dataIndex: 'market_data_status',
     width: 100,
-    render: (value) => <Tag color={value ? 'success' : 'warning'}>{value ? '完整' : '缺失'}</Tag>,
+    render: (value, record) => <Tag color={record.ohlc_available ? 'success' : record.close_available ? 'processing' : 'warning'}>{String(value || (record.ohlc_available ? '完整OHLC' : record.close_available ? '仅收盘' : '缺失'))}</Tag>,
   },
 ]
 
@@ -187,7 +187,7 @@ export function DailyHistoryPanel({ userId, availableDates }: { userId: string; 
               <Alert type="warning" showIcon message={`${data.trade_date} 没有独立持仓快照`} description="当日买卖仍会展示；持仓表不会用其他日期的数据代替。" />
             ) : null}
             {data.summary.ohlc_missing_count > 0 ? (
-              <Alert type="warning" showIcon message={`${data.summary.ohlc_missing_count} 笔操作缺少完整开高低收行情`} description="缺失值以“—”展示，不会用其他交易日行情补齐。" />
+              <Alert type="warning" showIcon message={`${data.summary.ohlc_missing_count} 笔操作缺少完整开高低收行情`} description={`已从主动模型行情缓存匹配 ${data.summary.close_matched_count ?? 0} 笔当日收盘价；开盘、最高和最低仍缺失时以“—”展示，不会用其他交易日行情补齐。`} />
             ) : null}
 
             <Row gutter={[12, 12]}>

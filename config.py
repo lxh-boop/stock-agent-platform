@@ -241,10 +241,14 @@ KRONOS_STOCK_DIRECTION_FEATURE_DIR = ACTIVE_RANKING_FEATURE_DIR
 RANKING_LATEST_PATH = os.path.join(OUTPUT_DIR, "ranking_latest.csv")
 EVAL_METRICS_PATH = os.path.join(OUTPUT_DIR, "evaluation_metrics.csv")
 TEST_PREDICTIONS_PATH = os.path.join(OUTPUT_DIR, "test_predictions.csv")
-BACKTEST_NAV_PATH = os.path.join(OUTPUT_DIR, "backtest_nav.csv")
-BACKTEST_METRICS_PATH = os.path.join(OUTPUT_DIR, "backtest_metrics.json")
-BACKTEST_TRADES_PATH = os.path.join(OUTPUT_DIR, "backtest_trades.csv")
-BACKTEST_DAILY_PREDICTIONS_PATH = os.path.join(OUTPUT_DIR, "backtest_daily_predictions.csv")
+ACTIVE_BACKTEST_DIR = os.path.join(OUTPUT_DIR, "backtests", ACTIVE_RANKING_MODEL_NAME)
+BACKTEST_NAV_PATH = os.path.join(ACTIVE_BACKTEST_DIR, "backtest_nav.csv")
+BACKTEST_METRICS_PATH = os.path.join(ACTIVE_BACKTEST_DIR, "backtest_metrics.json")
+BACKTEST_TRADES_PATH = os.path.join(ACTIVE_BACKTEST_DIR, "backtest_trades.csv")
+BACKTEST_DAILY_PREDICTIONS_PATH = os.path.join(
+    ACTIVE_BACKTEST_DIR,
+    "backtest_daily_predictions.csv",
+)
 METRICS_PATH = os.path.join(MODEL_DIR, "metrics.pkl")
 
 
@@ -253,6 +257,7 @@ def ensure_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(ACTIVE_BACKTEST_DIR, exist_ok=True)
 
 # ============================================================
 # 本地训练数据设置

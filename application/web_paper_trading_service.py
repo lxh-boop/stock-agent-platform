@@ -115,6 +115,34 @@ class WebPaperTradingApplicationService:
             )
             or {}
         )
+        scheduler = load_scheduler_status_summary(self.output_dir) or {}
+        from database.repositories import PredictionRepository
+        from ranking_runtime.settings import (
+            ACTIVE_MODEL_BACKEND,
+            ACTIVE_MODEL_NAME,
+            ACTIVE_MODEL_VERSION,
+        )
+
+        ranking_rows = PredictionRepository(self.db_path).list_latest_predictions(
+            model_name=ACTIVE_MODEL_NAME,
+            limit=1,
+        )
+        latest_ranking = dict(ranking_rows[0]) if ranking_rows else {}
+        ranking_signal_date = str(
+            latest_ranking.get("trade_date") or latest_ranking.get("date") or ""
+        )[:10]
+        ranking_prediction_date = str(
+            latest_ranking.get("prediction_for_date")
+            or latest_ranking.get("prediction_date")
+            or ""
+        )[:10]
+        account = dict(snapshot.get("account") or {})
+        account_updated_at = str(account.get("updated_at") or "")
+        account_date = account_updated_at[:10]
+        account_stale = bool(
+            ranking_signal_date
+            and (not account_date or account_date < ranking_signal_date)
+        )
         return {
             **snapshot,
             "user_id": user_id,
@@ -134,7 +162,18 @@ class WebPaperTradingApplicationService:
                 db_path=self.db_path,
             )
             or {},
-            "scheduler": load_scheduler_status_summary(self.output_dir) or {},
+            "scheduler": scheduler,
+            "model_context": {
+                "model_name": ACTIVE_MODEL_NAME,
+                "model_backend": ACTIVE_MODEL_BACKEND,
+                "model_version": ACTIVE_MODEL_VERSION,
+                "ranking_signal_date": ranking_signal_date,
+                "ranking_prediction_date": ranking_prediction_date,
+                "account_updated_at": account_updated_at,
+                "account_stale": account_stale,
+                "expected_signal_date": str(scheduler.get("expected_signal_date") or ""),
+                "public_data_ready": bool(scheduler.get("public_data_ready")),
+            },
         }
 
     @staticmethod
@@ -176,6 +215,7 @@ class WebPaperTradingApplicationService:
                 data = data.drop(columns=[column])
             data[column] = None
         data["ohlc_available"] = False
+        data["close_available"] = False
         if data.empty or "stock_code" not in data.columns:
             return data
 
@@ -184,7 +224,7 @@ class WebPaperTradingApplicationService:
         market = web_read_service.load_signal_ohlc_data()
         required = {"code", "date", "open", "high", "low", "close"}
         if market is None or getattr(market, "empty", True) or not required.issubset(set(market.columns)):
-            return data
+            market = pd.DataFrame(columns=list(required))
 
         daily = market.loc[:, ["code", "date", "open", "high", "low", "close"]].copy()
         daily["_history_code"] = self._normalized_code_series(daily["code"])
@@ -201,7 +241,21 @@ class WebPaperTradingApplicationService:
             validate="many_to_one",
         )
         data["ohlc_available"] = data[["open", "high", "low", "close"]].notna().all(axis=1)
-        return data.drop(columns=["_history_code"])
+        from application.support.ranker_market_data import load_ranker_close_for_date
+
+        fallback = load_ranker_close_for_date(trade_date).rename(
+            columns={"code": "_history_code", "close": "_ranker_close"}
+        )
+        fallback = fallback.drop(columns=["date"], errors="ignore")
+        data = data.merge(fallback, how="left", on="_history_code", validate="many_to_one")
+        data["close"] = pd.to_numeric(data["close"], errors="coerce").fillna(
+            pd.to_numeric(data["_ranker_close"], errors="coerce")
+        )
+        data["close_available"] = data["close"].notna()
+        data["market_data_status"] = "缺失"
+        data.loc[data["close_available"], "market_data_status"] = "仅收盘"
+        data.loc[data["ohlc_available"], "market_data_status"] = "完整OHLC"
+        return data.drop(columns=["_history_code", "_ranker_close"])
 
     def _historical_sell_lot_matches(
         self,
@@ -601,6 +655,11 @@ class WebPaperTradingApplicationService:
             .fillna(False)
             .astype(bool)
         )
+        close_available = (
+            operations.get("close_available", pd.Series(False, index=operations.index))
+            .fillna(False)
+            .astype(bool)
+        )
         return {
             "user_id": user_id,
             "trade_date": selected_date,
@@ -617,6 +676,7 @@ class WebPaperTradingApplicationService:
                 "sell_count": int((actions == "sell").sum()),
                 "ohlc_matched_count": int(ohlc_available.sum()),
                 "ohlc_missing_count": int((~ohlc_available).sum()),
+                "close_matched_count": int(close_available.sum()),
             },
         }
 

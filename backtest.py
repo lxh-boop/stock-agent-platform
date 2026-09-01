@@ -31,9 +31,10 @@ from model_zoo_backend import (
 from news_features import add_news_event_features
 from universe import get_stock_pool
 from backtest_rebalance import calculate_topk_rebalance, format_code_set
+from ranking_runtime.settings import ACTIVE_MODEL_BACKEND, ACTIVE_MODEL_NAME, ACTIVE_MODEL_VERSION
 
 ENABLE_NEWS_FEATURES = getattr(backtest_config, "ENABLE_NEWS_FEATURES", True)
-DEFAULT_BACKTEST_BACKEND = "zoo:chronos_bolt_small"
+DEFAULT_BACKTEST_BACKEND = ACTIVE_MODEL_BACKEND
 DFT_UNET_BACKEND = "dft_unet_external"
 
 
@@ -412,11 +413,11 @@ def summarize_backtest(
 
 def run_latest_t1_backtest(
     token: str | None = None,
-    model_version: str = "latest",
+    model_version: str = ACTIVE_MODEL_VERSION,
     model_backend: str = DEFAULT_BACKTEST_BACKEND,
     checkpoint_path: str | None = None,
-    topk: int = 10,
-    backtest_days: int = MIN_BACKTEST_DAYS,
+    topk: int = 15,
+    backtest_days: int | None = None,
     fetch_trade_days: int = DEFAULT_FETCH_TRADE_DAYS,
     buy_cost: float = 0.0003,
     sell_cost: float = 0.0003,
@@ -424,6 +425,19 @@ def run_latest_t1_backtest(
 ) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
     ensure_dirs()
 
+    model_backend = str(model_backend or DEFAULT_BACKTEST_BACKEND).strip()
+    if model_backend in {ACTIVE_MODEL_BACKEND, ACTIVE_MODEL_NAME}:
+        from ranking_runtime.backtest import run_registered_ranker_backtest
+
+        return run_registered_ranker_backtest(
+            topk=int(topk),
+            backtest_days=backtest_days,
+            buy_cost=float(buy_cost),
+            sell_cost=float(sell_cost),
+            stamp_tax=float(stamp_tax),
+        )
+
+    backtest_days = int(backtest_days or MIN_BACKTEST_DAYS)
     if backtest_days < MIN_BACKTEST_DAYS:
         backtest_days = MIN_BACKTEST_DAYS
 
@@ -598,15 +612,15 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--token", type=str, default=os.environ.get("TUSHARE_TOKEN", ""))
-    parser.add_argument("--model-version", type=str, default="latest")
+    parser.add_argument("--model-version", type=str, default=ACTIVE_MODEL_VERSION)
     parser.add_argument("--model-backend", type=str, default=DEFAULT_BACKTEST_BACKEND)
     parser.add_argument(
         "--checkpoint-path",
         type=str,
         default=DEFAULT_DFT_UNET_CHECKPOINT_PATH,
     )
-    parser.add_argument("--topk", type=int, default=10)
-    parser.add_argument("--backtest-days", type=int, default=MIN_BACKTEST_DAYS)
+    parser.add_argument("--topk", type=int, default=15)
+    parser.add_argument("--backtest-days", type=int, default=0)
     parser.add_argument("--fetch-trade-days", type=int, default=DEFAULT_FETCH_TRADE_DAYS)
     parser.add_argument("--buy-cost", type=float, default=0.0003)
     parser.add_argument("--sell-cost", type=float, default=0.0003)
@@ -623,7 +637,7 @@ if __name__ == "__main__":
         model_backend=args.model_backend,
         checkpoint_path=args.checkpoint_path,
         topk=args.topk,
-        backtest_days=args.backtest_days,
+        backtest_days=args.backtest_days or None,
         fetch_trade_days=args.fetch_trade_days,
         buy_cost=args.buy_cost,
         sell_cost=args.sell_cost,

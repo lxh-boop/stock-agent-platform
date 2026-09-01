@@ -2,10 +2,14 @@ import { Table, Tag, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { RankingRecord } from '../../types/dashboard'
 
-const price = (value: unknown) => typeof value === 'number' ? value.toFixed(2) : '—'
-const score = (value: unknown) => typeof value === 'number' ? (value * 100).toFixed(2) : '—'
-const historicalRate = (value: unknown) => typeof value === 'number'
-  ? <Tooltip title="独立留出集中相同排名分组的下一交易日实际上涨率；不是该股票的个体预测概率"><span>{(value * 100).toFixed(2)}%</span></Tooltip>
+const finite = (value: unknown) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+const price = (value: unknown) => finite(value) === null ? '—' : finite(value)!.toFixed(2)
+const score = (value: unknown) => finite(value) === null ? '—' : (finite(value)! * 100).toFixed(2)
+const historicalRate = (value: unknown) => finite(value) !== null
+  ? <Tooltip title="独立留出集中相同排名分组的下一交易日实际上涨率；不是该股票的个体预测概率"><span>{(finite(value)! * 100).toFixed(2)}%</span></Tooltip>
   : '—'
 
 export function RankingTable({ records, onSelect }: { records: RankingRecord[]; onSelect?: (code: string) => void }) {
