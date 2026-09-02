@@ -220,6 +220,7 @@ TRAIN_RAW_DATA_PATH = os.path.join(DATA_DIR, "train_raw_stock_data.csv")
 
 LATEST_RAW_DATA_PATH = os.path.join(DATA_DIR, "latest_raw_stock_data.csv")
 KRONOS_MARKET_HISTORY_CACHE_PATH = os.path.join(DATA_DIR, "kronos_market_history.csv")
+PAPER_MARKET_OHLC_CACHE_PATH = os.path.join(DATA_DIR, "paper_market_ohlc.csv")
 ACTIVE_RANKING_MODEL_DIR = os.path.join(MODEL_DIR, ACTIVE_RANKING_MODEL_NAME)
 ACTIVE_RANKING_MODEL_MANIFEST_PATH = os.environ.get(
     "ACTIVE_RANKING_MODEL_MANIFEST_PATH",

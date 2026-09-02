@@ -240,7 +240,32 @@ class WebPaperTradingApplicationService:
             on="_history_code",
             validate="many_to_one",
         )
+        data["_signal_ohlc_available"] = data[["open", "high", "low", "close"]].notna().all(axis=1)
+        from portfolio.paper_market_data import load_paper_ohlc_for_date
+
+        historical = load_paper_ohlc_for_date(trade_date).rename(
+            columns={
+                "code": "_history_code",
+                "open": "_cache_open",
+                "high": "_cache_high",
+                "low": "_cache_low",
+                "close": "_cache_close",
+                "source": "_cache_source",
+            }
+        )
+        historical = historical.drop(columns=["date"], errors="ignore")
+        data = data.merge(historical, how="left", on="_history_code", validate="many_to_one")
+        for column in ("open", "high", "low", "close"):
+            data[column] = pd.to_numeric(data[column], errors="coerce").fillna(
+                pd.to_numeric(data.get(f"_cache_{column}"), errors="coerce")
+            )
         data["ohlc_available"] = data[["open", "high", "low", "close"]].notna().all(axis=1)
+        data["market_data_source"] = ""
+        data.loc[data["_signal_ohlc_available"], "market_data_source"] = "signal_ohlc"
+        data.loc[
+            data["ohlc_available"] & ~data["_signal_ohlc_available"],
+            "market_data_source",
+        ] = data.get("_cache_source", "paper_market_cache")
         from application.support.ranker_market_data import load_ranker_close_for_date
 
         fallback = load_ranker_close_for_date(trade_date).rename(
@@ -255,7 +280,13 @@ class WebPaperTradingApplicationService:
         data["market_data_status"] = "缺失"
         data.loc[data["close_available"], "market_data_status"] = "仅收盘"
         data.loc[data["ohlc_available"], "market_data_status"] = "完整OHLC"
-        return data.drop(columns=["_history_code", "_ranker_close"])
+        return data.drop(
+            columns=[
+                "_history_code", "_ranker_close", "_cache_open", "_cache_high",
+                "_cache_low", "_cache_close", "_cache_source", "_signal_ohlc_available",
+            ],
+            errors="ignore",
+        )
 
     def _historical_sell_lot_matches(
         self,

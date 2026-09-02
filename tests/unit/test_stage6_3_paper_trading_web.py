@@ -220,6 +220,7 @@ def test_daily_history_returns_exact_positions_trades_and_same_day_ohlc(
         "sell_count": 0,
         "ohlc_matched_count": 1,
         "ohlc_missing_count": 0,
+        "close_matched_count": 1,
     }
     operation = payload["operations"]["records"][0]
     assert operation["stock_code"] == "000001"

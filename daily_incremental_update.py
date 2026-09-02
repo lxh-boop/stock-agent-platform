@@ -30,6 +30,7 @@ from news_db_sync import sync_event_cache_to_agent_db
 from news_features import add_news_event_features
 from pipelines.daily_update_pipeline import run_daily_update_pipeline
 from pipelines.schemas import PipelineContext
+from portfolio.paper_market_data import merge_paper_market_ohlc
 from ranking_runtime import (
     ACTIVE_MODEL_BACKEND,
     ACTIVE_MODEL_NAME,
@@ -258,6 +259,12 @@ def active_ranker_daily_update(
     market_window = build_market_data_window(init_tushare_pro(token))
     signal_date = str(market_window["expected_signal_date"])
     prediction_date = str(market_window["prediction_target_date"])
+    if _raw_data is not None and not _raw_data.empty and "date" in _raw_data.columns:
+        raw_dates = pd.to_datetime(_raw_data["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        merge_paper_market_ohlc(
+            _raw_data[raw_dates.eq(signal_date)],
+            source="daily_incremental_update",
+        )
     feature_refresh = refresh_ranker_features_for_date(
         token=token,
         signal_date=signal_date,

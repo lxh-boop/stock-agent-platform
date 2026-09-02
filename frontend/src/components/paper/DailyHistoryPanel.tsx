@@ -187,8 +187,10 @@ export function DailyHistoryPanel({ userId, availableDates }: { userId: string; 
               <Alert type="warning" showIcon message={`${data.trade_date} 没有独立持仓快照`} description="当日买卖仍会展示；持仓表不会用其他日期的数据代替。" />
             ) : null}
             {data.summary.ohlc_missing_count > 0 ? (
-              <Alert type="warning" showIcon message={`${data.summary.ohlc_missing_count} 笔操作缺少完整开高低收行情`} description={`已从主动模型行情缓存匹配 ${data.summary.close_matched_count ?? 0} 笔当日收盘价；开盘、最高和最低仍缺失时以“—”展示，不会用其他交易日行情补齐。`} />
-            ) : null}
+              <Alert type="warning" showIcon message={`${data.summary.ohlc_missing_count} 笔操作缺少完整开高低收行情`} description={`已匹配 ${data.summary.close_matched_count ?? 0} 笔当日收盘价；只有项目现有缓存和 Tushare 当日真实行情都没有记录时才显示“—”，不会用其他交易日或成交价猜测。`} />
+            ) : (
+              <Alert type="success" showIcon message="当日操作行情已补全" description={`${data.summary.operation_count} 笔操作均已匹配同一交易日的真实开盘、最高、最低和收盘价。`} />
+            )}
 
             <Row gutter={[12, 12]}>
               <Col xs={12} md={6}><Statistic title="收盘持仓" value={data.summary.position_count} suffix="只" /></Col>
