@@ -4,6 +4,7 @@ import { Alert, Button, Card, Col, Modal, Row, Space, Tag, Typography, message }
 import { PaperSectionCard } from './PaperSectionCard'
 import { listTasks, submitTask } from '../../api/taskApi'
 import { queryKeys } from '../../api/queryKeys'
+import { useCurrentUserId } from '../../hooks/useCurrentUserId'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTaskStore } from '../../stores/taskStore'
 import { TERMINAL_TASK_STATUSES } from '../../types/task'
@@ -18,7 +19,7 @@ interface Action {
 }
 
 export function PaperTaskActions({ profileComplete }: { profileComplete: boolean }) {
-  const userId = useSessionStore((state) => state.ownerId)
+  const userId = useCurrentUserId()
   const sessionId = useSessionStore((state) => state.sessionId)
   const setTask = useTaskStore((state) => state.setTask)
   const clear = useTaskStore((state) => state.clear)

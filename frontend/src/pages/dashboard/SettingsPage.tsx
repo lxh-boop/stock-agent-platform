@@ -19,11 +19,13 @@ import {
   message,
 } from 'antd'
 import { createWriteMeta } from '../../api/writeOperationApi'
+import { ApiContractError } from '../../api/errors'
 import { settingsApi } from '../../api/settingsApi'
 import { SchedulerStatusPanel } from '../../components/dashboard/SchedulerStatusPanel'
 import { EmptyState } from '../../components/common/EmptyState'
 import { PageHeader } from '../../components/common/PageHeader'
 import { PageLoading } from '../../components/common/PageLoading'
+import { useAuthStore } from '../../stores/authStore'
 import type { PublicSettings, SettingsUpdateRequest } from '../../types/settings'
 
 interface SettingsFormValues {
@@ -56,6 +58,25 @@ const EMPTY_SETTINGS: Pick<PublicSettings, 'feature_flags' | 'credentials' | 'll
   scheduler: { enabled: false, hour: 20, minute: 0, timezone: 'Asia/Shanghai', catch_up: true, runtime_running: false, job_registered: false, next_run_time: '', expected_signal_date: '', latest_signal_date: '', stale: false, last_started_at: '', last_finished_at: '', last_trade_date: '', last_status: 'unknown', current_step: '', last_error: '' },
 }
 
+function settingsErrorMessage(error: unknown): string {
+  if (error instanceof ApiContractError) {
+    const reason = error.details.reason
+    const parts = [
+      error.message,
+      reason ? String(reason) : '',
+      `code=${error.code}`,
+    ].filter(Boolean)
+    return parts.join('；')
+  }
+  return String(error ?? '未知错误')
+}
+
+function normalizeApiBaseUrl(value: string): string {
+  const text = value.trim().replace(/\/+$/, '')
+  if (text === 'https://open.bigmodel.cn/api/v1') return 'https://open.bigmodel.cn/api/paas/v4'
+  return text
+}
+
 function configuredText(custom: boolean, fallback: boolean, configured: boolean): string {
   if (custom) return '已自定义'
   if (fallback) return '使用默认配置'
@@ -65,6 +86,8 @@ function configuredText(custom: boolean, fallback: boolean, configured: boolean)
 export function SettingsPage() {
   const queryClient = useQueryClient()
   const [form] = Form.useForm<SettingsFormValues>()
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = user?.role === 'admin'
   const query = useQuery({ queryKey: ['web', 'settings'], queryFn: settingsApi.get })
 
   const settings = useMemo<PublicSettings | undefined>(() => query.data
@@ -96,6 +119,7 @@ export function SettingsPage() {
       const payload: SettingsUpdateRequest = {
         ...createWriteMeta('runtime-settings'),
         ...values,
+        api_base_url: normalizeApiBaseUrl(values.api_base_url),
         api_credential: values.clear_api_credential ? undefined : values.api_credential?.trim() || undefined,
         tushare_credential: values.clear_tushare_credential ? undefined : values.tushare_credential?.trim() || undefined,
         confirmed: true,
@@ -107,7 +131,7 @@ export function SettingsPage() {
       form.setFieldsValue({ api_credential: '', tushare_credential: '', clear_api_credential: false, clear_tushare_credential: false })
       await queryClient.invalidateQueries({ queryKey: ['web', 'settings'] })
     },
-    onError: (error) => message.error(`配置保存失败：${String(error)}`),
+    onError: (error) => message.error(`配置保存失败：${settingsErrorMessage(error)}`),
   })
 
   const watchedMode = Form.useWatch('llm_mode', form)
@@ -144,6 +168,14 @@ export function SettingsPage() {
         message="配置生效范围"
         description="保存后，下一次 Agent、新闻或行情任务会重新读取配置。正在运行的任务继续使用启动时的配置快照。"
       />
+      {!isAdmin ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="仅管理员可修改运行配置"
+          description="LLM、数据源与调度配置是平台级全局资源，当前账号为普通用户，只能查看。"
+        />
+      ) : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
@@ -284,7 +316,7 @@ export function SettingsPage() {
         </Card>
 
         <Space style={{ marginTop: 16 }}>
-          <Button type="primary" loading={mutation.isPending} onClick={submit}>保存配置</Button>
+          <Button type="primary" loading={mutation.isPending} onClick={submit} disabled={!isAdmin}>保存配置</Button>
           <Button onClick={() => void query.refetch()}>重新读取</Button>
         </Space>
       </Form>

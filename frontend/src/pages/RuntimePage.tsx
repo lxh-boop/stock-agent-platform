@@ -1,8 +1,9 @@
-import { Alert, Button, Card, Col, Input, Row, Space, Typography } from 'antd'
+import { Alert, Button, Card, Space, Typography } from 'antd'
 import { errorMessage } from '../api/errors'
 import { CancelTaskButton } from '../components/tasks/CancelTaskButton'
 import { TaskProgress } from '../components/tasks/TaskProgress'
 import { useDiagnosticTask } from '../hooks/useTask'
+import { useCurrentUserId } from '../hooks/useCurrentUserId'
 import { useSessionStore } from '../stores/sessionStore'
 import { useTaskStore } from '../stores/taskStore'
 
@@ -10,8 +11,7 @@ export function RuntimePage() {
   const task = useTaskStore((state) => state.task)
   const events = useTaskStore((state) => state.events)
   const clear = useTaskStore((state) => state.clear)
-  const ownerId = useSessionStore((state) => state.ownerId)
-  const setOwnerId = useSessionStore((state) => state.setOwnerId)
+  const ownerId = useCurrentUserId()
   const sessionId = useSessionStore((state) => state.sessionId)
   const { submit, cancel } = useDiagnosticTask()
 
@@ -27,10 +27,10 @@ export function RuntimePage() {
       </div>
       {failure ? <Alert type="error" showIcon message="任务调用失败" description={errorMessage(failure)} /> : null}
       <Card title="测试身份与会话">
-        <Row gutter={[16, 16]} align="middle">
-          <Col xs={24} md={10}><Input addonBefore="owner_id" value={ownerId} onChange={(event) => setOwnerId(event.target.value)} /></Col>
-          <Col xs={24} md={14}><Typography.Text code>{sessionId}</Typography.Text></Col>
-        </Row>
+        <Space direction="vertical" size="small">
+          <Typography.Text>任务归属（登录账号）：<Typography.Text strong>{ownerId}</Typography.Text></Typography.Text>
+          <Typography.Text>会话标识：<Typography.Text code>{sessionId}</Typography.Text></Typography.Text>
+        </Space>
       </Card>
       <Card title="SSE 诊断任务" data-testid="task-card">
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>

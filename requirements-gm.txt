@@ -1,0 +1,3 @@
+# Install only in the Python environment used by the post-close GM data job.
+# The GM SDK has its own Python-version and terminal compatibility constraints.
+gm

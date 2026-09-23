@@ -4,10 +4,26 @@ import traceback
 import uuid
 from typing import Any, Callable
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from server.api.contracts import OperationRequest, OperationResponse
 from server.api.serialization import decode_transport, encode_transport
+from server.api.security import AuthUser, require_user
+
+
+def _apply_principal_identity(kwargs: dict[str, Any], user: AuthUser) -> dict[str, Any]:
+    """Force client-supplied identity fields to the authenticated principal.
+
+    管理员保留显式跨用户操作能力；普通用户提交的 user_id/owner_id 一律改写为
+    登录身份，防止通过 kwargs 冒充他人。
+    """
+    if user.role == "admin":
+        return kwargs
+    patched = dict(kwargs or {})
+    for key in ("user_id", "owner_id"):
+        if key in patched:
+            patched[key] = user.user_id
+    return patched
 
 
 def build_operation_router(
@@ -37,12 +53,16 @@ def build_operation_router(
                 )
 
     @router.post("/operations/{operation}", response_model=OperationResponse)
-    def call_operation(operation: str, request: OperationRequest) -> OperationResponse:
+    def call_operation(
+        operation: str, request: OperationRequest, user: AuthUser = Depends(require_user)
+    ) -> OperationResponse:
         request_id = uuid.uuid4().hex
         try:
             args = decode_transport(request.args)
-            kwargs = decode_transport(request.kwargs)
-            result = invoker(str(operation), list(args or []), dict(kwargs or {}))
+            kwargs = _apply_principal_identity(
+                dict(decode_transport(request.kwargs) or {}), user
+            )
+            result = invoker(str(operation), list(args or []), kwargs)
             return OperationResponse(success=True, data=encode_transport(result), request_id=request_id)
         except KeyError as exc:
             return OperationResponse(

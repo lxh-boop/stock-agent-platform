@@ -1,114 +1,93 @@
 # Current Requirements
 
-本文档是当前需求的接手口径。若本文档与旧 prompt、旧页面文案或旧字段冲突，以本文档和标注的实现文件为准。
+本文档是当前需求的接手口径。若旧文档、旧页面文案或旧示例与本文件冲突，以本文件和标注的实现文件为准。
 
 ## 项目定位
 
-本项目是 A 股每日股票评分、AI 调整、模拟盘和 Agent 展示系统。它用于机器学习、金融数据分析、量化因子建模和项目展示，不是荐股系统，不接券商接口，不构成投资建议，不用于实盘交易。
+本项目是面向 A 股研究场景的 React + FastAPI 多 Agent 金融分析工作台，覆盖数据更新、模型排名、新闻证据、历史回测、AI 模拟盘和可控工具运行时。
 
-所有页面必须保留免责声明：
+系统只用于机器学习、金融数据分析和项目展示，不接券商接口，不构成投资建议，不用于实盘交易。
+
+所有用户可见页面和 Agent 输出必须保留免责声明：
 
 ```text
 本项目仅用于机器学习、金融数据分析和项目展示，不构成投资建议，不用于实盘交易。
 ```
 
-实现位置：
+## 当前架构
 
-- `app.py`：Streamlit 主页面、每日预测排名、免责声明与页面入口。
-- `app/pages/ai_paper_trading.py`：AI 模拟盘页面免责声明。
-- `scoring/schemas.py`：`COMPLIANCE_DISCLAIMER`。
-- `portfolio/schemas.py`：`PAPER_TRADING_DISCLAIMER`。
-- `llm_prompts.py`：AI 解释相关合规边界。
+```text
+React 19 / TypeScript / Vite / Ant Design
+  -> FastAPI / Pydantic Presenter
+  -> Application Service
+  -> Task Runtime / Agent Collaboration
+  -> Worker DAG / ToolExecutor / MCP Runtime
+  -> PostgreSQL / Neo4j / 宿主机模型与数据
+```
 
-## 当前有效功能
+旧 Streamlit、`app.py`、`app/**` 和 `client/api/**` 已下线，不再是正式入口。
 
-- 每日预测：从 `outputs/ranking_latest.csv` 展示当前排名，支持 TopK、图表、个股走势、模型指标。
-- 模型：当前保留并实际可用的最佳外部模型是 `chronos_bolt_small`；旧本地 MLP 训练和兼容后端已经移除。
-- AI 调整：根据模型预测、新闻证据、用户画像和 AI 可靠度生成仓位调整比例，不输出实盘交易建议。
-- AI 模拟盘：仅 paper trading，策略固定为 `hierarchical_top10`，不允许前端任意改策略参数。
-- 历史回放：默认从 `2026-04-01` 开始，可强制重建历史模拟盘交易。
-- Agent：作为查询、解释、组合状态、调度和回放等项目操作入口；它不能绕过服务层直接写产物。
+## 当前有效能力
 
-实现位置：
+- 预测排名：读取 PostgreSQL / `outputs/ranking_latest.csv` 的模型排名，支持 TopK、图表与个股信息。
+- 主动排名模型：`cross_sectional_ranker`，版本 `2026.08.29.1`，后端 `registered_ranker`，两个 LightGBM 成员做日截面百分位秩融合。
+- 数据更新：`daily_incremental_update.py` 负责行情、Tushare 特征、主动排名生成；15:30 前自动使用上一已完成交易日。
+- 模拟盘：仅 paper trading；策略固定为 `hierarchical_top10`，所有写路径必须经过 Proposal / Approval / 服务端复校。
+- Agent：React 页面通过 `/api/v1/tasks` 提交 `agent.run`，通过 SSE 获取事件；服务端负责最终回答持久化。
+- 非业务问题：`RequestCategory.GENERAL` 可直接由 LLM 回答，不进入 Need / Worker / Tool DAG。
 
-- `daily_incremental_update.py`：每日行情缓存、特征、排名生成。
-- `model_zoo_backend.py`、`model_zoo/registry.py`、`models/external_zoo/metadata.json`：外部模型后端与当前下载模型。
-- `scoring/final_score.py`、`scoring/signal_fusion.py`：AI 调整与最终推荐。
-- `pipelines/paper_trading_pipeline.py`、`pipelines/paper_backfill_pipeline.py`：模拟盘和历史回放。
-- `portfolio/rebalance_rules.py`、`portfolio/hierarchical_top10_allocator.py`、`portfolio/paper_trading_engine.py`：策略和纸面成交。
-- `app/pages/ai_agent.py`、`agent/tools/`：Agent 页面和工具。
+## 关键实现入口
 
-## 当前页面
+| 领域 | 入口 |
+| --- | --- |
+| API envelope / contract | `server/api/contracts.py`、`contracts/stage6/` |
+| 任务提交、SSE、恢复 | `server/api/tasks.py`、`server/task_runtime/` |
+| Agent 单入口 | `agent/executor.py`、`agent/collaboration/integration.py` |
+| Request / Need / Worker 分层 | `agent/collaboration/request_bundle.py`、`agent/collaboration/planner.py` |
+| Worker 私有 Tool DAG | `agent/tool_dag/`、`agent/tool_runtime/`、`agent/worker_tools/` |
+| 主动排名模型 | `daily_incremental_update.py`、`ranking_runtime/`、`stock_ranker/` |
+| 设置与密钥 | `application/web_settings_service.py`、`core/config/secrets.py` |
 
-- 首页 / 预测排名：`app.py`
-- AI 模拟盘：`app/pages/ai_paper_trading.py`
-- AI Agent：`app/pages/ai_agent.py`
-- 模型搜索：`app/pages/model_search.py`
-- 新闻、RAG、AI 解释、系统设置：在 `app.py` 的 tab 内实现。
+## Provider 与模型配置
 
-## AI 权限边界
+- LLM Provider 支持显式注册；`zai` / `zhipu` / `glm` 使用 OpenAI-compatible adapter。
+- ZAI 的 `glm-5.3-flash` 走 Responses API，不走 Chat Completions。
+- 每个任务绑定提交时的 `profile_id`、`config_hash`、provider 和 model，避免运行中配置漂移。
+- LLM API Key 只能保存在服务端 secret store、环境变量或受控文件中，禁止返回浏览器或写入 Git。
 
-AI 只能做解释、证据检索、信号融合和 paper trading 计划生成。AI 不允许：
+## 数据与调度口径
 
-- 生成“买入/卖出/持有”的实盘指令。
-- 连接真实券商或自动下单。
-- 绕过 `portfolio/`、`pipelines/`、`database/repositories/` 直接改账户、订单或数据库。
-- 把 RAG 相似度或新闻情绪直接当作收益预测。
-- 硬编码或泄露 Tushare Token、LLM API Key。
+- 业务运行数据以 PostgreSQL 为权威；文件和 CSV 只作为缓存、产物或导出。
+- Neo4j 只承载 GraphRef / 金融实体权威关系，不替代业务数据库。
+- 每日调度在 15:30 前自动解析为上一已完成交易日，15:30 后才解析为当日。
+- 调度器内部失败必须向 Task Runtime 抛出异常；外层任务不得在业务失败时显示 `succeeded`。
 
-实现位置：
+## Agent 分层边界
 
-- `scoring/schemas.py`：合规免责声明和输出字段过滤。
-- `pipelines/daily_update_pipeline.py`：prediction -> rag -> scoring -> paper -> report 的受控流程。
-- `agent/tools/tool_registry.py`、`agent/tools/tool_schemas.py`：Agent 工具边界。
-- `portfolio/storage.py`：模拟盘落盘统一入口。
+Main Agent / Request Planner 只能看到：
 
-## 废弃字段和旧逻辑
+- 规范化用户请求；
+- 会话摘要和少量上下文；
+- 压缩版 Worker capability catalog；
+- Need / Worker binding 合同。
 
-以下字段不再是当前业务主链路的依据：
+Main Agent 不能看到：
 
-- `final_action`
-- `watchlist`
-- `exclude`
-- `keep`
-- `down_weight`
-- 普通风险惩罚字段：`risk_penalty`、`risk_penalty_score`
-- 规则惩罚字段：`rule_penalty`、`rule_penalty_score`
+- 私有 Tool ID、Tool schema 和 Tool 参数；
+- 数据库连接串、服务器路径；
+- LLM/Tushare/Neo4j 凭据；
+- 原始 Tool payload。
 
-当前口径：
+Worker Tool Planner 只能看到被选中 Worker 的私有 Tool 目录，并输出可验证 Tool DAG。
 
-- AI 调整输出核心是 `news_adjustment`、`user_adjustment`、`effective_news_adjustment`、`combined_adjustment`、`position_adjustment_ratio`、`target_weight`。
-- 模拟盘实际动作使用 `paper_action` 和真实订单字段，如 `paper_buy`、`paper_sell`、`paper_reduce`、`paper_hold`。
-- 历史旧文件里可能仍有 `final_action` 或 `watchlist` 字段，只作为兼容读取，不作为新逻辑来源。
+## 权限与合规边界
 
-实现位置：
+AI 只能做研究、解释、证据检索、排名、组合状态读取和 paper trading 计划生成。
 
-- `scoring/schemas.py`：`FusionOutput.to_dict()` 主动移除 `final_action`、`risk_penalty`、`rule_penalty` 等旧字段。
-- `database/migrations/013_remove_action_and_penalty_fields.sql`：数据库迁移移除旧字段。
-- `tests/unit/test_database_migration_removes_old_fields.py`：测试确认旧字段不在关键表中。
-- `portfolio/storage.py`：写订单 CSV 时排除 `final_score`、`final_action`。
-- `scoring/risk_penalty.py`、`scoring/rule_engine.py`：保留为兼容/旧实验模块，不是当前主链路。
+禁止：
 
-## 当前默认参数
-
-- Universe：`csi300`
-- 模拟盘默认初始资产：`150000.0`
-- 历史回放默认开始日：`2026-04-01`
-- 模拟盘固定策略：`hierarchical_top10`
-- 回放前端固定：`top_k=15`、`entry_top_k=10`、`hold_buffer_rank=15`、`max_positions=10`
-- 目标现金：`5%`
-- 单股上限：`30%`
-
-实现位置：
-
-- `config.py`
-- `app/pages/ai_paper_trading.py`
-- `portfolio/trading_cost_config.py`
-- `pipelines/paper_trading_pipeline.py`
-- `pipelines/paper_backfill_pipeline.py`
-
-## 当前已知风险
-
-- `daily_incremental_update.py` 的命令行入口当前主要支持 `zoo:*` 模型后端；旧本地 MLP 后端不再作为有效路径。
-- 部分旧源码注释或页面文案存在编码历史问题；接手时优先看函数、字段和本文档，不要只按旧中文文案判断业务状态。
-- `scoring/risk_penalty.py`、`scoring/rule_engine.py` 不应被重新接入主流程，除非先更新需求和测试。
+- 生成实盘买卖指令；
+- 连接券商或自动下单；
+- 绕过 service / repository 直接改业务数据；
+- 把新闻相似度或情绪直接当作收益预测；
+- 泄露 Token、API Key、密码或确认令牌。

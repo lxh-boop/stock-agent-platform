@@ -86,8 +86,12 @@ def main() -> int:
             and line.strip().endswith(":")
         ):
             service_lines.append(line.strip())
-    if set(service_lines) != {"api:", "frontend:"}:
-        violations.append(f"production Compose services must be api/frontend only: {service_lines}")
+    required_services = {"api:", "postgres:", "frontend:"}
+    if set(service_lines) != required_services:
+        violations.append(
+            "production Compose services must be api/postgres/frontend only: "
+            f"{service_lines}"
+        )
     for forbidden in ("streamlit", "react-preview", "8501", "_stcore"):
         if forbidden.lower() in compose.lower():
             violations.append(f"production Compose contains retired marker: {forbidden}")

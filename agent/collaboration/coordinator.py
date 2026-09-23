@@ -912,6 +912,80 @@ class AgentCollaborationCoordinator:
         data = result.data.get("business_data") if isinstance(result.data.get("business_data"), dict) else {}
         return str(data.get("report") or data.get("result.user_facing") or "").strip()
 
+    def _execute_general_answer(
+        self,
+        *,
+        bundle: RequestBundle,
+        run_id: str,
+        session_id: str,
+        user_id: str,
+        language: str,
+    ) -> dict[str, Any]:
+        """Complete an isolated non-business request without Worker/Tool DAGs."""
+
+        objective = "\n".join(item.objective for item in bundle.general_requests())
+        answer = self.llm_service.generate_text(
+            stage="general_answer",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是StockDailyApp的助手。当前请求没有金融业务数据或操作诉求，"
+                        "直接、简洁地回答用户。不要调用或虚构业务数据；"
+                        "涉及投资建议时补充：本项目仅用于机器学习、金融数据分析和项目展示，"
+                        "不构成投资建议，不用于实盘交易。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"回复语言：{language or 'zh'}\n用户输入：{objective}",
+                },
+            ],
+            max_output_tokens=800,
+            temperature=0.2,
+            operation="general_answer",
+            disable_thinking=True,
+        )
+
+        request_results: dict[str, dict[str, Any]] = {}
+        materialized_results: dict[str, dict[str, Any]] = {}
+        for item in bundle.requests:
+            item.status = RequestStatus.COMPLETED
+            item.status_reason = "general_answer_completed"
+            request_results[item.request_id] = {
+                "request_id": item.request_id,
+                "status": item.status.value,
+                "reason": item.status_reason,
+            }
+            materialized_results[item.request_id] = {
+                "request_id": item.request_id,
+                "source_index": item.source_index,
+                "category": item.category.value,
+                "request_type": "",
+                "proposal_required": False,
+                "objective": item.objective,
+                "status": item.status.value,
+                "status_reason": item.status_reason,
+                "depends_on": list(item.depends_on),
+                "result": {"answer": answer},
+            }
+
+        bundle_results_payload = {
+            "schema_version": "request_bundle_results.v2",
+            "request_bundle": bundle.to_dict(),
+            "request_coverage": self._request_coverage(bundle, request_results),
+            "request_results": materialized_results,
+        }
+        result = self._empty_result(answer=answer, success=True, status="completed")
+        result["run_total_duration_ms"] = 0.0
+        result["bundle_results_payload"] = bundle_results_payload
+        result["execution_status"] = "completed"
+        result["graph_runtime"] = {
+            "route": "general_answer",
+            "worker_dag": {"task_count": 0, "tasks": [], "execution_batches": [], "execution_order": []},
+        }
+        return result
+
     def execute(
         self,
         *,
@@ -968,6 +1042,19 @@ class AgentCollaborationCoordinator:
             reuse_candidates=reuse_inventory,
         )
         flow_event("REQUEST_BUNDLE_CREATED", bundle.to_dict(), run_id=run_id)
+        if bundle.requests and all(item.category == RequestCategory.GENERAL for item in bundle.requests):
+            flow_event(
+                "GENERAL_ANSWER_ROUTE_SELECTED",
+                {"request_count": len(bundle.requests), "worker_dag": False},
+                run_id=run_id,
+            )
+            return self._execute_general_answer(
+                bundle=bundle,
+                run_id=run_id,
+                session_id=session_id,
+                user_id=user_id,
+                language=language,
+            )
         for item in bundle.requests:
             flow_event(
                 "REQUEST_CLASSIFIED",
@@ -1315,6 +1402,16 @@ class AgentCollaborationCoordinator:
                         "presentation_policy": presentation_policy.to_dict(),
                     }
                     save_request_checkpoint(item, phase="presentation_applied", result=request_results[item.request_id])
+                    flow_event("REQUEST_COMPLETION_UPDATED", request_results[item.request_id], run_id=run_id)
+                elif item.category == RequestCategory.GENERAL:
+                    pending.pop(item.request_id, None)
+                    item.status = RequestStatus.COMPLETED
+                    request_results[item.request_id] = {
+                        "request_id": item.request_id,
+                        "status": item.status.value,
+                        "reason": "general_request_composed_by_final_report",
+                    }
+                    save_request_checkpoint(item, phase="general_completed", result=request_results[item.request_id])
                     flow_event("REQUEST_COMPLETION_UPDATED", request_results[item.request_id], run_id=run_id)
 
             ready_business = [

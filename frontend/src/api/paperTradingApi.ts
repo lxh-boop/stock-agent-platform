@@ -4,10 +4,7 @@ import { getWeb } from './webApi'
 import type { OperationResponse } from '../types/api'
 import type {
   BackfillPreviewRequest,
-  CashFlowCancelRequest,
   CashFlowPreviewRequest,
-  PaperProfilePayload,
-  PaperProposal,
   PaperProposalList,
   PaperTradingDayHistory,
   PaperTradingSnapshot,
@@ -28,13 +25,10 @@ async function send<T>(method: 'post' | 'put', url: string, body: unknown): Prom
 export const paperTradingApi = {
   summary: (userId: string) => getWeb<PaperTradingSnapshot>(`${BASE}/summary`, { params: { user_id: userId } }),
   history: (userId: string, tradeDate: string) => getWeb<PaperTradingDayHistory>(`${BASE}/history`, { params: { user_id: userId, trade_date: tradeDate } }),
-  profile: (userId: string) => getWeb<PaperProfilePayload>(`${BASE}/profile`, { params: { user_id: userId } }),
   updateProfile: (request: ProfileUpdateRequest) => send<Record<string, unknown>>('put', `${BASE}/profile`, request),
   proposals: (userId: string) => getWeb<PaperProposalList>(`${BASE}/proposals`, { params: { user_id: userId } }),
-  proposal: (userId: string, planId: string) => getWeb<PaperProposal>(`${BASE}/proposals/${encodeURIComponent(planId)}`, { params: { user_id: userId } }),
   previewBackfill: (request: BackfillPreviewRequest) => send<Record<string, unknown>>('post', `${BASE}/backfill/preview`, request),
   previewCashFlow: (request: CashFlowPreviewRequest) => send<Record<string, unknown>>('post', `${BASE}/cash-flows/preview`, request),
-  cancelCashFlow: (cashFlowId: string, request: CashFlowCancelRequest) => send<Record<string, unknown>>('post', `${BASE}/cash-flows/${encodeURIComponent(cashFlowId)}/cancel`, request),
   commitProposal: (planId: string, request: ProposalCommitRequest) => send<Record<string, unknown>>('post', `${BASE}/proposals/${encodeURIComponent(planId)}/commit`, request),
   rejectProposal: (planId: string, request: ProposalRejectRequest) => send<Record<string, unknown>>('post', `${BASE}/proposals/${encodeURIComponent(planId)}/reject`, request),
 }

@@ -1,19 +1,10 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import {
-  migrateOwnerIdentity,
-  normalizeOwnerId,
-  SYSTEM_OWNER_FALLBACK,
-  type OwnerMode,
-} from './sessionIdentity'
 
+// 身份（ownerId）已由登录态（authStore + 后端会话）接管，这里只保留
+// 标识当前浏览器标签页生命周期的 sessionId，用于任务刷新恢复。
 interface SessionState {
-  ownerId: string
-  ownerMode: OwnerMode
   sessionId: string
-  setOwnerId: (value: string) => void
-  useSystemOwnerId: (value: string) => void
-  rotateSession: () => void
 }
 
 function randomSessionId(): string {
@@ -22,33 +13,15 @@ function randomSessionId(): string {
 
 export const useSessionStore = create<SessionState>()(
   persist(
-    (set) => ({
-      ownerId: SYSTEM_OWNER_FALLBACK,
-      ownerMode: 'system',
+    () => ({
       sessionId: randomSessionId(),
-      setOwnerId: (ownerId) => set({ ownerId: normalizeOwnerId(ownerId), ownerMode: 'manual' }),
-      useSystemOwnerId: (ownerId) => set({ ownerId: normalizeOwnerId(ownerId), ownerMode: 'system' }),
-      rotateSession: () => set({ sessionId: randomSessionId() }),
     }),
     {
       name: 'stock-stage6-session',
-      version: 2,
-      migrate: (persistedState, version) => {
+      version: 3,
+      migrate: (persistedState) => {
         const state = (persistedState ?? {}) as Partial<SessionState>
-        if (version >= 2 && state.ownerMode) {
-          return {
-            ...state,
-            ownerId: normalizeOwnerId(state.ownerId),
-            ownerMode: state.ownerMode,
-            sessionId: String(state.sessionId || randomSessionId()),
-          }
-        }
-        const identity = migrateOwnerIdentity(state.ownerId)
-        return {
-          ...state,
-          ...identity,
-          sessionId: String(state.sessionId || randomSessionId()),
-        }
+        return { sessionId: String(state.sessionId || randomSessionId()) }
       },
     },
   ),

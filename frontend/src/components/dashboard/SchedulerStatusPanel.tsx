@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Descriptions, Modal, Space, Tag, Typography, message } from 'antd'
 import { submitTask } from '../../api/taskApi'
+import { useCurrentUserId } from '../../hooks/useCurrentUserId'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTaskStore } from '../../stores/taskStore'
 import type { PublicSettings } from '../../types/settings'
@@ -18,7 +19,7 @@ function statusColor(status: string): string {
 
 export function SchedulerStatusPanel({ settings }: { settings: PublicSettings }) {
   const scheduler = settings.scheduler
-  const ownerId = useSessionStore((state) => state.ownerId)
+  const ownerId = useCurrentUserId()
   const sessionId = useSessionStore((state) => state.sessionId)
   const activeTask = useTaskStore((state) => state.task)
   const setTask = useTaskStore((state) => state.setTask)

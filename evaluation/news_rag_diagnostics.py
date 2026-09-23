@@ -3,10 +3,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
 import pandas as pd
@@ -74,8 +78,11 @@ def rebuild_news_rag_indexes(
     dense_chunks = _dense_index_chunks(chunks)
     index_dir = Path(output_dir) / "rag_indexes"
     bm25 = BM25Retriever().build_index(chunks)
-    dense = DenseRetriever().build_index(dense_chunks)
+    # Persist BM25 before loading the dense encoder. This keeps peak memory
+    # substantially lower on 16 GB machines when the news corpus is large.
     bm25_path = save_bm25_index(bm25, index_dir / "news_bm25.pkl")
+    del bm25
+    dense = DenseRetriever().build_index(dense_chunks)
     dense_path = save_dense_index(dense, index_dir / "news_dense.pkl")
     dense_status = dense.status()
     embedding_rows = _persist_dense_embeddings(db_path, dense, dense_path)
@@ -135,20 +142,24 @@ def _persist_dense_embeddings(
         # Keep the embedding table aligned with the current official dense
         # index for this model. This removes stale rows from interrupted or
         # previous wider index builds without touching other embedding models.
-        conn.execute("DELETE FROM news_embedding WHERE embedding_model = %s", (model_name,))
-        conn.executemany(
-            """
-            INSERT INTO news_embedding (
-                embedding_id, chunk_id, embedding_model, embedding_dim,
-                embedding_path, embedding, created_at
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (embedding_id) DO UPDATE SET
-                chunk_id = excluded.chunk_id, embedding_model = excluded.embedding_model,
-                embedding_dim = excluded.embedding_dim, embedding_path = excluded.embedding_path,
-                embedding = excluded.embedding, created_at = excluded.created_at
-            """,
-            [(r["embedding_id"], r["chunk_id"], r["embedding_model"], r["embedding_dim"], r["embedding_path"], r["embedding"], r["created_at"]) for r in rows],
-        )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM news_embedding WHERE embedding_model = %s",
+                (model_name,),
+            )
+            cursor.executemany(
+                """
+                INSERT INTO news_embedding (
+                    embedding_id, chunk_id, embedding_model, embedding_dim,
+                    embedding_path, embedding, created_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (embedding_id) DO UPDATE SET
+                    chunk_id = excluded.chunk_id, embedding_model = excluded.embedding_model,
+                    embedding_dim = excluded.embedding_dim, embedding_path = excluded.embedding_path,
+                    embedding = excluded.embedding, created_at = excluded.created_at
+                """,
+                [(r["embedding_id"], r["chunk_id"], r["embedding_model"], r["embedding_dim"], r["embedding_path"], r["embedding"], r["created_at"]) for r in rows],
+            )
         conn.commit()
     return len(rows)
 

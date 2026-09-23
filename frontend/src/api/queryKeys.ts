@@ -1,17 +1,7 @@
 export const queryKeys = {
   health: ['health'] as const,
-  task: (taskId: string) => ['task', taskId] as const,
-  dashboard: ['web', 'dashboard'] as const,
-  rankings: ['web', 'dashboard', 'rankings'] as const,
-  stock: (stockCode: string) => ['web', 'stock', stockCode] as const,
-  models: ['web', 'models'] as const,
-  backtest: (backtestId = 'latest') => ['web', 'backtest', backtestId] as const,
-  news: ['web', 'news'] as const,
-  settings: ['web', 'settings'] as const,
-  monitor: ['web', 'monitor'] as const,
   paperTrading: (userId: string) => ['web', 'paper-trading', userId] as const,
   paperHistory: (userId: string, tradeDate: string) => ['web', 'paper-trading', 'history', userId, tradeDate] as const,
   paperProfile: (userId: string) => ['web', 'paper-trading', 'profile', userId] as const,
   paperProposals: (userId: string) => ['web', 'paper-trading', 'proposals', userId] as const,
-  tasks: (ownerId: string, sessionId = '') => ['tasks', ownerId, sessionId] as const,
 }

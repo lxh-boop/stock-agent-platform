@@ -22,9 +22,11 @@ Streamlit、`app.py`、`app/**` 和旧 `client/api/**` 已下线。不得重新�
 
 ## 开发环境
 
+当前机器示例：
+
 ```text
-项目目录：D:\stock_daily_app
-Python：D:\stock_daily_app\.venv\Scripts\python.exe
+项目目录：D:\cht\agent\stock-agent-platform
+Python：D:\cht\agent\stock-agent-platform\.venv\Scripts\python.exe
 ```
 
 不要使用 `py -3`、裸 `python` 或 C 盘解释器执行项目测试和维护脚本。
@@ -48,6 +50,33 @@ frontend  3000
 api       8010
 ```
 
+本地脱离 Docker 调试时，可在 `frontend/` 执行：
+
+```powershell
+npm run dev
+```
+
+默认地址：
+
+```text
+frontend  5173
+api       8010
+```
+
+## 本地服务启动（脱离 Docker 调试）
+
+```powershell
+# PostgreSQL（便携版，127.0.0.1:5432）
+powershell -ExecutionPolicy Bypass -File D:\cht\agent\postgres\start_pg.ps1
+# Neo4j（便携版 Community 5.26 + JDK21，127.0.0.1:7687；密码在 D:\cht\agent\neo4j\secrets\neo4j_password.txt）
+powershell -ExecutionPolicy Bypass -File D:\cht\agent\neo4j\start_neo4j.ps1
+```
+
+API 进程需要同时注入 `STOCK_POSTGRES_*`（见 `D:\cht\agent\postgres\dev_env.ps1`）和
+`NEO4J_URI/NEO4J_USERNAME/NEO4J_PASSWORD` 环境变量，缺任一组对应 readiness 检查会失败。
+金融图首次初始化：`scripts/init_financial_graph.py`，证券主数据导入：
+`scripts/import_security_master.py datacsi300_stock_pool.csv`。
+
 ## 分层约束
 
 ```text
@@ -60,6 +89,8 @@ React -> FastAPI Router/Schema/Presenter -> Application Service -> Domain/Runtim
 - 写操作必须二次确认、服务端复校和幂等提交；
 - `application/support/**` 只能放置 UI 无关的共享读取和格式化能力；
 - 不允许从 `application/**` 或 `agent/**` 反向依赖前端目录。
+- 业务运行数据以 PostgreSQL 为权威；Neo4j 只承载金融图权威关系。
+- LLM Provider 必须经过 registry 和 adapter；不同 Provider 的协议差异不得散落到 Planner。
 
 ## 主要目录
 

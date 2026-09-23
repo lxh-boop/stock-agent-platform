@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config.service_settings import get_service_settings
@@ -10,6 +10,7 @@ from core.config.startup import get_startup_report, invalidate_startup_cache
 from local_config import migrate_legacy_local_config_secrets
 
 from server.api.contracts import OperationResponse
+from server.api.security import require_user
 from server.api.dispatch import (
     agent_bootstrap,
     dashboard_bootstrap,
@@ -26,6 +27,7 @@ from server.api.dispatch import (
 )
 from server.api.router_factory import build_operation_router
 from server.api.tasks import router as tasks_router, task_manager
+from server.api.routers.web_auth import router as web_auth_router
 from server.api.routers.web_dashboard import router as web_dashboard_router
 from server.api.routers.web_stocks import router as web_stocks_router
 from server.api.routers.web_models import router as web_models_router
@@ -120,24 +122,27 @@ def create_app() -> FastAPI:
             },
         )
 
-    app.include_router(build_operation_router(prefix="/api/v1/dashboard", tag="dashboard", invoker=invoke_dashboard, bootstrap=dashboard_bootstrap))
-    app.include_router(build_operation_router(prefix="/api/v1/agent", tag="agent", invoker=invoke_agent, bootstrap=agent_bootstrap))
-    app.include_router(build_operation_router(prefix="/api/v1/paper-trading", tag="paper-trading", invoker=invoke_paper, bootstrap=paper_bootstrap))
-    app.include_router(build_operation_router(prefix="/api/v1/paper-profile", tag="paper-profile", invoker=invoke_paper_profile))
-    app.include_router(build_operation_router(prefix="/api/v1/model-search", tag="model-search", invoker=invoke_model, bootstrap=model_bootstrap))
-    app.include_router(build_operation_router(prefix="/api/v1/system-monitor", tag="system-monitor", invoker=invoke_monitor))
-    app.include_router(build_operation_router(prefix="/api/v1/handoff", tag="handoff", invoker=invoke_handoff))
-    app.include_router(build_operation_router(prefix="/api/v1/reflection", tag="reflection", invoker=invoke_reflection))
-    app.include_router(tasks_router)
-    app.include_router(web_dashboard_router)
-    app.include_router(web_stocks_router)
-    app.include_router(web_models_router)
-    app.include_router(web_backtests_router)
-    app.include_router(web_news_router)
-    app.include_router(web_settings_router)
-    app.include_router(web_monitor_router)
-    app.include_router(web_paper_trading_router)
-    app.include_router(web_agent_router)
+    # 多用户边界：除认证与探活端点外，所有 /api/v1 业务路由都要求已登录会话。
+    authenticated: list[Depends] = [Depends(require_user)]
+    app.include_router(build_operation_router(prefix="/api/v1/dashboard", tag="dashboard", invoker=invoke_dashboard, bootstrap=dashboard_bootstrap), dependencies=authenticated)
+    app.include_router(build_operation_router(prefix="/api/v1/agent", tag="agent", invoker=invoke_agent, bootstrap=agent_bootstrap), dependencies=authenticated)
+    app.include_router(build_operation_router(prefix="/api/v1/paper-trading", tag="paper-trading", invoker=invoke_paper, bootstrap=paper_bootstrap), dependencies=authenticated)
+    app.include_router(build_operation_router(prefix="/api/v1/paper-profile", tag="paper-profile", invoker=invoke_paper_profile), dependencies=authenticated)
+    app.include_router(build_operation_router(prefix="/api/v1/model-search", tag="model-search", invoker=invoke_model, bootstrap=model_bootstrap), dependencies=authenticated)
+    app.include_router(build_operation_router(prefix="/api/v1/system-monitor", tag="system-monitor", invoker=invoke_monitor), dependencies=authenticated)
+    app.include_router(build_operation_router(prefix="/api/v1/handoff", tag="handoff", invoker=invoke_handoff), dependencies=authenticated)
+    app.include_router(build_operation_router(prefix="/api/v1/reflection", tag="reflection", invoker=invoke_reflection), dependencies=authenticated)
+    app.include_router(tasks_router, dependencies=authenticated)
+    app.include_router(web_dashboard_router, dependencies=authenticated)
+    app.include_router(web_stocks_router, dependencies=authenticated)
+    app.include_router(web_models_router, dependencies=authenticated)
+    app.include_router(web_backtests_router, dependencies=authenticated)
+    app.include_router(web_news_router, dependencies=authenticated)
+    app.include_router(web_settings_router, dependencies=authenticated)
+    app.include_router(web_monitor_router, dependencies=authenticated)
+    app.include_router(web_paper_trading_router, dependencies=authenticated)
+    app.include_router(web_agent_router, dependencies=authenticated)
+    app.include_router(web_auth_router)
     return app
 
 

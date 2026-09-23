@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 import traceback
 from typing import Any
 import uuid
@@ -29,6 +30,9 @@ _RUN_DEBUG_FILES: dict[str, Path] = {}
 _RUN_DEBUG_SEQUENCE: dict[str, int] = {}
 _RUN_EVENT_FILES: dict[str, Path] = {}
 _RUN_EVENT_SEQUENCE: dict[str, int] = {}
+_RUN_START_MONOTONIC: dict[str, float] = {}
+_RUN_LAST_MONOTONIC: dict[str, float] = {}
+_RUN_EVENT_TIMINGS: dict[str, list[dict[str, Any]]] = {}
 
 _SECRET_KEY_PATTERN = re.compile(
     r"(?:api[_-]?key|token|secret|password|passwd|credential|"
@@ -735,31 +739,48 @@ def _append_event(
     start_new = stage_upper == "REQUEST"
 
     with _LOCK:
-        path = _path_for_run(
-            canonical_run_id,
-            start_new=start_new,
-            payload=payload,
-        )
-        sequence = _RUN_SEQUENCE.get(canonical_run_id, 0) + 1
-        _RUN_SEQUENCE[canonical_run_id] = sequence
+            now_monotonic = time.monotonic()
+            run_started_monotonic = _RUN_START_MONOTONIC.setdefault(canonical_run_id, now_monotonic)
+            last_monotonic = _RUN_LAST_MONOTONIC.get(canonical_run_id, run_started_monotonic)
+            run_elapsed_ms = max(0.0, (now_monotonic - run_started_monotonic) * 1000.0)
+            gap_ms = max(0.0, (now_monotonic - last_monotonic) * 1000.0)
+            _RUN_LAST_MONOTONIC[canonical_run_id] = now_monotonic
+            path = _path_for_run(
+                canonical_run_id,
+                start_new=start_new,
+                payload=payload,
+            )
+            sequence = _RUN_SEQUENCE.get(canonical_run_id, 0) + 1
+            _RUN_SEQUENCE[canonical_run_id] = sequence
+            event_timing = {
+                "sequence": sequence,
+                "stage": stage_name,
+                "level": str(level or "INFO"),
+                "at": datetime.now().isoformat(timespec="milliseconds"),
+                "run_elapsed_ms": round(run_elapsed_ms, 3),
+                "since_previous_ms": round(gap_ms, 3),
+            }
+            _RUN_EVENT_TIMINGS.setdefault(canonical_run_id, []).append(event_timing)
 
-        title_label = _STAGE_LABELS.get(stage_upper, stage_name)
-        details = [
+    title_label = _STAGE_LABELS.get(stage_upper, stage_name)
+    details = [
             f"# {sequence:02d} · {stage_upper} · {title_label}",
             "",
             f"- 时间：`{datetime.now().isoformat(timespec='milliseconds')}`",
+            f"- 距开始：`{event_timing['run_elapsed_ms']:.3f} ms`",
+            f"- 距上一事件：`{event_timing['since_previous_ms']:.3f} ms`",
             f"- 类型：`{trace_kind}`",
             f"- 级别：`{_redact_text(level)}`",
         ]
-        if task_id:
-            details.append(f"- Task ID：`{_redact_text(task_id)}`")
+    if task_id:
+        details.append(f"- Task ID：`{_redact_text(task_id)}`")
 
-        combined_payload: Any = payload
-        if metadata:
-            combined_payload = {"payload": payload, "metadata": metadata}
+    combined_payload: Any = payload
+    if metadata:
+        combined_payload = {"payload": payload, "metadata": metadata}
 
-        details.extend(
-            [
+    details.extend(
+        [
                 "",
                 "```json",
                 safe_json_dumps(combined_payload),
@@ -768,13 +789,13 @@ def _append_event(
                 "---",
                 "",
             ]
-        )
+    )
 
-        with path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write("\n".join(details))
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write("\n".join(details))
 
-        append_unified_event(
-            {
+    append_unified_event(
+        {
                 "event_type": "FLOW_EVENT",
                 "flow_sequence": sequence,
                 "task_id": str(task_id or ""),
@@ -782,9 +803,13 @@ def _append_event(
                 "level": str(level or "INFO"),
                 "trace_kind": trace_kind,
                 "payload": combined_payload,
-            },
-            run_id=canonical_run_id,
-        )
+                "timing": {
+                    "run_elapsed_ms": event_timing["run_elapsed_ms"],
+                    "since_previous_ms": event_timing["since_previous_ms"],
+                },
+        },
+        run_id=canonical_run_id,
+    )
 
     return str(path)
 
@@ -1226,6 +1251,44 @@ def finalize_flow_markdown(
                 for item in _RUN_LLM_EXECUTIONS.get(canonical_run_id, [])
                 if isinstance(item, dict)
             ]
+            result_statuses = [
+                str(item.get("status") or "").strip().lower()
+                for item in result_items
+            ]
+            graph_results = {
+                "completed_count": sum(status in {"completed", "succeeded"} for status in result_statuses),
+                "failed_count": sum(status in {"failed", "error"} for status in result_statuses),
+                "waiting_context_count": sum(status == "waiting_context" for status in result_statuses),
+            }
+            event_timings = list(_RUN_EVENT_TIMINGS.get(canonical_run_id, []))
+            llm_timing = get_llm_execution_timing(canonical_run_id)
+            tool_timing = get_tool_execution_timing(canonical_run_id)
+            slowest_event_gaps = sorted(
+                event_timings,
+                key=lambda item: float(item.get("since_previous_ms") or 0.0),
+                reverse=True,
+            )[:15]
+            performance_summary = {
+                "event_count": len(event_timings),
+                "trace_elapsed_ms": (
+                    float(event_timings[-1].get("run_elapsed_ms") or 0.0)
+                    if event_timings
+                    else 0.0
+                ),
+                "end_to_end_ms": float(payload.get("run_total_duration_ms") or 0.0),
+                "llm": {
+                    "call_count": llm_timing.get("call_count", 0),
+                    "duration_ms_sum": llm_timing.get("duration_ms_sum", 0.0),
+                    "provider_transport_ms_sum": llm_timing.get("provider_transport_ms_sum", 0.0),
+                    "total_tokens": llm_timing.get("total_tokens", 0),
+                },
+                "tools": {
+                    "call_count": tool_timing.get("call_count", 0),
+                    "duration_ms_sum": tool_timing.get("duration_ms_sum", 0.0),
+                    "wall_duration_ms": tool_timing.get("wall_duration_ms", 0.0),
+                },
+                "slowest_event_gaps": slowest_event_gaps,
+            }
 
             lines: list[str] = [
                 marker,
@@ -1502,6 +1565,13 @@ def finalize_flow_markdown(
             if timeline:
                 lines.extend(["## Worker 时间线", "", *_markdown_json(timeline), ""])
 
+            lines.extend([
+                "## 性能耗时摘要",
+                "",
+                *_markdown_json(performance_summary),
+                "",
+            ])
+
             focus_refs = graph_runtime.get("focus_refs") or []
             if focus_refs:
                 lines.extend(["## 已解析 GraphRef", "", *_markdown_json(focus_refs), ""])
@@ -1540,6 +1610,9 @@ def finalize_flow_markdown(
             _RUN_FINALIZED.add(canonical_run_id)
             _RUN_TOOL_EXECUTIONS.pop(canonical_run_id, None)
             _RUN_LLM_EXECUTIONS.pop(canonical_run_id, None)
+            _RUN_START_MONOTONIC.pop(canonical_run_id, None)
+            _RUN_LAST_MONOTONIC.pop(canonical_run_id, None)
+            _RUN_EVENT_TIMINGS.pop(canonical_run_id, None)
             return str(path)
     except Exception:
         return ""

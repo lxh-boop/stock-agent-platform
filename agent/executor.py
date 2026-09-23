@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 import time
 from typing import Any
@@ -29,6 +30,9 @@ from agent.runtime import (
     RUN_WAITING_FOR_APPROVAL,
 )
 from agent.top_k import DEFAULT_TOOL_TOP_K
+
+
+logger = logging.getLogger(__name__)
 
 
 def _language(query: str, explicit: str | None) -> str:
@@ -285,6 +289,13 @@ def run_agent_request(
             "config_hash": service_settings.config_hash,
         },
     })
+    logger.info(
+        "agent run started run_id=%s conversation_id=%s provider=%s model=%s",
+        runtime.run_id,
+        session_id,
+        active_llm.provider,
+        active_llm.model,
+    )
     activate_llm_audit_context(
         run_id=runtime.run_id,
         conversation_id=session_id,
@@ -333,6 +344,12 @@ def run_agent_request(
             context=context,
         )
     except Exception as exc:
+        logger.exception(
+            "agent run failed run_id=%s conversation_id=%s elapsed_ms=%.3f",
+            runtime.run_id,
+            session_id,
+            (time.perf_counter() - run_started) * 1000.0,
+        )
         trace_exception("executor.graph_request.failed", exc, run_id=runtime.run_id)
         try:
             runtime.transition_run(RUN_FAILED, f"{type(exc).__name__}:{exc}")
@@ -494,8 +511,18 @@ def run_agent_request(
             "execution_status": execution_status,
             "worker_task_count": len(agent_tasks),
             "internal_tool_call_count": orchestration["internal_tool_call_count"],
+            "run_elapsed_ms": orchestration["run_total_duration_ms"],
         },
         run_id=runtime.run_id,
+    )
+    logger.info(
+        "agent run completed run_id=%s conversation_id=%s status=%s elapsed_ms=%.3f worker_tasks=%d llm_calls=%d",
+        runtime.run_id,
+        session_id,
+        execution_status,
+        orchestration["run_total_duration_ms"],
+        len(agent_tasks),
+        orchestration["internal_tool_call_count"],
     )
     response = {
         "success": bool(execution.get("success")),

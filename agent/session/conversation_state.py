@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from portfolio.schemas import now_text
+
+# user_id 会成为 outputs/agent_sessions/<user_id> 目录名，禁止路径分隔符。
+_SAFE_USER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 @dataclass
@@ -25,4 +29,7 @@ class ConversationState:
 
 
 def session_dir(user_id: str, output_dir: str | Path = "outputs") -> Path:
-    return Path(output_dir) / "agent_sessions" / str(user_id)
+    text = str(user_id or "")
+    if not _SAFE_USER_ID.fullmatch(text):
+        raise ValueError(f"unsafe_user_id:{text[:64]}")
+    return Path(output_dir) / "agent_sessions" / text

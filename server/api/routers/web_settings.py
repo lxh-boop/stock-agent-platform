@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from typing import Any, Callable
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from application.web_settings_service import web_settings_service
 from server.api.contracts import OperationResponse
 from server.api.presenters.settings import present_settings
 from server.api.schemas.settings import SettingsUpdateRequest
+from server.api.security import require_admin
 
 router = APIRouter(prefix="/api/v1/web/settings", tags=["web-settings"])
+logger = logging.getLogger(__name__)
 
 _DRIVE_PATH = re.compile(r"(?i)\b[a-z]:[\/][^\s\"']+")
 _SAFE_REASONS = {
@@ -44,6 +47,7 @@ def _call(action: Callable[[], Any], *, write: bool = False) -> OperationRespons
     try:
         return OperationResponse(success=True, data=action(), request_id=request_id)
     except Exception as exc:
+        logger.exception("Settings operation failed (write=%s)", write)
         return OperationResponse(
             success=False,
             data=None,
@@ -65,7 +69,8 @@ def settings() -> OperationResponse:
 
 
 @router.put("", response_model=OperationResponse)
-def update_settings(request: SettingsUpdateRequest) -> OperationResponse:
+def update_settings(request: SettingsUpdateRequest, _admin: object = Depends(require_admin)) -> OperationResponse:
+    # LLM/数据源/调度配置是平台级全局资源，仅管理员可修改。
     return _call(
         lambda: {
             **web_settings_service.update_settings(**request.model_dump()),

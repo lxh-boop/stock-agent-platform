@@ -177,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     smoke = _retrieval_smoke(args.output_dir, stock_code=args.smoke_stock_code)
 
     failures: list[str] = []
+    degraded: list[str] = []
     if db_check["missing_chunk_columns"]:
         failures.append(f"missing_chunk_columns:{db_check['missing_chunk_columns']}")
     if db_check["title_only_event_count"] != 0:
@@ -185,16 +186,19 @@ def main(argv: list[str] | None = None) -> int:
         failures.append(f"title_only_chunk_count:{db_check['title_only_chunk_count']}")
     if db_check["structured_metadata_missing_count"] != 0:
         failures.append(f"structured_metadata_missing_count:{db_check['structured_metadata_missing_count']}")
-    if not bool(index_report.get("dense_available")):
-        failures.append("dense_index_unavailable")
     if int(index_report.get("chunk_count") or 0) != int(db_check["chunk_count"]):
         failures.append("bm25_chunk_count_mismatch")
     if not smoke["success"]:
         failures.append("persisted_retrieval_smoke_failed")
+    if not bool(index_report.get("dense_available")):
+        # BM25 remains a valid production retrieval path. Dense availability is
+        # model/cache dependent, so it must not block market/public data jobs.
+        degraded.append("dense_index_unavailable")
 
     payload = {
-        "status": "passed" if not failures else "failed",
+        "status": "failed" if failures else ("degraded" if degraded else "passed"),
         "failures": failures,
+        "warnings": degraded,
         "ingestion": ingestion.to_dict(),
         "index_report": index_report,
         "db_check": db_check,

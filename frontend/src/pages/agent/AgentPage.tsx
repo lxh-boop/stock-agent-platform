@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Empty, Row, Space, Tabs, Tag, Typography, message } from 'antd'
 import { agentApi } from '../../api/agentApi'
 import { acknowledgeTask, cancelTask, getTask, listTasks, submitTask } from '../../api/taskApi'
-import { settingsApi } from '../../api/settingsApi'
 import { AgentRunPanel } from '../../components/agent/AgentRunPanel'
 import { AgentTaskProgress } from '../../components/agent/AgentTaskProgress'
 import { ChatComposer } from '../../components/agent/ChatComposer'
@@ -15,9 +14,8 @@ import { EmptyState } from '../../components/common/EmptyState'
 import { PageHeader } from '../../components/common/PageHeader'
 import { PageLoading } from '../../components/common/PageLoading'
 import { useAgentTaskEvents } from '../../hooks/useAgentTaskEvents'
+import { useCurrentUserId } from '../../hooks/useCurrentUserId'
 import { useAgentTaskStore } from '../../stores/agentTaskStore'
-import { normalizeOwnerId, resolveOwnerId } from '../../stores/sessionIdentity'
-import { useSessionStore } from '../../stores/sessionStore'
 import { TERMINAL_TASK_STATUSES } from '../../types/task'
 
 function randomId(prefix: string): string {
@@ -33,30 +31,13 @@ function sleep(ms: number): Promise<void> {
 export function AgentPage() {
   useAgentTaskEvents()
   const queryClient = useQueryClient()
-  const storedOwnerId = useSessionStore((state) => state.ownerId)
-  const ownerMode = useSessionStore((state) => state.ownerMode)
-  const useSystemOwnerId = useSessionStore((state) => state.useSystemOwnerId)
-
-  const settings = useQuery({
-    queryKey: ['web', 'settings', 'agent-user-context'],
-    queryFn: settingsApi.get,
-    staleTime: 60_000,
-  })
-  const systemUserId = normalizeOwnerId(settings.data?.current_user_id)
-  const userId = resolveOwnerId(storedOwnerId, ownerMode, systemUserId)
-  const identityReady = ownerMode === 'manual' || settings.isSuccess || settings.isError
+  const userId = useCurrentUserId()
 
   const [conversationId, setConversationId] = useState('')
   const [messageLimit, setMessageLimit] = useState(30)
   const [selectedRunId, setSelectedRunId] = useState('')
   const autoCreateRef = useRef(false)
   const finalizingRef = useRef('')
-
-  useEffect(() => {
-    if (ownerMode === 'system' && settings.data && storedOwnerId !== systemUserId) {
-      useSystemOwnerId(systemUserId)
-    }
-  }, [ownerMode, settings.data, storedOwnerId, systemUserId, useSystemOwnerId])
 
   useEffect(() => {
     setConversationId('')
@@ -68,7 +49,7 @@ export function AgentPage() {
   const sessions = useQuery({
     queryKey: ['web', 'agent', 'sessions', userId],
     queryFn: () => agentApi.sessions(userId),
-    enabled: identityReady,
+    enabled: Boolean(userId),
     refetchInterval: 10_000,
   })
 
@@ -82,7 +63,7 @@ export function AgentPage() {
   })
 
   useEffect(() => {
-    if (!identityReady || sessions.isLoading || createSession.isPending) return
+    if (sessions.isLoading || createSession.isPending) return
     const records = sessions.data?.records ?? []
     if (conversationId && records.some((item) => item.conversation_id === conversationId)) return
     if (records.length) {
@@ -93,7 +74,7 @@ export function AgentPage() {
       autoCreateRef.current = true
       createSession.mutate()
     }
-  }, [conversationId, createSession, identityReady, sessions.data, sessions.isLoading])
+  }, [conversationId, createSession, sessions.data, sessions.isLoading])
 
   const renameSession = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => agentApi.renameSession(userId, id, title),
@@ -149,6 +130,25 @@ export function AgentPage() {
   useEffect(() => {
     if (taskQuery.data) setTask(taskQuery.data)
   }, [setTask, taskQuery.data])
+
+  // Self-heal: the persisted task row is gone server-side, so it can never
+  // reach a terminal status and would keep the composer disabled forever.
+  useEffect(() => {
+    const error = taskQuery.error
+    if (!error || !activeTaskId) return
+    const text = error instanceof Error ? `${error.message} ${(error as { code?: string }).code ?? ''}` : String(error)
+    if (/unknown task/i.test(text)) clearTask()
+  }, [activeTaskId, clearTask, taskQuery.error])
+
+  // Self-heal: a persisted task whose conversation no longer exists cannot be
+  // finalized or selected again, so it would lock every conversation's composer.
+  useEffect(() => {
+    if (!storedTaskId || !storedTaskConversation || !sessions.isSuccess) return
+    const exists = (sessions.data?.records ?? []).some(
+      (item) => item.conversation_id === storedTaskConversation,
+    )
+    if (!exists) clearTask()
+  }, [clearTask, sessions.data, sessions.isSuccess, storedTaskConversation, storedTaskId])
 
   const recovery = useQuery({
     queryKey: ['agent-task-recovery', userId, conversationId],
@@ -263,7 +263,7 @@ export function AgentPage() {
   const anotherConversationTask = Boolean(storedTaskId && storedTaskConversation && storedTaskConversation !== conversationId)
   const taskActive = Boolean(activeTaskId && (!agentTask || !TERMINAL_TASK_STATUSES.has(agentTask.status)))
 
-  if (!identityReady || sessions.isLoading) return <PageLoading />
+  if (sessions.isLoading) return <PageLoading />
   if (sessions.error) {
     return <EmptyState title="AI Agent 会话加载失败" description={String(sessions.error)} />
   }
@@ -280,10 +280,10 @@ export function AgentPage() {
       description="浏览器只保存会话标识、task_id 和 last_event_id，不保存回答结果、持仓、密钥或确认令牌。"
     />
     {anotherConversationTask ? <Alert
-      type="warning"
+      type="info"
       showIcon
-      message="另一个会话还有可恢复的 Agent 任务"
-      description={`任务所属会话：${storedTaskConversation.slice(-10)}。切回该会话可继续查看。`}
+      message="另一个会话的任务正在运行，不影响本会话提问"
+      description={`任务所属会话：${storedTaskConversation.slice(-10)}。不同会话可以并发回答；切回该会话可查看其任务进度。`}
     /> : null}
 
     <Row gutter={16} className="agent-workspace">
@@ -323,9 +323,12 @@ export function AgentPage() {
             cancelling={cancel.isPending}
             onCancel={() => agentTask && cancel.mutate(agentTask.task_id)}
           />
-          <div className="agent-composer">
+          <div
+            className="agent-composer"
+            data-task-active={String(taskActive)}
+          >
             <ChatComposer
-              disabled={!conversationId || taskActive || anotherConversationTask}
+              disabled={!conversationId || taskActive}
               loading={submit.isPending}
               onSubmit={(value) => submit.mutateAsync(value).then(() => undefined)}
             />

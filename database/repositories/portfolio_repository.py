@@ -250,6 +250,12 @@ class PortfolioRepository:
     def upsert_risk_snapshot(self, record: dict[str, Any]) -> dict[str, Any]:
         payload = dict(record)
         payload["report_json"] = json_dumps(payload.pop("report", {}))
+        # 同一 (user_id, as_of_date) 只允许一条快照；若已有行的主键与本条不同
+        # （如历史数据迁移导致 ID 段不一致），先移除旧行再 upsert，保证幂等。
+        self.store.execute(
+            "DELETE FROM portfolio_risk_snapshot WHERE user_id=%s AND as_of_date=%s AND risk_snapshot_id <> %s",
+            (str(payload["user_id"]), str(payload["as_of_date"]), str(payload["risk_snapshot_id"])),
+        )
         saved = self.store.upsert("portfolio_risk_snapshot", payload)
         saved["report"] = json_loads(saved.pop("report_json", "{}"), default={})
         return saved

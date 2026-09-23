@@ -35,8 +35,7 @@ RUN mkdir -p /app/data /app/models /app/outputs /app/logs /app/runtime /app/exte
 
 ENV AGENT_API_HOST=0.0.0.0 \
     AGENT_API_PORT=8010 \
-    STOCK_APP_DEPLOYMENT_MODE=compose-react \
-    STOCK_AGENT_TASK_DB=/app/runtime/task_runtime.sqlite3
+    STOCK_APP_DEPLOYMENT_MODE=compose-react
 
 EXPOSE 8010
 CMD ["python", "-u", "run_agent_api.py"]

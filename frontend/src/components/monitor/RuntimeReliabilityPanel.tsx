@@ -1,1 +1,0 @@
-import { ServiceHealthPanel } from './ServiceHealthPanel'; export function RuntimeReliabilityPanel({ data }: { data?: Record<string, unknown> }) { return <ServiceHealthPanel title="Runtime Reliability" data={data}/> }

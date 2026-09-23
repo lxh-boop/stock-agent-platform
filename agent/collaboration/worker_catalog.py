@@ -79,5 +79,49 @@ class WorkerDescriptionCatalog:
             })
         return rows
 
+    def capability_catalog(self, *, effect_limit: str) -> list[dict[str, Any]]:
+        """Return the compact public Worker catalog for Need/Worker planning.
+
+        This is deliberately a different layer from the Worker-private Tool
+        catalog.  It exposes only enough capability identity and semantic output
+        names for MainAgent Worker binding; Tool IDs, arguments, schemas and
+        private execution details never enter this catalog.
+        """
+        rows: list[dict[str, Any]] = []
+        for card in self.directory.list():
+            if not self._eligible(card, effect_limit):
+                continue
+            scope = self.capability_registry.aggregate_scope(card.supported_boundary_ids)
+            output_patterns = list(scope["produced_data_patterns"])
+            private_output_names: list[str] = []
+            if self.worker_tool_directory is not None and list(card.private_tool_ids or []):
+                legacy_names = self.worker_tool_directory.semantic_output_slots(
+                    card.agent_id, tool_names=list(card.private_tool_ids)
+                )
+                private_output_names = list(dict.fromkeys(
+                    self._normalize_tool_output_name(x) for x in legacy_names if str(x)
+                ))
+            output_names = list(dict.fromkeys([
+                *output_patterns,
+                *private_output_names,
+            ]))
+            rows.append({
+                "worker_id": card.worker_id,
+                "role": card.role,
+                "summary": " ".join(str(card.short_description or card.delegation_description or "").split())[:240],
+                "delegate_when": [
+                    " ".join(str(item).split())[:180]
+                    for item in (card.delegate_when or [])[:6]
+                    if str(item).strip()
+                ],
+                "supported_scenarios": [
+                    " ".join(str(item).split())[:120]
+                    for item in (card.supported_scenarios or [])[:6]
+                    if str(item).strip()
+                ],
+                "supports_output_semantics": output_names,
+            })
+        return rows
+
 
 __all__ = ["WorkerDescriptionCatalog"]

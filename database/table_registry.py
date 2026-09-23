@@ -2,6 +2,8 @@ from __future__ import annotations
 
 
 TABLE_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
+    "user_account": ("user_id",),
+    "user_session": ("session_token",),
     "user_profile": ("user_id",),
     "risk_assessment": ("assessment_id",),
     "investment_goal": ("goal_id",),

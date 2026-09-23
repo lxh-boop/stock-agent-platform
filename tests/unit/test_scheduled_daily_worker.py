@@ -1,5 +1,24 @@
+from scheduler.daily_worker import _resolve_trade_date
 from scheduler.daily_worker import run_scheduled_daily_update
 from scheduler.schemas import SchedulerStatus
+
+
+def test_auto_trade_date_waits_for_completed_daily_data() -> None:
+    assert _resolve_trade_date(None, "2026-09-23T13:26:00", force=False) == (
+        "2026-09-22",
+        True,
+    )
+    assert _resolve_trade_date(None, "2026-09-23T16:00:00", force=False) == (
+        "2026-09-23",
+        True,
+    )
+
+
+def test_explicit_trade_date_is_not_changed() -> None:
+    assert _resolve_trade_date("2026-09-23", "2026-09-23T13:26:00", force=False) == (
+        "2026-09-23",
+        True,
+    )
 
 
 def test_scheduled_worker_skips_non_trading_day_without_force(tmp_path) -> None:

@@ -1,10 +1,11 @@
 import { useMutation } from '@tanstack/react-query'
 import { cancelTask, submitTask } from '../api/taskApi'
+import { useCurrentUserId } from './useCurrentUserId'
 import { useSessionStore } from '../stores/sessionStore'
 import { useTaskStore } from '../stores/taskStore'
 
 export function useDiagnosticTask() {
-  const ownerId = useSessionStore((state) => state.ownerId)
+  const ownerId = useCurrentUserId()
   const sessionId = useSessionStore((state) => state.sessionId)
   const setTask = useTaskStore((state) => state.setTask)
   const clear = useTaskStore((state) => state.clear)

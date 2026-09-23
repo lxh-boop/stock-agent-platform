@@ -6,7 +6,7 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,7 @@ from config import OUTPUT_DIR
 from server.api.contracts import OperationResponse
 from server.api.dispatch import llm_settings_registry
 from server.api.serialization import decode_transport, encode_transport
+from server.api.security import AuthUser, require_user
 from server.task_runtime.manager import TaskManager
 from server.task_runtime.store import TERMINAL_STATUSES
 
@@ -145,14 +146,15 @@ def _failure(exc: Exception) -> OperationResponse:
 
 
 @router.post("", response_model=OperationResponse)
-def submit_task(request: TaskSubmitRequest) -> OperationResponse:
+def submit_task(request: TaskSubmitRequest, user: AuthUser = Depends(require_user)) -> OperationResponse:
     args = list(decode_transport(request.args) or [])
     kwargs = dict(decode_transport(request.kwargs) or {})
+    owner_id = user.user_id
     secrets: dict[str, str] = {}
     if request.task_type == "agent.run":
         # Browser clients submit only business identifiers. Server-owned paths and
         # identity fields are injected here so they cannot drift across surfaces.
-        kwargs["user_id"] = str(request.owner_id or kwargs.get("user_id") or "default")
+        kwargs["user_id"] = user.user_id
         kwargs["session_id"] = str(request.session_id or kwargs.get("session_id") or "")
         kwargs.setdefault("output_dir", str(OUTPUT_DIR))
         kwargs.setdefault("top_k", 10)
@@ -178,12 +180,18 @@ def submit_task(request: TaskSubmitRequest) -> OperationResponse:
                 "endpoint_scope": str(settings.endpoint_scope),
             }
             secrets["llm_credential"] = str(getattr(settings, "credential", "") or "")
+    elif user.role != "admin":
+        # Non-agent task types: force client identity fields to the principal.
+        if "user_id" in kwargs:
+            kwargs["user_id"] = user.user_id
+        if "owner_id" in kwargs:
+            kwargs["owner_id"] = user.user_id
     try:
         task = task_manager.submit(
             task_type=request.task_type,
             args=args,
             kwargs=kwargs,
-            owner_id=request.owner_id,
+            owner_id=owner_id,
             session_id=request.session_id,
             metadata=decode_transport(request.metadata) or {},
             timeout_seconds=request.timeout_seconds,
@@ -197,6 +205,7 @@ def submit_task(request: TaskSubmitRequest) -> OperationResponse:
 
 @router.get("", response_model=OperationResponse)
 def list_tasks(
+    user: AuthUser = Depends(require_user),
     owner_id: str = "",
     session_id: str = "",
     task_type: str = "",
@@ -204,6 +213,9 @@ def list_tasks(
     unacknowledged_only: bool = False,
     limit: int = 20,
 ) -> OperationResponse:
+    # 归属强制：普通用户只能看到自己的任务，客户端传入的 owner_id 被忽略。
+    if user.role != "admin":
+        owner_id = user.user_id
     try:
         return _success(task_manager.store.list(
             owner_id=owner_id,
@@ -217,26 +229,45 @@ def list_tasks(
         return _failure(exc)
 
 
-@router.get("/{task_id}", response_model=OperationResponse)
-def get_task(task_id: str) -> OperationResponse:
+def _require_owned_task(task_id: str, user: AuthUser) -> dict[str, Any]:
     try:
-        return _success(task_manager.store.get(task_id))
+        task = task_manager.store.get(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    owner = str(task.get("owner_id") or "")
+    if owner != user.user_id and not (user.role == "admin"):
+        raise HTTPException(status_code=403, detail="task_forbidden")
+    return task
+
+
+@router.get("/{task_id}", response_model=OperationResponse)
+def get_task(task_id: str, user: AuthUser = Depends(require_user)) -> OperationResponse:
+    try:
+        return _success(_require_owned_task(task_id, user))
+    except HTTPException:
+        raise
     except Exception as exc:
         return _failure(exc)
 
 
 @router.post("/{task_id}/cancel", response_model=OperationResponse)
-def cancel_task(task_id: str) -> OperationResponse:
+def cancel_task(task_id: str, user: AuthUser = Depends(require_user)) -> OperationResponse:
     try:
+        _require_owned_task(task_id, user)
         return _success(task_manager.cancel(task_id))
+    except HTTPException:
+        raise
     except Exception as exc:
         return _failure(exc)
 
 
 @router.post("/{task_id}/acknowledge", response_model=OperationResponse)
-def acknowledge_task(task_id: str) -> OperationResponse:
+def acknowledge_task(task_id: str, user: AuthUser = Depends(require_user)) -> OperationResponse:
     try:
+        _require_owned_task(task_id, user)
         return _success(task_manager.store.acknowledge(task_id))
+    except HTTPException:
+        raise
     except Exception as exc:
         return _failure(exc)
 
@@ -244,11 +275,12 @@ def acknowledge_task(task_id: str) -> OperationResponse:
 @router.get("/{task_id}/events")
 def task_events(
     task_id: str,
+    user: AuthUser = Depends(require_user),
     after: int = Query(default=0, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
+    _require_owned_task(task_id, user)
     start_after = max(after, int(last_event_id or 0))
-    task_manager.store.get(task_id)
 
     def stream():
         sequence = start_after

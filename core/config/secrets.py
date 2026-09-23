@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from core.config.paths import get_runtime_dir, is_frozen_app
+
 
 SECRET_IDS = ("llm_api_key", "tushare_token", "neo4j_password")
 _SECRET_FILENAMES = {
@@ -32,6 +34,11 @@ def get_secret_dir(env: Mapping[str, str] | None = None) -> Path:
     explicit = _text(source.get("STOCK_APP_SECRET_DIR"))
     if explicit:
         return Path(explicit).expanduser()
+    if not is_frozen_app():
+        # Source runs use the host-mounted runtime directory. This keeps the
+        # secret outside Git while avoiding a per-machine AppData dependency in
+        # restricted local development sessions.
+        return get_runtime_dir() / "secrets"
     if os.name == "nt":
         local_app_data = _text(source.get("LOCALAPPDATA"))
         if local_app_data:

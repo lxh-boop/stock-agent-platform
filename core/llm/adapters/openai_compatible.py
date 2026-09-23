@@ -69,6 +69,79 @@ def _delta_parts(chunk: Any) -> tuple[str, str]:
     return content, reasoning
 
 
+def _responses_usage_metrics(usage: Any) -> dict[str, int]:
+    input_tokens = int(_attribute(usage, "input_tokens", 0) or 0)
+    output_tokens = int(_attribute(usage, "output_tokens", 0) or 0)
+    total_tokens = int(_attribute(usage, "total_tokens", 0) or 0)
+
+    input_details = _attribute(usage, "input_tokens_details", None)
+    output_details = _attribute(usage, "output_tokens_details", None)
+    cached_prompt_tokens = int(_attribute(input_details, "cached_tokens", 0) or 0)
+    reasoning_tokens = int(_attribute(output_details, "reasoning_tokens", 0) or 0)
+    return {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cached_prompt_tokens": cached_prompt_tokens,
+        "reasoning_tokens": reasoning_tokens,
+    }
+
+
+def _responses_message_parts(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """Convert Chat Messages to Responses API instructions and input items."""
+
+    instructions: list[str] = []
+    input_items: list[dict[str, Any]] = []
+    for raw_message in messages:
+        role = str(raw_message.get("role") or "user").lower()
+        content = str(raw_message.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "system" or role == "developer":
+            instructions.append(content)
+            continue
+        if role == "assistant":
+            input_items.append(
+                {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": content}],
+                }
+            )
+        else:
+            input_items.append(
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": content}],
+                }
+            )
+    return "\n\n".join(instructions), input_items
+
+
+def _responses_content(response: Any) -> tuple[str, int]:
+    output_text = _attribute(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip(), 0
+
+    parts: list[str] = []
+    reasoning_chars = 0
+    for item in _attribute(response, "output", []) or []:
+        item_type = str(_attribute(item, "type", "") or "")
+        if item_type == "reasoning":
+            reasoning_chars += len(str(_attribute(item, "summary", "") or ""))
+            continue
+        for content_item in _attribute(item, "content", []) or []:
+            content_type = str(_attribute(content_item, "type", "") or "")
+            if content_type in {"output_text", "text"}:
+                text = str(_attribute(content_item, "text", "") or "")
+                if text:
+                    parts.append(text)
+            elif content_type == "refusal":
+                refusal = str(_attribute(content_item, "refusal", "") or "")
+                if refusal:
+                    raise LLMResponseError(f"模型拒绝回答：{refusal}")
+    return "".join(parts).strip(), reasoning_chars
+
+
 class OpenAICompatibleAdapter(LLMAdapter):
     """Own SDK construction, request assembly and response extraction.
 
@@ -206,6 +279,66 @@ class OpenAICompatibleAdapter(LLMAdapter):
             provider_request_id=str(getattr(response, "id", "") or ""),
         )
 
+    @staticmethod
+    def _uses_responses_api(profile: ModelProfile) -> bool:
+        """ZAI's GLM-5 family is exposed through the Responses contract."""
+
+        return profile.provider_id.strip().lower() == "zai"
+
+    def _generate_responses(
+        self,
+        *,
+        client: Any,
+        profile: ModelProfile,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        max_output_tokens: int,
+        request_started: float,
+        client_setup_ms: float,
+    ) -> LLMResponse:
+        instructions, input_items = _responses_message_parts(messages)
+        kwargs: dict[str, Any] = {
+            "model": profile.model_name,
+            "input": input_items,
+            "max_output_tokens": max(1, int(max_output_tokens)),
+            "temperature": float(temperature),
+        }
+        if self._uses_responses_api(profile):
+            kwargs["reasoning"] = {"effort": "low"}
+        if instructions:
+            kwargs["instructions"] = instructions
+
+        response = client.responses.create(**kwargs)
+        response_received = time.perf_counter()
+        content, reasoning_chars = _responses_content(response)
+        if not content:
+            raise LLMResponseError("模型返回内容为空。")
+
+        duration_ms = _round_ms(response_received - request_started)
+        return LLMResponse(
+            content=content,
+            provider_id=profile.provider_id,
+            model_name=profile.model_name,
+            profile_id=profile.profile_id,
+            config_hash=profile.config_hash,
+            usage=_responses_usage_metrics(getattr(response, "usage", None)),
+            timing={
+                "measurement_mode": "responses_aggregate",
+                "client_setup_ms": client_setup_ms,
+                "queue_network_ms": None,
+                "input_prefill_ms": None,
+                "thinking_output_ms": None,
+                "request_to_first_token_ms": None,
+                "provider_transport_total_ms": duration_ms,
+                "unattributed_provider_ms": duration_ms,
+                "first_delta_kind": "unknown",
+                "reasoning_chars": reasoning_chars,
+                "content_chars": len(content),
+                "timing_note": "Responses API returned one aggregate response.",
+            },
+            provider_request_id=str(getattr(response, "id", "") or ""),
+        )
+
     def generate(
         self,
         *,
@@ -223,6 +356,16 @@ class OpenAICompatibleAdapter(LLMAdapter):
             client_setup_ms = _round_ms(client_ready - client_started)
 
             request_started = time.perf_counter()
+            if self._uses_responses_api(profile):
+                return self._generate_responses(
+                    client=client,
+                    profile=profile,
+                    messages=messages,
+                    temperature=temperature,
+                    max_output_tokens=max_output_tokens,
+                    request_started=request_started,
+                    client_setup_ms=client_setup_ms,
+                )
             response = client.chat.completions.create(
                 model=profile.model_name,
                 messages=self._prepared_messages(

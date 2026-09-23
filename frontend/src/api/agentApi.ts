@@ -34,8 +34,6 @@ export const agentApi = {
     getWeb<AgentSessionPage>(`${BASE}/sessions`, { params: { user_id: userId, limit: 30 } }),
   createSession: (userId: string, language = 'zh') =>
     send<AgentSession>('post', `${BASE}/sessions`, { user_id: userId, language }),
-  session: (userId: string, conversationId: string) =>
-    getWeb<AgentSession>(`${BASE}/sessions/${encodeURIComponent(conversationId)}`, { params: { user_id: userId } }),
   renameSession: (userId: string, conversationId: string, title: string) =>
     send<AgentSession>('patch', `${BASE}/sessions/${encodeURIComponent(conversationId)}`, { user_id: userId, title }),
   deleteSession: (userId: string, conversationId: string) =>

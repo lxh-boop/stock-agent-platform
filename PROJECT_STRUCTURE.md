@@ -15,16 +15,16 @@ stock_daily_app/
 ├── server/task_runtime/       # Task API, persistence, worker and SSE
 ├── application/               # Application services
 │   └── support/               # UI-framework-independent shared helpers
-├── agent/                     # Agent orchestration, tools and write gateway
+├── agent/                     # Agent orchestration, Request/Need/Worker planning, Tool DAG and write gateway
 ├── portfolio/                 # Paper trading and cash-flow domain
 ├── pipelines/                 # Prediction/RAG/scoring/paper pipelines
 ├── rag/                       # BM25, dense, hybrid retrieval and reranking
-├── database/                  # SQLite migrations and repositories
+├── database/                  # PostgreSQL migrations and repositories
 ├── contracts/stage6/          # Frozen Stage 6 HTTP/Task/transport contracts
 ├── scripts/docker/            # Production Compose startup and acceptance
 ├── scripts/refactor/          # Contract and architecture checks
 ├── tests/                     # Backend, API and React contract tests
-├── docker-compose.yml         # Final api + frontend production stack
+├── docker-compose.yml         # Final api + postgres + frontend production stack
 ├── Dockerfile.compose         # FastAPI image
 └── requirements-compose-api.txt
 ```

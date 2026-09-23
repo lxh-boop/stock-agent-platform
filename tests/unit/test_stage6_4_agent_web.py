@@ -274,7 +274,8 @@ def test_agent_task_api_injects_server_defaults_and_redacts_request(monkeypatch)
             owner_id="u1",
             session_id="conv1",
             metadata={"surface": "react-agent"},
-        )
+        ),
+        user=task_api.AuthUser(user_id="u1", display_name="u1", role="user"),
     )
     assert response.success is True
     public_task = decode_transport(response.data)

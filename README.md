@@ -37,7 +37,7 @@ flowchart LR
     D --> E["Worker Tool ID"]
     E --> F["Runtime Registry"]
     F --> G["Data / RAG / Model MCP"]
-    G --> H[("SQLite / Neo4j / 索引")]
+    G --> H[("PostgreSQL / Neo4j / 索引")]
     D --> I["Proposal / Approval / Execute"]
     I --> H
 ```
@@ -240,7 +240,7 @@ RAG 只提供证据，不直接覆盖账户、持仓或其他业务事实。重�
 - FastAPI Router、Schema 和 Presenter 负责传输层；
 - Application Service 负责用例编排；
 - 浏览器不读取数据库、文件、模型或服务端密钥；
-- SQLite 负责应用运行数据和业务事务，Neo4j 负责金融实体与关系语义。
+- PostgreSQL 负责应用运行数据和业务事务，Neo4j 负责金融实体与关系语义。
 
 ## 正式运行架构
 
@@ -264,7 +264,7 @@ flowchart TB
     L --> O["Application Service / Repository"]
     M --> P["Hybrid RAG / Evidence Service"]
     N --> Q["已完成模型快照"]
-    O --> R[("SQLite 业务运行数据库")]
+    O --> R[("PostgreSQL 业务运行数据库")]
     P --> R
     P --> S[("Neo4j / 检索索引")]
     Q --> R
@@ -284,9 +284,9 @@ flowchart TB
 | API 与应用层 | Python 3.12、FastAPI、Uvicorn、Pydantic、Asyncio、APScheduler |
 | Agent Runtime | Main / Worker Agent、Task DAG、ToolExecutor、Tool Registry、ContextBundle、Handoff、Reflection、Critic、Replan |
 | MCP 与合同 | 官方 Python MCP SDK、stdio、Runtime Registry、JSON Schema、ToolInputContract / ToolOutputContract、Artifact Provenance |
-| 模型与数据 | Kronos / Chronos Forecasting、LightGBM、scikit-learn、Transformers、pandas、NumPy |
+| 模型与数据 | Cross-sectional LightGBM Rank Ensemble、scikit-learn、Transformers、pandas、NumPy |
 | RAG 与知识层 | BM25、Dense Retrieval、RRF、Cross-Encoder、Sentence-Transformers、Neo4j |
-| 存储 | SQLite 业务运行数据库、Neo4j、宿主机训练数据、模型、索引和离线产物 |
+| 存储 | PostgreSQL 业务运行数据库、Neo4j、宿主机训练数据、模型、索引和离线产物 |
 | 工程化 | Docker、Docker Compose、Nginx、OpenAPI、Pytest、Vitest、Playwright、结构化日志 |
 
 ## 代码结构
@@ -306,7 +306,7 @@ stock_daily_app/
 ├─ portfolio/             # 模拟盘、组合、资金与风险逻辑
 ├─ rag/                   # 混合检索、融合、重排与索引
 ├─ pipelines/             # 每日更新、预测、评分与模拟盘流程
-├─ database/              # SQLite Repository、Migration 与运行数据导入
+├─ database/              # PostgreSQL Repository、Migration 与运行数据导入
 │  ├─ migrations/         # Proposal 与业务运行数据表迁移
 │  └─ repositories/       # 数据库权威访问层
 ├─ contracts/stage6/      # 冻结的 HTTP、Task、SSE 和写操作合同
@@ -326,8 +326,8 @@ stock_daily_app/
 
 - Windows 10 / 11；
 - Docker Desktop 与 Docker Compose；
-- 项目目录：`D:\stock_daily_app`；
-- 项目 Python：`D:\stock_daily_app\.venv\Scripts\python.exe`；
+- 项目目录：`D:\cht\agent\stock-agent-platform`；
+- 项目 Python：`D:\cht\agent\stock-agent-platform\.venv\Scripts\python.exe`；
 - 本地已准备运行配置、数据、模型或索引；
 - 只有在脱离 Docker 维护前端时才需要 Node.js 22.12 或更高版本。
 
@@ -366,7 +366,7 @@ D:\google\D_google_stage_06_5_build_and_start.bat
 | FastAPI | http://127.0.0.1:8010 |
 | OpenAPI（启用时） | http://127.0.0.1:8010/docs |
 
-正式 Compose 只允许 `api` 和 `frontend` 两个服务。浏览器通过 Nginx 同源访问 API 和 SSE，不直接连接 MCP Server、数据库、文件系统、模型或密钥。
+正式 Compose 固定包含 `api`、`postgres` 和 `frontend` 三个服务。浏览器通过 Nginx 同源访问 API 和 SSE，不直接连接 MCP Server、文件系统、模型或密钥。
 
 ## 验收与质量保障
 

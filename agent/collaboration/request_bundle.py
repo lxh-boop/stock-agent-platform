@@ -18,6 +18,7 @@ SEMANTIC_TARGET_SOURCES = {"explicit", "conversation_context", "none"}
 
 
 class RequestCategory(str, Enum):
+    GENERAL = "general"
     BUSINESS = "business"
     PRESENTATION = "presentation"
 
@@ -165,6 +166,9 @@ class RequestBundle:
     def business_requests(self) -> list[RequestItem]:
         return [item for item in self.requests if item.category == RequestCategory.BUSINESS]
 
+    def general_requests(self) -> list[RequestItem]:
+        return [item for item in self.requests if item.category == RequestCategory.GENERAL]
+
     def read_requests(self) -> list[RequestItem]:
         return [
             item for item in self.requests
@@ -183,6 +187,11 @@ class RequestBundle:
 
 _NUMBERED_RE = re.compile(r"^\s*(\d{1,3})\s*[\.、\)）:]\s*(.+?)\s*$")
 _BULLET_RE = re.compile(r"^\s*[-*•]\s+(.+?)\s*$")
+_GENERAL_MESSAGE_RE = re.compile(
+    r"^(?:你好|您好|您好呀|你好呀|哈喽|hello|hi|hey|在吗|在不在|谢谢|感谢|辛苦了|"
+    r"你是谁|你叫什么|你能做什么|你会什么|help)[!！?？.。,，~～\s]*$",
+    flags=re.IGNORECASE,
+)
 
 
 def explicit_request_boundaries(query: str) -> dict[str, Any]:
@@ -228,6 +237,19 @@ def _relation_type(context: dict[str, Any] | None) -> str:
     state = raw.get("conversation_state") if isinstance(raw.get("conversation_state"), dict) else {}
     turn = raw.get("turn_resolution") if isinstance(raw.get("turn_resolution"), dict) else {}
     return str(state.get("relation_type") or turn.get("relation_type") or raw.get("relation_type") or "").lower()
+
+
+def _is_simple_general_answer(query: str, boundaries: dict[str, Any], relation: str) -> bool:
+    """Return true only for short, isolated greetings/meta questions."""
+
+    normalized = " ".join(str(query or "").strip().split())
+    return bool(
+        normalized
+        and len(normalized) <= 64
+        and not boundaries.get("has_explicit_boundaries")
+        and relation not in {"confirmation", "cancellation", "followup"}
+        and _GENERAL_MESSAGE_RE.match(normalized)
+    )
 
 
 class RequestBundleValidator:
@@ -323,6 +345,17 @@ class RequestDecomposer:
         del run_id
         boundaries = explicit_request_boundaries(query)
         relation = _relation_type(execution_context)
+        if _is_simple_general_answer(query, boundaries, relation):
+            return self.validator.validate(RequestBundle(
+                requests=[RequestItem(
+                    request_id="R01",
+                    source_index=1,
+                    category=RequestCategory.GENERAL,
+                    objective=" ".join(str(query or "").strip().split()),
+                )],
+                raw_message=str(query or ""),
+                decomposition_source="deterministic_general_route",
+            ))
         candidate_turn_ids = {
             str(item.get("turn_id") or "")
             for item in list((reuse_candidates or {}).get("items") or [])
@@ -448,12 +481,15 @@ class RequestDecomposer:
                         "一个输入可以包含多个同类BUSINESS Request，也可以同时包含BUSINESS和PRESENTATION Request；Request不等于Worker Task。"
                         "显式编号/项目符号只由explicit_request_boundaries保护；显式边界只保护用户原始边界和source_index，不限制一个边界只能产生一个Request。"
                         "如果没有显式边界，Request数量仍由独立用户诉求决定；同一条原始消息可以按语义产生多个Request。"
-                        "category只能business/presentation。READ包括查询、分析、比较、建议、生成/修订待审批Proposal；"
+                        "category只能general/business/presentation。GENERAL只用于问候、感谢、告别、助手身份/能力询问等"
+                        "不要求金融数据、分析、账户/组合/排名/预测/风控或业务操作的输入；"
+                        "只要需要业务数据或操作就必须是BUSINESS。READ包括查询、分析、比较、建议、生成/修订待审批Proposal；"
                         "WRITE只允许明确确认执行已有Proposal或拒绝/取消已有Proposal。"
                         "语言、风格、长度、格式属于PRESENTATION。PRESENTATION是独立的用户诉求，不是BUSINESS的修饰字段。"
                         "当同一句、同一条原始消息或同一个显式边界中同时存在业务目标与明确呈现要求时，必须分别生成BUSINESS Request和PRESENTATION Request；"
                         "二者可以使用相同source_index。不得把明确呈现要求并入BUSINESS objective、semantic_target、semantic_entities或constraints，也不得忽略。"
-                        "objective只描述用户要完成什么：BUSINESS objective填写规范化业务目标；PRESENTATION objective填写简短的呈现要求摘要。"
+                        "objective只描述用户要完成什么：GENERAL objective填写用户原始一般问题；"
+                        "BUSINESS objective填写规范化业务目标；PRESENTATION objective填写简短的呈现要求摘要。"
                         "不得把目标对象、约束或执行步骤塞入BUSINESS objective。"
                         "semantic_target表示当前Request在自然语言层面针对什么对象。它允许三种status："
                         "identified=已经从本轮原文或session_summary识别出具体语义对象；missing=业务需要具体对象但当前上下文仍无法知道；"
@@ -487,13 +523,13 @@ class RequestDecomposer:
                         "required_output_shape": {
                             "requests": [{
                                 "source_index": 1,
-                                "category": "business|presentation",
-                                "objective": "BUSINESS填写只描述要完成什么的规范化业务目标；PRESENTATION填写简短的呈现要求摘要",
-                                "request_type": "read|write",
+                                "category": "general|business|presentation",
+                                "objective": "GENERAL填写一般问题；BUSINESS填写规范化业务目标；PRESENTATION填写简短呈现要求摘要",
+                                "request_type": "read|write|",
                                 "proposal_required": False,
                                 "semantic_target": {
                                     "entity_type": "security|portfolio|account|event|global_market|none|unknown",
-                                    "display_text": "自然语言对象名；未知时为空",
+                                    "display_text": "自然语言对象名；未知或GENERAL时为空",
                                     "source": "explicit|conversation_context|none",
                                     "status": "identified|missing|not_required",
                                 },
@@ -538,7 +574,8 @@ class RequestDecomposer:
             repair_mode="targeted",
             repair_guidance=(
                 "只修复Request语义合同。禁止旧字段target/mentions；BUSINESS必须使用semantic_target/semantic_entities。"
-                "category只能business/presentation；同一条原始消息可以同时包含BUSINESS和PRESENTATION。"
+                "category只能general/business/presentation；无业务数据或操作诉求的一般问题必须是GENERAL。"
+                "同一条原始消息可以同时包含GENERAL/BUSINESS和PRESENTATION。"
                 "如果用户同时提出业务目标和明确呈现要求，修复时必须保留为两个独立Request，不得把PRESENTATION并入BUSINESS或忽略。"
                 "BUSINESS objective是规范化业务目标；PRESENTATION objective可为简短呈现要求摘要。"
                 "semantic_target.status只能identified/missing/not_required；identified必须有display_text；"

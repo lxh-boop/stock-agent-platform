@@ -76,6 +76,7 @@ def main() -> int:
 
     attempt = int(task.get("attempt") or 0)
     max_retries = int(task.get("max_retries") or 0)
+    task_started_monotonic = time.monotonic()
     try:
         store.update(
             args.task_id,
@@ -124,7 +125,11 @@ def main() -> int:
                     store.add_event(args.task_id, "cancelled", {"message": "任务已取消"})
                     return 2
                 store.update(args.task_id, status="succeeded", finished_at=utc_now(), progress=1, message="任务已完成", result=result, worker_pid=None)
-                store.add_event(args.task_id, "succeeded", {"message": "任务已完成", "progress": 1})
+                store.add_event(args.task_id, "succeeded", {
+                    "message": "任务已完成",
+                    "progress": 1,
+                    "total_seconds": round(time.monotonic() - task_started_monotonic, 3),
+                })
                 return 0
             except InterruptedError as exc:
                 store.update(args.task_id, status="cancelled", finished_at=utc_now(), progress=1, message=str(exc), worker_pid=None)
@@ -143,7 +148,10 @@ def main() -> int:
                     "traceback_tail": traceback.format_exc()[-6000:],
                 }
                 store.update(args.task_id, status="failed", finished_at=utc_now(), progress=1, message=str(exc), error=error, worker_pid=None)
-                store.add_event(args.task_id, "failed", error)
+                store.add_event(args.task_id, "failed", {
+                    **error,
+                    "total_seconds": round(time.monotonic() - task_started_monotonic, 3),
+                })
                 return 1
     finally:
         stop_watch.set()

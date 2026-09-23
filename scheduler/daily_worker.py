@@ -6,7 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
@@ -23,6 +23,7 @@ from scheduler.user_job_runner import get_active_user_ids, run_user_daily_job
 PUBLIC_MARKER_DIR = Path("runtime") / "jobs" / "public_tasks"
 SCHEDULER_LOG_DIR = Path("logs") / "scheduler"
 PUBLIC_TASK_VERSION = "news_rag_fulltext_v5_daily_pipeline"
+A_SHARE_DAILY_DATA_READY_TIME = time(hour=15, minute=30)
 
 
 def _csv_signal_date(path: str | Path) -> str:
@@ -546,9 +547,27 @@ def _resolve_trade_date(trade_date: str | None, run_time: str | datetime | None,
     if trade_date:
         return base.strftime("%Y-%m-%d"), requested_is_trading
     if requested_is_trading:
+        timestamp = _as_datetime(run_time or base)
+        if timestamp.time() < A_SHARE_DAILY_DATA_READY_TIME:
+            # A-share daily bars are not treated as authoritative before the
+            # post-close data-ready time. The update target is therefore the
+            # most recent completed session, matching data_tushare.
+            completed = get_latest_trading_day(base - timedelta(days=1))
+            return completed.strftime("%Y-%m-%d"), True
         return base.strftime("%Y-%m-%d"), True
     latest = get_latest_trading_day(base)
     return latest.strftime("%Y-%m-%d"), False if not force else is_trading_day(latest)
+
+
+def _as_datetime(value: str | date | datetime | None) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return datetime.combine(parse_date(value), time.min)
 
 
 def run_scheduled_daily_update(

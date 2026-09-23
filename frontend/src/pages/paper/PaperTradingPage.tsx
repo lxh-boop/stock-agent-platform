@@ -1,9 +1,7 @@
-import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Alert, Space } from 'antd'
+import { Alert, Space, Tag, Typography } from 'antd'
 import { paperTradingApi } from '../../api/paperTradingApi'
 import { queryKeys } from '../../api/queryKeys'
-import { settingsApi } from '../../api/settingsApi'
 import { PageHeader } from '../../components/common/PageHeader'
 import { PageLoading } from '../../components/common/PageLoading'
 import { EmptyState } from '../../components/common/EmptyState'
@@ -15,47 +13,29 @@ import { BackfillPanel } from '../../components/paper/BackfillPanel'
 import { PaperTables, RiskAndDiagnostics } from '../../components/paper/PaperTables'
 import { PaperTaskActions } from '../../components/paper/PaperTaskActions'
 import { ProposalPanel } from '../../components/paper/ProposalPanel'
-import { UserContextSelector } from '../../components/paper/UserContextSelector'
 import { UserProfileForm } from '../../components/paper/UserProfileForm'
 import { PaperSectionControls, PaperSectionProvider } from '../../components/paper/PaperSectionCard'
-import { normalizeOwnerId, resolveOwnerId } from '../../stores/sessionIdentity'
-import { useSessionStore } from '../../stores/sessionStore'
+import { useCurrentUserId } from '../../hooks/useCurrentUserId'
+import { useAuthStore } from '../../stores/authStore'
 
 export function PaperTradingPage() {
-  const storedOwnerId = useSessionStore((state) => state.ownerId)
-  const ownerMode = useSessionStore((state) => state.ownerMode)
-  const setOwnerId = useSessionStore((state) => state.setOwnerId)
-  const useSystemOwnerId = useSessionStore((state) => state.useSystemOwnerId)
-
-  const settings = useQuery({
-    queryKey: ['web', 'settings', 'paper-user-context'],
-    queryFn: settingsApi.get,
-    staleTime: 60_000,
-  })
-  const systemUserId = normalizeOwnerId(settings.data?.current_user_id)
-  const userId = resolveOwnerId(storedOwnerId, ownerMode, systemUserId)
-  const identityReady = ownerMode === 'manual' || settings.isSuccess || settings.isError
-
-  useEffect(() => {
-    if (ownerMode === 'system' && settings.data && storedOwnerId !== systemUserId) {
-      useSystemOwnerId(systemUserId)
-    }
-  }, [ownerMode, settings.data, storedOwnerId, systemUserId, useSystemOwnerId])
+  const userId = useCurrentUserId()
+  const user = useAuthStore((state) => state.user)
 
   const snapshot = useQuery({
     queryKey: queryKeys.paperTrading(userId),
     queryFn: () => paperTradingApi.summary(userId),
     refetchInterval: 15_000,
-    enabled: identityReady,
+    enabled: Boolean(userId),
   })
   const proposals = useQuery({
     queryKey: queryKeys.paperProposals(userId),
     queryFn: () => paperTradingApi.proposals(userId),
     refetchInterval: 10_000,
-    enabled: identityReady,
+    enabled: Boolean(userId),
   })
 
-  if (!identityReady || snapshot.isLoading) return <PageLoading />
+  if (snapshot.isLoading) return <PageLoading />
   if (snapshot.error || !snapshot.data) {
     return <EmptyState title="AI 模拟盘加载失败" description={String(snapshot.error ?? '无数据')} />
   }
@@ -73,21 +53,12 @@ export function PaperTradingPage() {
           <PageHeader title="AI 模拟盘" description="模拟盘状态、受保护写操作和长任务统一通过 FastAPI；不连接真实交易。" />
           <PaperSectionControls />
         </div>
-      {settings.error ? (
         <Alert
-          type="warning"
+          type="info"
           showIcon
-          message="系统当前用户读取失败，暂时使用 default"
-          description={String(settings.error)}
+          message={<Space wrap>当前模拟盘用户：<Typography.Text strong>{userId}</Typography.Text>{user?.role === 'admin' ? <Tag color="gold">管理员</Tag> : null}</Space>}
+          description="模拟盘身份即登录账号，由服务端会话强制校验；如需查看其他用户的数据，请使用对应账号登录。"
         />
-      ) : null}
-      <UserContextSelector
-        activeUserId={userId}
-        systemUserId={systemUserId}
-        ownerMode={ownerMode}
-        onSelectUser={setOwnerId}
-        onUseSystemUser={() => useSystemOwnerId(systemUserId)}
-      />
       <Alert
         type="warning"
         showIcon

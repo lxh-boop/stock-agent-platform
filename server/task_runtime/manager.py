@@ -112,13 +112,20 @@ class TaskManager:
             creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             start_new_session = True
+        # Worker stdout/stderr must survive a crash that happens before the
+        # worker can record an error itself (e.g. import or DB failures).
+        log_dir = Path("logs") / "task_workers"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        worker_log = open(
+            log_dir / f"{task_id}.log", "w", encoding="utf-8", buffering=1
+        )
         process = subprocess.Popen(
             command,
             cwd=str(Path.cwd()),
             env=env,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=worker_log,
+            stderr=subprocess.STDOUT,
             creationflags=creationflags,
             start_new_session=start_new_session,
         )
@@ -127,7 +134,7 @@ class TaskManager:
             self._processes[task_id] = process
         threading.Thread(
             target=self._monitor,
-            args=(task_id, process),
+            args=(task_id, process, worker_log),
             name=f"task-monitor-{task_id[-8:]}",
             daemon=True,
         ).start()
@@ -263,7 +270,7 @@ class TaskManager:
                 },
             )
 
-    def _monitor(self, task_id: str, process: subprocess.Popen[Any]) -> None:
+    def _monitor(self, task_id: str, process: subprocess.Popen[Any], worker_log: Any) -> None:
         started = time.monotonic()
         try:
             while process.poll() is None:
@@ -286,19 +293,43 @@ class TaskManager:
             current = self.store.get(task_id)
             if current["status"] not in TERMINAL_STATUSES:
                 code = int(process.returncode or 0)
+                error_payload: dict[str, Any] = {
+                    "code": "WORKER_EXIT",
+                    "message": f"Worker exited with code {code}",
+                }
+                if code:
+                    tail = self._worker_log_tail(task_id)
+                    if tail:
+                        error_payload["worker_log_tail"] = tail
                 self.store.update(
                     task_id,
                     status="failed" if code else "interrupted",
                     finished_at=utc_now(),
                     progress=1,
                     message=f"任务 Worker 异常退出，返回码 {code}",
-                    error={"code": "WORKER_EXIT", "message": f"Worker exited with code {code}"},
+                    error=error_payload,
                     worker_pid=None,
                 )
                 self.store.add_event(task_id, "worker_exit", {"returncode": code})
         finally:
             with self._lock:
                 self._processes.pop(task_id, None)
+            try:
+                worker_log.close()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _worker_log_path(task_id: str) -> Path:
+        return Path("logs") / "task_workers" / f"{task_id}.log"
+
+    @classmethod
+    def _worker_log_tail(cls, task_id: str, limit: int = 4000) -> str:
+        try:
+            text = cls._worker_log_path(task_id).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        return text[-limit:]
 
     def cancel(self, task_id: str) -> dict[str, Any]:
         task = self.store.request_cancel(task_id)

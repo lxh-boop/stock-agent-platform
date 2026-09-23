@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react'
-import { Button, Layout, Menu, Space, Typography } from 'antd'
+import { Button, Dropdown, Layout, Menu, Space, Typography } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ApiStatus } from '../components/common/ApiStatus'
 import { TaskDrawer } from '../components/tasks/TaskDrawer'
 import { useApiHealth } from '../hooks/useApiHealth'
 import { useAppStore } from '../stores/appStore'
+import { useAuthStore } from '../stores/authStore'
 import { useTaskStore } from '../stores/taskStore'
 
 const { Header, Sider, Content } = Layout
@@ -19,6 +20,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const setTaskDrawerOpen = useAppStore((state) => state.setTaskDrawerOpen)
   const task = useTaskStore((state) => state.task)
   const events = useTaskStore((state) => state.events)
+  const user = useAuthStore((state) => state.user)
+  const logout = useAuthStore((state) => state.logout)
+
+  const handleLogout = async () => {
+    await logout()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <Layout className="app-shell">
@@ -60,9 +68,24 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </div>
             <ApiStatus health={health.data} />
           </Space>
-          <Button onClick={() => setTaskDrawerOpen(true)} data-testid="open-task-drawer">
-            任务中心{task ? ` · ${task.status}` : ''}
-          </Button>
+          <Space size="middle" wrap>
+            <Button onClick={() => setTaskDrawerOpen(true)} data-testid="open-task-drawer">
+              任务中心{task ? ` · ${task.status}` : ''}
+            </Button>
+            <Dropdown
+              menu={{
+                items: [
+                  { key: 'role', label: `身份：${user?.role === 'admin' ? '管理员' : '普通用户'}`, disabled: true },
+                  { type: 'divider' },
+                  { key: 'logout', label: '退出登录', onClick: handleLogout },
+                ],
+              }}
+            >
+              <Button data-testid="user-menu">
+                {user?.display_name || user?.user_id || '未登录'}
+              </Button>
+            </Dropdown>
+          </Space>
         </Header>
         <Content className="app-content-scroll" data-testid="app-content-scroll">
           <main className="app-content">{children}</main>

@@ -255,7 +255,29 @@ def start_scheduler_manual_run(
         db_path=db_path,
         root=".",
     )
-    return result.to_dict()
+    payload = result.to_dict()
+    if str(payload.get("overall_status") or "") in {"failed", "partial_success", "skipped"}:
+        reasons = []
+        for step_name in payload.get("failed_steps") or []:
+            step = (payload.get("step_status") or {}).get(step_name) or {}
+            reason = str(step.get("error_message") or step.get("error_type") or "").strip()
+            if reason:
+                reasons.append(f"{step_name}: {reason}")
+                traceback_tail = str(step.get("traceback") or "").strip()
+                if traceback_tail:
+                    reasons.append(f"{step_name} traceback_tail:\n{traceback_tail[-6000:]}")
+            else:
+                reasons.append(f"{step_name}: step failed")
+        if not reasons:
+            reasons.extend(str(item) for item in payload.get("warnings") or [])
+        if not reasons:
+            reasons.append("scheduler reported no successful work; see logs/scheduler for details")
+        raise RuntimeError(
+            "update did not complete: overall_status="
+            + str(payload.get("overall_status"))
+            + ("; " + "; ".join(reasons) if reasons else "")
+        ) from None
+    return payload
 
 
 

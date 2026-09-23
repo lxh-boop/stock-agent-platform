@@ -102,7 +102,7 @@ class CoordinatorPlanner:
         return f"N{index:02d}"
 
     def _load_worker_descriptions(self, *, effect_limit: str, run_id: str) -> list[dict[str, Any]]:
-        descriptions = self.worker_catalog.descriptions(effect_limit=effect_limit)
+        descriptions = self.worker_catalog.capability_catalog(effect_limit=effect_limit)
         if not descriptions:
             raise WorkerContractViolation("worker_description_catalog_empty", "$.worker_descriptions")
         flow_event(
@@ -110,7 +110,7 @@ class CoordinatorPlanner:
             {
                 "worker_count": len(descriptions),
                 "worker_ids": [row["worker_id"] for row in descriptions],
-                "visibility": "all_public_descriptions_upfront",
+            "visibility": "compact_worker_capability_catalog_no_tools",
                 "private_tool_visibility": "none",
             },
             run_id=run_id,
@@ -270,26 +270,19 @@ class CoordinatorPlanner:
             }
 
         semantic_catalog = self.registry.semantic_requirement_catalog()
-        planner_worker_descriptions: list[dict[str, Any]] = []
-        for worker in worker_descriptions:
-            supported_output_semantics = [
-                str(item.get("semantic_key") or "")
-                for item in semantic_catalog
-                if item.get("kind") == "data"
-                and str(item.get("data_name") or "")
-                and self._worker_supports_output(worker, str(item.get("data_name") or ""))
-            ]
-            planner_worker_descriptions.append({
+        # Keep Need/Worker planning strictly above the private Tool layer: the
+        # compact catalog contains capability identity and semantic outputs only.
+        planner_worker_descriptions = [
+            {
                 "worker_id": str(worker.get("worker_id") or ""),
-                "public_role": str(worker.get("public_role") or ""),
-                "short_description": str(worker.get("short_description") or ""),
-                "delegation_description": str(worker.get("delegation_description") or ""),
+                "public_role": str(worker.get("role") or ""),
+                "short_description": str(worker.get("summary") or ""),
                 "delegate_when": list(worker.get("delegate_when") or []),
                 "supported_scenarios": list(worker.get("supported_scenarios") or []),
-                "unsupported_scenarios": list(worker.get("unsupported_scenarios") or []),
-                "limitations": list(worker.get("limitations") or []),
-                "supports_output_semantics": list(dict.fromkeys(x for x in supported_output_semantics if x)),
-            })
+                "supports_output_semantics": list(worker.get("supports_output_semantics") or []),
+            }
+            for worker in worker_descriptions
+        ]
 
         def validate_llm_payload(payload: dict[str, Any]) -> None:
             if not isinstance(payload, dict):

@@ -4,7 +4,7 @@
 
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | Starts the final `api + frontend` stack. |
+| `docker-compose.yml` | Starts the final `api + postgres + frontend` stack. |
 | `Dockerfile.compose` | Builds the FastAPI image. |
 | `frontend/Dockerfile` | Builds React and serves it through Nginx. |
 | `frontend/nginx.conf` | SPA fallback and same-origin `/api/` proxy with SSE buffering disabled. |
@@ -21,6 +21,7 @@
 | `application/` | Application orchestration and service boundaries. |
 | `application/support/` | File loading, backtest display and model-search helpers migrated out of the retired UI. |
 | `agent/` | Main/Worker Agent, DAG, context, tools, Reflection, Handoff and WriteGateway. |
+| `database/` | PostgreSQL connection, migrations, repositories and runtime data access. |
 | `portfolio/` | Simulated account, positions, orders and cash flows. |
 | `rag/` | Hybrid retrieval and retention. |
 

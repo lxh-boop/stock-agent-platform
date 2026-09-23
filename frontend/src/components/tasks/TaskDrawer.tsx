@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Button, Drawer, List, Space, Tabs, Typography, message } from 'antd'
 import { acknowledgeTask, listTasks } from '../../api/taskApi'
-import { useSessionStore } from '../../stores/sessionStore'
+import { useCurrentUserId } from '../../hooks/useCurrentUserId'
 import { useTaskStore } from '../../stores/taskStore'
 import type { TaskEvent, TaskRecord } from '../../types/task'
 import { TERMINAL_TASK_STATUSES } from '../../types/task'
@@ -9,7 +9,7 @@ import { TaskProgress } from './TaskProgress'
 import { TaskStatusTag } from './TaskStatusTag'
 
 export function TaskDrawer({ open, onClose, task, events }: { open: boolean; onClose: () => void; task: TaskRecord | null; events: TaskEvent[] }) {
-  const ownerId = useSessionStore((state) => state.ownerId)
+  const ownerId = useCurrentUserId()
   const setTask = useTaskStore((state) => state.setTask)
   const clear = useTaskStore((state) => state.clear)
   const recent = useQuery({ queryKey: ['task-center', ownerId], queryFn: () => listTasks({ owner_id: ownerId, limit: 30 }), enabled: open, refetchInterval: open ? 3000 : false })

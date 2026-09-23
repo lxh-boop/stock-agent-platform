@@ -4,6 +4,7 @@ import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import RLock
+from typing import Any, ClassVar, Iterable, Iterator, Protocol
 from typing import Any, Iterable, Iterator, Protocol
 
 from .contracts import (
@@ -51,6 +52,9 @@ class FinancialGraphStore(Protocol):
 @dataclass
 class Neo4jFinancialGraphStore:
     settings: Neo4jSettings
+
+    _schema_ready_keys: ClassVar[set[tuple[str, str, str]]] = set()
+    _schema_lock: ClassVar[RLock] = RLock()
 
     def __post_init__(self) -> None:
         self.settings.validate()
@@ -117,6 +121,15 @@ class Neo4jFinancialGraphStore:
                 raise GraphUnavailableError(f"neo4j_write_failed:{type(exc).__name__}:{exc}") from exc
 
     def ensure_schema(self) -> None:
+        cache_key = (
+            str(self.settings.uri),
+            str(self.settings.database),
+            str(self.settings.graph_id),
+        )
+        with self._schema_lock:
+            if cache_key in self._schema_ready_keys:
+                return
+
         for statement in (*CONSTRAINTS, *INDEXES):
             self.execute_write(statement)
         for statement in FULLTEXT_INDEXES:
@@ -126,6 +139,9 @@ class Neo4jFinancialGraphStore:
                 # Full-text syntax differs on older Neo4j installations. Exact
                 # identity resolution and normal indexes remain authoritative.
                 continue
+
+        with self._schema_lock:
+            self._schema_ready_keys.add(cache_key)
 
     def _upsert_objects(self, rows: Iterable[GraphObjectRecord]) -> int:
         payload = [

@@ -17,6 +17,9 @@ class AdapterRegistry:
             "openai_compatible": openai_compatible,
             "openai-compatible": openai_compatible,
             "deepseek": openai_compatible,
+            "zai": openai_compatible,
+            "zhipu": openai_compatible,
+            "glm": openai_compatible,
             "ollama": OllamaAdapter(),
             "ollama_local": OllamaAdapter(),
         })
