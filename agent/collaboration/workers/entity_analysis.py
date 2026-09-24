@@ -7,6 +7,8 @@ from core.llm import LLMService
 from core.llm.contracts import LLMJSONError
 from core.llm.prompt_compaction import compact_json_dumps, schema_for_prompt
 
+from agent.skill_runtime import get_skill_registry
+from agent.skill_runtime.injection import append_skill_guidance
 from ..completion import build_completion_report, non_success_completion_report
 from ..models import GraphAgentTask, GraphWorkerResult, MissingContextItem, ResultStatus
 from ..worker_contracts import array_schema, object_schema, string_schema, validate_schema
@@ -155,6 +157,9 @@ def run_entity_analysis(
         "Do not call Workers, Tools, databases, RAG, graph business queries, business model APIs, or add model-memory facts. authoritative_entity_refs identify the target only. "
         "Judge sufficiency yourself with analysis_status=complete|partial|insufficient. partial must still produce a bounded analysis and disclose gaps under uncertainties; it does not request Recovery. "
         "Use insufficient only when no reliable bounded conclusion is possible, and then return missing_data_requirements using only semantic keys from allowed_missing_semantics. Do not name a Worker or Tool. Return JSON only."
+    )
+    system = append_skill_guidance(
+        system, get_skill_registry(), task.user_id, worker_id=str(task.worker_id or "W09")
     )
     messages = [
         {"role": "system", "content": system},

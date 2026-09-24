@@ -49,6 +49,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               { key: '/news', label: '新闻事件' },
               { key: '/paper-trading', label: 'AI 模拟盘' },
               { key: '/agent', label: 'AI Agent' },
+              { key: '/skills', label: '技能管理' },
               { key: '/settings', label: '系统设置' },
               { key: '/monitor', label: '系统监控' },
               { key: 'platform-group', label: '平台诊断', children: [

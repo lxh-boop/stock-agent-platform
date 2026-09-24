@@ -169,6 +169,10 @@ def record_llm_call(
         "reasoning_tokens": max(0, int(reasoning_tokens or 0)),
         "thinking_disabled": bool(thinking_disabled),
         "timing": sanitize_for_trace(dict(timing or {})),
+        "applied_skills": [
+            dict(item) for item in (context.get("applied_skills") or []) if isinstance(item, dict)
+        ]
+        or None,
     }
     append_unified_event(
         sanitize_for_trace(event),
@@ -202,6 +206,24 @@ def record_llm_call(
     except Exception:
         pass
     return event_id
+
+
+def note_applied_skills(skills: list[dict[str, Any]] | None) -> None:
+    """Bind the skill manifest injected into the next LLM calls in this context.
+
+    每个 skill 只记录 name/version/content_hash（传输元数据口径），正文不进审计。
+    """
+    context = dict(_CONTEXT.get() or {})
+    context["applied_skills"] = [
+        {
+            "name": str(item.get("name") or "")[:80],
+            "version": str(item.get("version") or "")[:40],
+            "content_hash": str(item.get("content_hash") or "")[:64],
+        }
+        for item in (skills or [])[:8]
+        if isinstance(item, dict) and str(item.get("name") or "")
+    ]
+    _CONTEXT.set(context)
 
 
 def record_schema_result(event_id: str, valid: bool) -> None:

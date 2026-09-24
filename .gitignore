@@ -77,5 +77,5 @@ streamlit_*.log
 frontend/node_modules/
 
 # Local pytest scratch dirs (machine-bound test runs)
-.pytest_tmp/
+.pytest_tmp*/
 .pytest_tmp2/

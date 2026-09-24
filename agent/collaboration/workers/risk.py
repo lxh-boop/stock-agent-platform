@@ -13,6 +13,8 @@ from typing import Any
 
 from core.llm import LLMService
 
+from agent.skill_runtime import get_skill_registry
+from agent.skill_runtime.injection import append_skill_guidance
 from agent.tool_dag import WorkerToolDagRuntime
 
 from ..models import GraphAgentTask, GraphWorkerResult, ResultStatus
@@ -268,22 +270,28 @@ def run_risk(
             ):
                 raise RuntimeError("hard_constraint_breach_constraint_required")
 
+    risk_system = append_skill_guidance(
+        (
+            "你是 W04 Risk Analyst。你只基于 atomic_risk_facts 形成组合层风险分析和风险约束。"
+            "不得重新查询业务状态，不得补造风险事实，不得生成具体买卖动作或 Proposal。"
+            "每条 risk item 必须引用 allowed_source_refs；每条 risk constraint 必须引用已输出的 risk_id。"
+            "所有权重表述必须明确分母：invested_weight/legacy weight 的分母是股票持仓市值，asset_weight 的分母是总资产。"
+            "max_single_position 等用户仓位上限只能与 asset_weight（总资产口径）比较，禁止拿 invested_weight 判断用户约束。"
+            "若 deterministic_hard_constraint_breaches 非空，必须输出 category=constraint 的风险记录，逐一写明其中的 security_ref，"
+            "并至少生成一条引用这些 constraint risk_id 的风险约束；不得声称当前仓位符合该硬上限。"
+            "upstream_analysis_context来自当前ContextBundle工作记忆；W04只根据其内容判断风险，不关心数据由哪个Worker或Tool产生。"
+            "business_parameters只包含本任务已明确存在的用户业务参数，不得自行补默认值。"
+            "不得在没有确定性工具事实时伪造精确的情景后权重、相关性或收益指标。"
+            "完成度与合同验收由Runtime负责。严格输出 risk_output_schema 对应 JSON。"
+        ),
+        get_skill_registry(),
+        task.user_id,
+        worker_id=str(task.worker_id or "W04"),
+    )
     messages = [
         {
             "role": "system",
-            "content": (
-                "你是 W04 Risk Analyst。你只基于 atomic_risk_facts 形成组合层风险分析和风险约束。"
-                "不得重新查询业务状态，不得补造风险事实，不得生成具体买卖动作或 Proposal。"
-                "每条 risk item 必须引用 allowed_source_refs；每条 risk constraint 必须引用已输出的 risk_id。"
-                "所有权重表述必须明确分母：invested_weight/legacy weight 的分母是股票持仓市值，asset_weight 的分母是总资产。"
-                "max_single_position 等用户仓位上限只能与 asset_weight（总资产口径）比较，禁止拿 invested_weight 判断用户约束。"
-                "若 deterministic_hard_constraint_breaches 非空，必须输出 category=constraint 的风险记录，逐一写明其中的 security_ref，"
-                "并至少生成一条引用这些 constraint risk_id 的风险约束；不得声称当前仓位符合该硬上限。"
-                "upstream_analysis_context来自当前ContextBundle工作记忆；W04只根据其内容判断风险，不关心数据由哪个Worker或Tool产生。"
-                "business_parameters只包含本任务已明确存在的用户业务参数，不得自行补默认值。"
-                "不得在没有确定性工具事实时伪造精确的情景后权重、相关性或收益指标。"
-                "完成度与合同验收由Runtime负责。严格输出 risk_output_schema 对应 JSON。"
-            ),
+            "content": risk_system,
         },
         {
             "role": "user",

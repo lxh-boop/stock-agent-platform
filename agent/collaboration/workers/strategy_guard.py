@@ -11,6 +11,8 @@ from typing import Any
 
 from core.llm import LLMService
 from agent.proposals import ProposalStore, ProposalStoreError
+from agent.skill_runtime import get_skill_registry
+from agent.skill_runtime.injection import append_skill_guidance
 
 from ..models import GraphAgentTask, GraphWorkerResult, MissingContextItem, ResultStatus
 from ..worker_contracts import array_schema, object_schema, string_schema, validate_schema
@@ -134,22 +136,28 @@ def run_strategy_guard(
                     if target > limit + 1e-12 or target < 0:
                         raise RuntimeError("proposal_constraint_target_exceeds_limit:" + security_ref)
 
+    guard_system = append_skill_guidance(
+        (
+            "你是 W05 Strategy Guard，是只读的建议分析Worker。你只根据当前ContextBundle工作记忆和用户明确目标生成待审批Proposal，"
+            "不关心数据由哪个Worker、Tool或Request产生。你可以自行判断现有数据是否足够；不足时返回need_context并只说明缺什么业务信息。"
+            "不得调用业务写工具、不得修改账户/持仓/策略/画像/配置，也不得声称已经执行。"
+            "你可以把Proposal保存到Runtime的canonical ProposalStore；这只是待审批控制状态，不是业务Mutation。"
+            "proposal_ready时requires_approval必须为true，execution_allowed必须为false。"
+            "proposal必须给出proposal_type、operation_type、target、changes、execution_parameters、rationale。"
+            "如果用户目标是调整模拟持仓，proposal_type=portfolio_mutation，并把可确定的stock_code、requested_weight、"
+            "position_adjustment_ratio、requested_quantity等放入execution_parameters；不要为了凑字段猜值。"
+            "如果用户明确要求修改正式Business Graph，proposal_type=business_graph_mutation并给出完整graph_patch。"
+            "若hard_constraint_breaches非空，proposal必须逐一给出constraint_response，action=reduce_to_limit，且目标权重不得超过上限。"
+            "严格输出proposal_output_schema对应JSON。"
+        ),
+        get_skill_registry(),
+        task.user_id,
+        worker_id=str(task.worker_id or "W05"),
+    )
     messages = [
         {
             "role": "system",
-            "content": (
-                "你是 W05 Strategy Guard，是只读的建议分析Worker。你只根据当前ContextBundle工作记忆和用户明确目标生成待审批Proposal，"
-                "不关心数据由哪个Worker、Tool或Request产生。你可以自行判断现有数据是否足够；不足时返回need_context并只说明缺什么业务信息。"
-                "不得调用业务写工具、不得修改账户/持仓/策略/画像/配置，也不得声称已经执行。"
-                "你可以把Proposal保存到Runtime的canonical ProposalStore；这只是待审批控制状态，不是业务Mutation。"
-                "proposal_ready时requires_approval必须为true，execution_allowed必须为false。"
-                "proposal必须给出proposal_type、operation_type、target、changes、execution_parameters、rationale。"
-                "如果用户目标是调整模拟持仓，proposal_type=portfolio_mutation，并把可确定的stock_code、requested_weight、"
-                "position_adjustment_ratio、requested_quantity等放入execution_parameters；不要为了凑字段猜值。"
-                "如果用户明确要求修改正式Business Graph，proposal_type=business_graph_mutation并给出完整graph_patch。"
-                "若hard_constraint_breaches非空，proposal必须逐一给出constraint_response，action=reduce_to_limit，且目标权重不得超过上限。"
-                "严格输出proposal_output_schema对应JSON。"
-            ),
+            "content": guard_system,
         },
         {
             "role": "user",
