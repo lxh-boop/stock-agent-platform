@@ -17,8 +17,7 @@ from langgraph.types import Command
 import agent_graph.graph as graph_module
 from agent_graph.approval import decision_from_resume
 from agent_graph.messages_utils import summarize_messages
-from agent_graph.specialists import build_specialist_tools
-from agent_graph.tools.main_tools import _trim_tool_result
+from agent_graph.tools.main_tools import _trim_tool_result, build_read_tools
 from agent_graph.tools.runtime import AgentResources
 
 
@@ -52,7 +51,6 @@ def _initial_state(query: str = "帮我看看最新排名") -> dict[str, Any]:
         "session_id": "sess_test",
         "reply_language": "zh",
         "run_id": "run_test",
-        "memory_summary": "",
     }
 
 
@@ -97,14 +95,20 @@ def _gated_write_tool_definition(name: str):
 # --------------------------------------------------------------------------
 
 
-def test_specialist_tools_built_from_registry():
+def test_read_tools_built_from_registry():
     from agent_graph.toolbox.registry import ToolRegistry
 
-    registry = ToolRegistry([_read_tool_definition("evidence.search_news", {"records": [1]})])
-    tools = build_specialist_tools(_fake_model(), registry, {"user_id": "tester"})
+    registry = ToolRegistry(
+        [
+            _read_tool_definition("evidence.search_news", {"records": [1]}),
+            _read_tool_definition("internal.ranking.get_latest", {"records": []}),
+        ]
+    )
+    tools = build_read_tools(registry, {"user_id": "tester"})
     names = {tool.name for tool in tools}
-    assert "evidence_collector" in names
-    assert "internal_data_provider" not in names  # its tools are not in the registry
+    assert "evidence_search_news" in names
+    assert "internal_ranking_get_latest" in names
+    assert "risk_analyzer" not in names  # provider rides the run context, absent in stubs
 
 
 def test_trim_tool_result_strips_secrets():
@@ -134,7 +138,7 @@ def test_general_question_answered_without_tools():
     assert result.get("pending_approval") is None
 
 
-def test_specialist_tool_invocation_inside_agent_loop():
+def test_domain_tool_invocation_inside_agent_loop():
     from agent_graph.toolbox.registry import ToolRegistry
 
     registry = ToolRegistry([_read_tool_definition("evidence.search_news", {"records": [{"news_id": "n1"}]})])
@@ -142,22 +146,16 @@ def test_specialist_tool_invocation_inside_agent_loop():
         [
             AIMessage(
                 content="",
-                tool_calls=[{"name": "evidence_collector", "args": {"objective": "查最新新闻"}, "id": "c1"}],
+                tool_calls=[{"name": "evidence_search_news", "args": {"object_refs": [{"node_id": "n1", "kind": "OBJECT"}]}, "id": "c1"}],
             ),
             AIMessage(content="根据证据：有 1 条新闻。"),
         ]
     )
-    graph = graph_module.build_agent_graph(
-        model,
-        _resources(registry),
-        {},
-        checkpointer=InMemorySaver(),
-        specialist_model=_fake_model("专项结论：检索到 1 条新闻。"),
-    )
+    graph = graph_module.build_agent_graph(model, _resources(registry), {}, checkpointer=InMemorySaver())
     result = graph.invoke(_initial_state(), {"configurable": {"thread_id": "t2"}})
     answer, calls, _refs = summarize_messages(result.get("messages") or [])
     assert answer
-    assert any(call["tool"] == "evidence_collector" for call in calls)
+    assert any(call["tool"] == "evidence_search_news" for call in calls)
 
 
 def test_write_tool_interrupts_then_executes_after_approval():

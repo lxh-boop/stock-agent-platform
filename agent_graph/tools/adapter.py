@@ -108,7 +108,13 @@ def wrap_tool_definition(
     requires_approval = bool(definition.requires_approval) or str(definition.operation_type) == OP_WRITE
     args_model = args_model_from_schema(definition.name, definition.input_schema)
 
-    def _execute(arguments: dict[str, Any]) -> dict[str, Any]:
+    def _execute(**kwargs: Any) -> dict[str, Any]:
+        # With a fielded args schema, StructuredTool passes fields as kwargs;
+        # the contract-light fallback passes a single ``arguments`` object.
+        if set(kwargs) == {"arguments"} and isinstance(kwargs["arguments"], dict):
+            arguments = dict(kwargs["arguments"])
+        else:
+            arguments = {key: value for key, value in kwargs.items() if value is not None}
         if requires_approval:
             decision = interrupt(
                 {

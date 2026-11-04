@@ -1,6 +1,8 @@
-"""Direct capability tools for the main agent: proposals, confirmation, graph writes.
+"""Capability tools for the main agent: domain reads, proposals, gated writes.
 
-Preview tools create pending confirmation plans (no business effect, no gate);
+Domain read tools (evidence / internal data / graph relations / risk) are
+exposed directly to the agent — no specialist sub-loops. Preview tools create
+pending confirmation plans (no business effect, no gate);
 ``confirm_pending_proposal`` and the graph-write tools are approval-gated —
 calling them raises a LangGraph ``interrupt()`` that pauses the run until the
 user answers the pending-actions prompt.
@@ -14,9 +16,10 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
+from langgraph.types import interrupt
+
 from agent_graph.messages_utils import json_view
 from agent_graph.tools.adapter import wrap_tool_definition
-from langgraph.types import interrupt
 
 _SENSITIVE_KEYS = {"confirmation_token", "token", "plan_hash", "confirmation_token_hash"}
 
@@ -201,6 +204,100 @@ def _graph_write_tools(registry: Any, context: dict[str, Any]) -> list[Structure
     return tools
 
 
+
+
+# --------------------------------------------------------------------------
+# domain read tools: exposed directly, one wrap per legacy contract
+# --------------------------------------------------------------------------
+
+_READ_TOOL_IDS = [
+    "evidence.search_news",
+    "evidence.search_rag",
+    "internal.prediction.get_stock",
+    "internal.ranking.get_latest",
+    "internal.entity.resolve_ranked_security",
+    "internal.model.get_metrics",
+    "internal.backtest.get_summary",
+    "internal.strategy.get_selected",
+    "internal.portfolio.get_state",
+    "internal.account.get_state",
+    "internal.user_profile.get",
+    "graph.relations.read_neighborhood",
+    "graph.relations.find_paths",
+]
+
+_TOOL_PURPOSE = {
+    "evidence.search_news": "检索目标实体的新闻与公告证据",
+    "evidence.search_rag": "RAG 文档检索（需权威 entity_refs）",
+    "internal.prediction.get_stock": "读取某只股票的模型预测/评分",
+    "internal.ranking.get_latest": "读取最新全市场模型排名",
+    "internal.entity.resolve_ranked_security": "把排名记录解析成权威 GraphRef 身份",
+    "internal.model.get_metrics": "读取模型质量指标",
+    "internal.backtest.get_summary": "读取回测摘要",
+    "internal.strategy.get_selected": "读取当前选定策略",
+    "internal.portfolio.get_state": "读取当前模拟盘组合与持仓",
+    "internal.account.get_state": "读取账户状态",
+    "internal.user_profile.get": "读取用户画像与约束",
+    "graph.relations.read_neighborhood": "在权威 entity_refs 范围读取邻域关系",
+    "graph.relations.find_paths": "读取权威来源与目标之间的关联路径",
+}
+
+
+def _risk_analyzer_tool(context: dict[str, Any]) -> StructuredTool | None:
+    """Deterministic portfolio-risk capability: provider.analyze_risk, no LLM."""
+
+    from pydantic import create_model
+
+    provider = context.get("_provider")
+    if provider is None:
+        return None
+
+    def _run(objective: str = "") -> str:
+        _ = objective
+        try:
+            result = provider.analyze_risk(
+                user_id=str(context.get("user_id") or "default"),
+                output_dir=str(context.get("output_dir") or "outputs"),
+                db_path=context.get("db_path"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return json_view({"success": False, "message": f"风险计算失败: {str(exc)[:300]}"})
+        if hasattr(result, "to_dict"):
+            result = result.to_dict()
+        return json_view(result, limit=6000)
+
+    args_model = create_model(
+        "RiskAnalyzerArgs",
+        objective=(str, Field(default="", description="可选；本次风险评估的关注点")),
+    )
+    return StructuredTool.from_function(
+        func=_run,
+        name="risk_analyzer",
+        description="基于系统内当前模拟盘组合直接计算风险事实（集中度、行业暴露、账户风险）；无需传入持仓数据。",
+        args_schema=args_model,
+    )
+
+
+def build_read_tools(registry: Any, context: dict[str, Any]) -> list[StructuredTool]:
+    """Domain read tools straight on the main agent (agent-as-tool, no sub-loops)."""
+
+    tools: list[StructuredTool] = []
+    if registry is not None:
+        for tool_id in _READ_TOOL_IDS:
+            definition = registry.get(tool_id)
+            if definition is None or not definition.enabled:
+                continue
+            wrapped = wrap_tool_definition(definition, dict(context), worker_id="main")
+            purpose = _TOOL_PURPOSE.get(tool_id)
+            if purpose and purpose not in wrapped.description:
+                wrapped.description = f"{wrapped.description.splitlines()[0]}（{purpose}）"
+            tools.append(wrapped)
+    risk_tool = _risk_analyzer_tool(context)
+    if risk_tool is not None:
+        tools.append(risk_tool)
+    return tools
+
+
 def build_main_capability_tools(registry: Any, context: dict[str, Any]) -> list[StructuredTool]:
     """Assemble the main agent's direct capability tools (proposals + gated writes)."""
 
@@ -214,4 +311,4 @@ def build_main_capability_tools(registry: Any, context: dict[str, Any]) -> list[
     return tools
 
 
-__all__ = ["build_main_capability_tools"]
+__all__ = ["build_main_capability_tools", "build_read_tools"]

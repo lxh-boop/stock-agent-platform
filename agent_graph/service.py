@@ -20,7 +20,7 @@ from core.llm.runtime_settings import LLMRuntimeSettings, resolve_active_llm_set
 from agent_graph.graph import build_agent_graph, build_initial_messages
 from agent_graph.messages_utils import summarize_messages
 from agent_graph.llm import build_chat_model
-from agent_graph.memory import open_persistence
+from agent_graph.memory import open_checkpointer
 from agent_graph.tools.runtime import AgentResources
 from agent_graph.trace_adapter import GraphRunTracer
 
@@ -94,18 +94,6 @@ def _failure_response(
     }
 
 
-def _memory_summary(session_id: str, output_dir: str) -> str:
-    if not session_id:
-        return ""
-    try:
-        from agent_graph.session.state_store import SessionStateStore
-
-        store = SessionStateStore(output_dir)
-        return str(store.build_summary(session_id) or "")
-    except Exception:  # noqa: BLE001 - session memory is best-effort
-        return ""
-
-
 def _resolve_model(llm_settings: LLMRuntimeSettings | None, kwargs: dict[str, Any]):
     active_llm = llm_settings or resolve_active_llm_settings(
         mode=kwargs.get("llm_mode"),
@@ -123,7 +111,7 @@ def _invoke_with_persistence(graph, chat_model, resources, run_meta, initial_sta
         checkpointer = None
         persistence_warnings: list[str] = []
         try:
-            checkpointer, _store = stack.enter_context(open_persistence())
+            checkpointer = stack.enter_context(open_checkpointer())
         except Exception as exc:  # noqa: BLE001 - persistence is best-effort
             persistence_warnings = [f"持久化不可用，审批中断将不可恢复: {exc}"[:200]]
         effective = graph
@@ -203,14 +191,7 @@ def run_langgraph_agent_request(
             "session_id": session_id,
             "reply_language": language,
             "run_id": run_id,
-            "memory_summary": _memory_summary(session_id, str(output_dir)),
-            "messages": build_initial_messages(
-                {
-                    "query": raw_query,
-                    "memory_summary": _memory_summary(session_id, str(output_dir)),
-                    "reply_language": language,
-                }
-            ),
+            "messages": build_initial_messages({"query": raw_query, "reply_language": language}),
         }
         config = {
             "configurable": {"thread_id": session_id, "user_id": user_id, "run_id": run_id},
@@ -273,7 +254,7 @@ def resume_langgraph_agent(
             output_dir=str(output_dir),
             db_path=str(db_path) if db_path else None,
         )
-        with open_persistence() as (checkpointer, _store):
+        with open_checkpointer() as checkpointer:
             if checkpointer is None:
                 raise RuntimeError("checkpointer_unavailable_for_resume")
             graph = build_agent_graph(chat_model, resources, run_meta, checkpointer=checkpointer)

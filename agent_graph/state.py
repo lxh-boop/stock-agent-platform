@@ -34,9 +34,6 @@ class AgentState(TypedDict, total=False):
     reply_language: str
     run_id: str
 
-    # conversation context injected before the run
-    memory_summary: str
-
     # main agent loop transcript (subgraph node state)
     messages: Annotated[list[AnyMessage], add_messages]
 

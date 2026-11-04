@@ -15,10 +15,10 @@
   -> React / Nginx（http://127.0.0.1:3000）
   -> FastAPI（http://127.0.0.1:8010）
   -> Application Service
-  -> Task Runtime / agent_graph（LangGraph 单 Agent，agent-as-tool）/ RAG / Portfolio
+  -> Task Runtime / agent_graph（LangGraph 单 Agent，领域工具直连）/ RAG / Portfolio
 ```
 
-自研 Agent 编排（`agent/` 目录）与多 Agent 编排层（supervisor 规划 / Worker 子图 / Send 并行分发）均已删除。当前唯一实现是 `agent_graph/` 单主 Agent（create_agent，agent-as-tool 模式）：专家能力（证据/内部数据/图谱关系/风险）与提案、写操作全部以工具形式挂给主 Agent，写工具经 interrupt 审批 + Postgres checkpointer 恢复。详见 `agent_graph/README.md`。Skills 功能（skill_runtime 与前端技能管理页）已随旧引擎删除。
+自研 Agent 编排（`agent/` 目录）、多 Agent 编排层（supervisor 规划 / Worker 子图 / Send 并行分发）、专家子循环与会话记忆复用均已删除。当前唯一实现是 `agent_graph/` 单主 Agent（create_agent）：约 15 个领域只读工具与提案、写操作工具直接挂给主 Agent，写工具经 interrupt 审批 + Postgres checkpointer（仅用于中断恢复）恢复。详见 `agent_graph/README.md`。Skills 功能（skill_runtime 与前端技能管理页）已随旧引擎删除。
 
 Streamlit、`app.py`、`app/**` 和旧 `client/api/**` 已下线。不得重新引入浏览器直读数据库、文件、模型或密钥的实现。
 
