@@ -16,12 +16,10 @@ from server.api.dispatch import (
     dashboard_bootstrap,
     invoke_agent,
     invoke_dashboard,
-    invoke_handoff,
     invoke_model,
     invoke_monitor,
     invoke_paper,
     invoke_paper_profile,
-    invoke_reflection,
     model_bootstrap,
     paper_bootstrap,
 )
@@ -130,8 +128,6 @@ def create_app() -> FastAPI:
     app.include_router(build_operation_router(prefix="/api/v1/paper-profile", tag="paper-profile", invoker=invoke_paper_profile), dependencies=authenticated)
     app.include_router(build_operation_router(prefix="/api/v1/model-search", tag="model-search", invoker=invoke_model, bootstrap=model_bootstrap), dependencies=authenticated)
     app.include_router(build_operation_router(prefix="/api/v1/system-monitor", tag="system-monitor", invoker=invoke_monitor), dependencies=authenticated)
-    app.include_router(build_operation_router(prefix="/api/v1/handoff", tag="handoff", invoker=invoke_handoff), dependencies=authenticated)
-    app.include_router(build_operation_router(prefix="/api/v1/reflection", tag="reflection", invoker=invoke_reflection), dependencies=authenticated)
     app.include_router(tasks_router, dependencies=authenticated)
     app.include_router(web_dashboard_router, dependencies=authenticated)
     app.include_router(web_stocks_router, dependencies=authenticated)

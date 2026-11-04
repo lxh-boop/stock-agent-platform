@@ -217,11 +217,7 @@ MODEL_CONSTANTS = {
 }
 
 MONITOR_FUNCTIONS = {
-    "build_handoff_health_summary",
-    "build_memory_store_health_summary",
-    "build_message_bus_health_summary",
-    "build_react_health_summary",
-    "build_reflection_health_summary",
+    "build_agent_runtime_health_summary",
     "build_system_monitor_snapshot",
     "collect_and_store_system_monitor_snapshot",
     "list_system_monitor_alerts",
@@ -231,13 +227,11 @@ MONITOR_FUNCTIONS = {
 HANDOFF_FUNCTIONS = {
     "build_handoff_safe_summary",
     "format_handoff_caption",
-    "build_handoff_health_summary",
 }
 
 REFLECTION_FUNCTIONS = {
     "build_reflection_safe_summary",
     "format_reflection_caption",
-    "build_reflection_health_summary",
 }
 
 
@@ -436,17 +430,3 @@ def invoke_monitor(operation: str, args: list[Any], kwargs: dict[str, Any]) -> A
     return _invoke_callable(getattr(module, operation), args, kwargs)
 
 
-def invoke_handoff(operation: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
-    import application.handoff_service as module
-
-    if operation not in HANDOFF_FUNCTIONS:
-        raise KeyError(f"Handoff operation is not allowed: {operation}")
-    return _invoke_callable(getattr(module, operation), args, kwargs)
-
-
-def invoke_reflection(operation: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
-    import application.reflection_service as module
-
-    if operation not in REFLECTION_FUNCTIONS:
-        raise KeyError(f"Reflection operation is not allowed: {operation}")
-    return _invoke_callable(getattr(module, operation), args, kwargs)
