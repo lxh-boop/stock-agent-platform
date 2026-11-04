@@ -201,7 +201,7 @@ def test_readiness_public_details_do_not_expose_infrastructure_identity(monkeypa
     assert "private_app_schema" not in encoded
     assert "configured-secret" not in encoded
 
-    # The reduced audit package does not include the complete agent.graph package,
+    # The reduced audit package does not include the complete agent_graph.financial_graph package,
     # so verify the Neo4j public-boundary implementation without importing its
     # unrelated graph contracts.
     neo4j_source = inspect.getsource(startup._check_neo4j)

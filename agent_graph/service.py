@@ -31,26 +31,6 @@ _FORMAL_ENTRY = "agent_graph.service.run_langgraph_agent_request"
 _PLAN_ID_PREFIX = "lg_approve_"
 
 
-def resolve_agent_engine() -> str:
-    """Engine selector: ``STOCK_AGENT_ENGINE`` env first, then local config.
-
-    Values: ``langgraph`` | ``legacy`` (default). The legacy engine stays the
-    default until this switch has been validated in the deployment.
-    """
-
-    import os
-
-    engine = str(os.getenv("STOCK_AGENT_ENGINE", "")).strip().lower()
-    if not engine:
-        try:
-            from local_config import load_local_config
-
-            engine = str(load_local_config().get("agent_engine") or "").strip().lower()
-        except Exception:  # noqa: BLE001
-            engine = ""
-    return engine if engine in {"langgraph", "legacy"} else "legacy"
-
-
 def plan_id_for_run(run_id: str) -> str:
     return f"{_PLAN_ID_PREFIX}{run_id}"
 
@@ -125,7 +105,7 @@ def _memory_summary(session_id: str, output_dir: str) -> str:
     if not session_id:
         return ""
     try:
-        from agent.collaboration.session_state import SessionStateStore
+        from agent_graph.session.state_store import SessionStateStore
 
         store = SessionStateStore(output_dir)
         return str(store.build_summary(session_id) or "")
@@ -398,7 +378,7 @@ def resume_langgraph_agent(
 
 
 def _card_list():
-    from agent.collaboration.worker_directory import CapabilityWorkerDirectory
+    from agent_graph.workers.cards import CapabilityWorkerDirectory
 
     return CapabilityWorkerDirectory().list()
 
@@ -523,7 +503,6 @@ def _compose_response(
 __all__ = [
     "run_langgraph_agent_request",
     "resume_langgraph_agent",
-    "resolve_agent_engine",
     "plan_id_for_run",
     "run_id_from_plan_id",
 ]

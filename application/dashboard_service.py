@@ -14,8 +14,8 @@ import joblib
 import pandas as pd
 
 import config as app_config
-from agent.mcp.config import build_mcp_context_from_local_config, mcp_sdk_version
-from agent.mcp.discovery import discover_mcp_tools, reset_discovery_cache
+from agent_graph.mcp.config import build_mcp_context_from_local_config, mcp_sdk_version
+from agent_graph.mcp.discovery import discover_mcp_tools, reset_discovery_cache
 from application.support.backtest_display import build_display_date_options, is_prediction_only_date
 from application.support.model_search_results import (
     BACKTEST_DISCLAIMER,
@@ -330,7 +330,7 @@ class DashboardApplicationService:
         """Frozen transport adapter to the one canonical hybrid RAG service."""
 
         del force_rebuild
-        from agent.services.evidence_service import evidence_service
+        from agent_graph.services.evidence_service import evidence_service
 
         result = evidence_service.search_documents(
             query,
@@ -608,8 +608,8 @@ class DashboardApplicationService:
 
     @staticmethod
     def test_neo4j_connection(local_config: dict[str, Any]) -> dict[str, Any]:
-        from agent.graph.settings import Neo4jSettings
-        from agent.graph.store import Neo4jFinancialGraphStore
+        from agent_graph.financial_graph.settings import Neo4jSettings
+        from agent_graph.financial_graph.store import Neo4jFinancialGraphStore
 
         graph_settings = Neo4jSettings.from_env(local_config=dict(local_config))
         graph_store = Neo4jFinancialGraphStore(graph_settings)

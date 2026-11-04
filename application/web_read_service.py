@@ -363,7 +363,7 @@ class WebReadApplicationService:
         return {"stock_code": code, "records": data, "total": int(len(data))}
 
     def stock_evidence(self, stock_code: str, *, query: str = "", top_k: int = 10) -> dict[str, Any]:
-        from agent.services.evidence_service import evidence_service
+        from agent_graph.services.evidence_service import evidence_service
 
         code = str(stock_code).zfill(6)
         search_query = self._text(query) or f"{code} 最新新闻 公告 风险"
@@ -520,34 +520,16 @@ class WebReadApplicationService:
         return result.to_dict() if hasattr(result, "to_dict") else dict(result or {})
 
     def monitor_services(self, *, user_id: str = "default") -> dict[str, Any]:
-        from application.system_monitor_service import (
-            build_handoff_health_summary,
-            build_memory_store_health_summary,
-            build_message_bus_health_summary,
-            build_react_health_summary,
-            build_reflection_health_summary,
-        )
+        from application.system_monitor_service import build_agent_runtime_health_summary
 
         def safe(callable_obj: Any, **kwargs: Any) -> dict[str, Any]:
             try:
                 value = callable_obj(**kwargs)
                 return value if isinstance(value, dict) else {"status": "ok", "value": value}
-            except TypeError:
-                try:
-                    value = callable_obj()
-                    return value if isinstance(value, dict) else {"status": "ok", "value": value}
-                except Exception as exc:
-                    return {"status": "unavailable", "error": type(exc).__name__}
             except Exception as exc:
                 return {"status": "unavailable", "error": type(exc).__name__}
 
-        return {
-            "message_bus": safe(build_message_bus_health_summary, user_id=user_id),
-            "memory": safe(build_memory_store_health_summary, user_id=user_id),
-            "react": safe(build_react_health_summary, user_id=user_id),
-            "reflection": safe(build_reflection_health_summary, user_id=user_id),
-            "handoff": safe(build_handoff_health_summary, user_id=user_id),
-        }
+        return {"agent_runtime": safe(build_agent_runtime_health_summary)}
 
     def monitor_history(self, *, user_id: str = "default", limit: int = 30) -> list[dict[str, Any]]:
         from application.system_monitor_service import list_system_monitor_history

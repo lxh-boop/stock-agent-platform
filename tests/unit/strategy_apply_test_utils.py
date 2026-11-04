@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agent.services.strategy_apply_service import StrategyApplyService
-from agent.tools.strategy_workflow_tools import create_strategy_apply_plan
+from agent_graph.services.strategy_apply_service import StrategyApplyService
+from agent_graph.domain_tools.strategy_workflow_tools import create_strategy_apply_plan
 from strategy_workflow_test_utils import database_path, prepare_proposal
 
 

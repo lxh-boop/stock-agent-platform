@@ -3,7 +3,6 @@ import { unwrapEnvelope } from './envelope'
 import { getWeb } from './webApi'
 import type { OperationResponse } from '../types/api'
 import type {
-  AgentDiagnostics,
   AgentMessage,
   AgentMessagePage,
   AgentPendingActionPage,
@@ -68,16 +67,6 @@ export const agentApi = {
     }),
   run: (userId: string, runId: string) =>
     getWeb<AgentRunDetail>(`${BASE}/runs/${encodeURIComponent(runId)}`, { params: { user_id: userId } }),
-  trace: (userId: string, runId: string) =>
-    getWeb<AgentDiagnostics>(`${BASE}/runs/${encodeURIComponent(runId)}/trace`, { params: { user_id: userId } }),
-  reflection: (userId: string, runId: string) =>
-    getWeb<AgentDiagnostics>(`${BASE}/runs/${encodeURIComponent(runId)}/reflection`, { params: { user_id: userId } }),
-  handoff: (userId: string, runId: string) =>
-    getWeb<AgentDiagnostics>(`${BASE}/runs/${encodeURIComponent(runId)}/handoff`, { params: { user_id: userId } }),
-  react: (userId: string, runId: string) =>
-    getWeb<AgentDiagnostics>(`${BASE}/runs/${encodeURIComponent(runId)}/react`, { params: { user_id: userId } }),
-  memory: (userId: string, runId: string) =>
-    getWeb<AgentDiagnostics>(`${BASE}/runs/${encodeURIComponent(runId)}/memory`, { params: { user_id: userId } }),
   pendingActions: (userId: string, conversationId: string) =>
     getWeb<AgentPendingActionPage>(`${BASE}/pending-actions`, {
       params: { user_id: userId, conversation_id: conversationId },

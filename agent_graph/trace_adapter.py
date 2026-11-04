@@ -13,9 +13,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agent.console_trace import trace_event
-from agent.runtime import AgentRuntimeRecorder
-from agent.runtime import (
+from agent_graph.trace import trace_event
+from agent_graph.runtime.recorder import AgentRuntimeRecorder
+from agent_graph.runtime.recorder import (
     RUN_COMPLETED,
     RUN_FAILED,
     RUN_PARTIALLY_COMPLETED,

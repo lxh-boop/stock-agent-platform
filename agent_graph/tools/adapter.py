@@ -17,7 +17,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, create_model
 
-from agent.tool_runtime.contracts import OP_WRITE, ToolDefinition
+from agent_graph.toolbox.contracts import OP_WRITE, ToolDefinition
 
 _NAME_PATTERN = re.compile(r"[^a-zA-Z0-9_-]")
 _MAX_TOOL_NAME_LENGTH = 64

@@ -1,7 +1,0 @@
-{
-  "cases": "data/evaluation/agent_harness_cases.jsonl",
-  "output_dir": "outputs",
-  "entrypoint": "agent.executor.run_agent_request",
-  "llm_required": false,
-  "acceptance_eligible": true
-}

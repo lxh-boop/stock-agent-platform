@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent.services.strategy_config_compiler import (
+from agent_graph.services.strategy_config_compiler import (
     CANONICAL_CONFIG_DEFAULTS,
     StrategyConfigCompiler,
 )

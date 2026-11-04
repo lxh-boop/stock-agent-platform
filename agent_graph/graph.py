@@ -28,8 +28,8 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, Send, interrupt
 
-from agent.collaboration.integration import execute_control_action
-from agent.collaboration.worker_directory import CapabilityWorkerDirectory
+from agent_graph.writes import execute_control_action
+from agent_graph.workers.cards import CapabilityWorkerDirectory
 
 from agent_graph.approval import decision_from_resume, write_request_payload
 from agent_graph.llm import generate_structured

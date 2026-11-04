@@ -32,7 +32,7 @@
 ```mermaid
 flowchart LR
     A["React / Nginx"] --> B["FastAPI / Application Service"]
-    B --> C["Task Runtime / Main + Worker Agent"]
+    B --> C["Task Runtime / LangGraph Agent"]
     C --> D["ToolExecutor"]
     D --> E["Worker Tool ID"]
     E --> F["Runtime Registry"]
@@ -54,7 +54,7 @@ flowchart LR
 | 判断模型在历史数据上的表现 | 回测指标、净值曲线、交易与持仓明细 |
 | 让 AI 回答具备可追溯依据 | 新闻、公告、研报的混合 RAG 检索与证据引用 |
 | 验证组合策略但不触碰真实交易 | 用户隔离的 AI 模拟盘、持仓、资金和订单记录 |
-| 让复杂分析任务可控、可恢复 | Main Agent、Worker Agent、Task DAG、SSE 和运行 Trace |
+| 让复杂分析任务可控、可恢复 | LangGraph supervisor + Worker、SSE 和运行 Trace |
 | 安全接入内部数据、检索和模型能力 | MCP Discovery、Runtime Admission、Worker Tool 投影和 ToolExecutor 控制面 |
 | 降低 AI 直接修改业务数据的风险 | Proposal、Approval、服务端复校、幂等执行和审计 |
 
@@ -103,7 +103,7 @@ flowchart LR
     C --> D["模型评分与股票排名"]
     D --> E["个股分析与混合 RAG"]
     D --> F["历史回测"]
-    E --> G["多 Agent / Task DAG"]
+    E --> G["多 Agent / LangGraph 编排"]
     G --> H["ToolExecutor / Runtime Registry"]
     H --> I["Data / RAG / Model MCP"]
     F --> J["AI 模拟盘"]
@@ -124,13 +124,12 @@ flowchart LR
 
 ## 项目亮点
 
-### 1. 自研多 Agent 协作与任务编排
+### 1. LangGraph 多 Agent 协作与任务编排
 
-- Main Agent 负责理解目标、拆解任务和生成 Task DAG；
-- Worker Agent 按能力卡承接证据检索、组合分析、风险检查、图谱影响和报告生成等职责；
-- Worker 只获取完成任务所需的最小上下文，避免无差别传递全部会话；
-- 支持 Handoff、Reflection、Critic、有限 Replan 和结构化中间结果；
-- Agent、Tool 和 Provider 保持分层，便于替换模型或扩展业务能力。
+- 基于 LangChain 1.x + LangGraph 1.x：supervisor 节点理解目标、结构化拆解请求并规划 Worker 任务；
+- 9 个专业 Worker（`create_agent` 子图）按能力卡承接证据检索、内部数据、图谱关系、风险分析、实体分析和报告综合，provider/consumer 两阶段经 Send API 并行执行，失败自动重派一次；
+- 写操作经 LangGraph `interrupt()` 人工审批 + Postgres checkpointer 恢复，配合确定性写执行器（CAS/幂等/复校）完成模拟盘闭环；
+- Agent、Tool 和 Provider 保持分层，便于替换模型或扩展业务能力（详见 `agent_graph/README.md`）。
 
 ### 2. 可恢复的长任务运行时
 

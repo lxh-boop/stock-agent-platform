@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent.services.strategy_implementation_service import (
+from agent_graph.services.strategy_implementation_service import (
     canonical_json,
     sha256_file,
     sha256_text,

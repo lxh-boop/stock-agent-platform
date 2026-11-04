@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from agent.services.strategy_audit_service import StrategyAuditService
+from agent_graph.services.strategy_audit_service import StrategyAuditService
 from strategy_binding_test_utils import (
     confirm_binding,
     create_binding_plan,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.tools.audit_tool import read_agent_action_logs, write_agent_action_log
+from agent_graph.domain_tools.audit_tool import read_agent_action_logs, write_agent_action_log
 
 
 def test_agent_action_audit_log_writes_jsonl(tmp_path) -> None:

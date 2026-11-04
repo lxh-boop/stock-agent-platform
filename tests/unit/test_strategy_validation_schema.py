@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.services.strategy_review_service import StrategyReviewService
+from agent_graph.services.strategy_review_service import StrategyReviewService
 
 
 def test_strategy_validation_schema_checks_canonical_relations() -> None:

@@ -15,7 +15,6 @@ import { SettingsPage } from '../pages/dashboard/SettingsPage'
 import { SystemMonitorPage } from '../pages/monitor/SystemMonitorPage'
 import { PaperTradingPage } from '../pages/paper/PaperTradingPage'
 import { AgentPage } from '../pages/agent/AgentPage'
-import { SkillsPage } from '../pages/skills/SkillsPage'
 import { useAuthStore } from '../stores/authStore'
 
 function RequireAuth() {
@@ -51,7 +50,6 @@ export function AppRoutes() {
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/paper-trading" element={<PaperTradingPage />} />
       <Route path="/agent" element={<AgentPage />} />
-      <Route path="/skills" element={<SkillsPage />} />
       <Route path="/monitor" element={<SystemMonitorPage />} />
       <Route path="/platform" element={<HealthPage />} />
       <Route path="/runtime" element={<RuntimePage />} />

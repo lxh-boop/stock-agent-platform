@@ -1,5 +1,5 @@
-from agent.services.strategy_binding_service import StrategyBindingService
-from agent.services.strategy_config_compiler import StrategyConfigCompiler
+from agent_graph.services.strategy_binding_service import StrategyBindingService
+from agent_graph.services.strategy_config_compiler import StrategyConfigCompiler
 from strategies.registry import StrategyManifest, get_strategy_registry
 from strategy_position_test_utils import setup_position_account
 

@@ -1,5 +1,5 @@
-"""Specialist workers for the LangGraph engine."""
+"""Specialist workers. Cards are safe to import alone; the factory pulls the tool layer."""
 
-from agent_graph.workers.factory import build_all_worker_agents, build_worker_agent, worker_card
+from agent_graph.workers.cards import CapabilityWorkerCard, CapabilityWorkerDirectory
 
-__all__ = ["build_all_worker_agents", "build_worker_agent", "worker_card"]
+__all__ = ["CapabilityWorkerCard", "CapabilityWorkerDirectory"]

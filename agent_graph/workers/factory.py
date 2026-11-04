@@ -1,7 +1,7 @@
 """Specialist worker subgraphs built with ``langchain.agents.create_agent``.
 
 Each worker card keeps its legacy private tool whitelist and private prompt;
-the card data itself is reused from ``agent.collaboration.worker_directory``
+the card data itself is reused from ``agent_graph.workers.cards``
 so both engines share one source of truth.
 """
 
@@ -13,7 +13,7 @@ from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-from agent.collaboration.worker_directory import CapabilityWorkerCard, CapabilityWorkerDirectory
+from agent_graph.workers.cards import CapabilityWorkerCard, CapabilityWorkerDirectory
 
 from agent_graph.prompts import REPLAN_EXTRA_HINT, WORKER_SUPERVISOR_HINT
 from agent_graph.tools.registry import build_worker_tools

@@ -608,7 +608,7 @@ def run_paper_trading_pipeline(
         }
     else:
         try:
-            from agent.graph.integration import sync_portfolio_payload
+            from agent_graph.financial_graph.integration import sync_portfolio_payload
 
             graph_sync = sync_portfolio_payload(
                 user_id=context.user_id,

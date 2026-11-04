@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from agent.services.market_analysis_service import market_analysis_service
+from agent_graph.services.market_analysis_service import market_analysis_service
 
 
 def ranking_result(tmp_path: Path, requested: int, available: int = 60) -> dict:

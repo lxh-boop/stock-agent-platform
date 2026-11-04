@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.tools.replacement_recommendation_tool import recommend_replacements
+from agent_graph.domain_tools.replacement_recommendation_tool import recommend_replacements
 from agent_control_center_utils import write_agent_fixture
 
 

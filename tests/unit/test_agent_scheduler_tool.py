@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.tools.scheduler_tool import query_scheduler_status
+from agent_graph.domain_tools.scheduler_tool import query_scheduler_status
 
 
 def test_agent_scheduler_tool_is_non_crashing(tmp_path) -> None:

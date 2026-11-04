@@ -5,16 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.graph.evidence_ingestion import EvidenceIngestionService
-from agent.graph.identity import GraphEntityIdentityService
-from agent.graph.impact_service import GraphImpactService
-from agent.graph.patch_validator import GraphPatchValidator
-from agent.graph.portfolio_graph import PortfolioGraphService
-from agent.graph.provider_adapter import GraphProviderAdapter
-from agent.graph.settings import Neo4jSettings
-from agent.graph.store import Neo4jFinancialGraphStore
-from agent.tool_runtime.registry import ToolRegistry
-from agent.worker_tools.registry import build_worker_tool_registry
+from agent_graph.financial_graph.evidence_ingestion import EvidenceIngestionService
+from agent_graph.financial_graph.identity import GraphEntityIdentityService
+from agent_graph.financial_graph.impact_service import GraphImpactService
+from agent_graph.financial_graph.patch_validator import GraphPatchValidator
+from agent_graph.financial_graph.portfolio_graph import PortfolioGraphService
+from agent_graph.financial_graph.provider_adapter import GraphProviderAdapter
+from agent_graph.financial_graph.settings import Neo4jSettings
+from agent_graph.financial_graph.store import Neo4jFinancialGraphStore
+from agent_graph.toolbox.registry import ToolRegistry
+from agent_graph.toolbox.worker_tools.registry import build_worker_tool_registry
 
 
 @dataclass

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.services.market_analysis_service import RankingRepository
+from agent_graph.services.market_analysis_service import RankingRepository
 from application.paper_profile_service import save_classic_user_context
 from database.repositories import PredictionRepository, RuntimeDataImportAuditRepository
 from database.runtime_data_import import import_ranking_file

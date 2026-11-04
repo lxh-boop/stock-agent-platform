@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent.tools.paper_trade_execute_tool import execute_confirmed_paper_trade_plan
-from agent.tools.rebalance_plan_tool import preview_add_stock_to_paper
+from agent_graph.domain_tools.paper_trade_execute_tool import execute_confirmed_paper_trade_plan
+from agent_graph.domain_tools.rebalance_plan_tool import preview_add_stock_to_paper
 from portfolio.storage import PortfolioStorage
 from agent_control_center_utils import write_agent_fixture
 

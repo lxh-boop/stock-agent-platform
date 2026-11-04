@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agent.services.strategy_proposal_service import StrategyProposalService
-from agent.tools.strategy_workflow_tools import save_strategy_proposal_draft
-from agent.tools.strategy_workflow_tools import prepare_strategy_implementation
+from agent_graph.services.strategy_proposal_service import StrategyProposalService
+from agent_graph.domain_tools.strategy_workflow_tools import save_strategy_proposal_draft
+from agent_graph.domain_tools.strategy_workflow_tools import prepare_strategy_implementation
 
 
 def database_path(tmp_path: Path) -> Path:

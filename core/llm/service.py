@@ -65,66 +65,13 @@ class LLMService:
         self._state.thread_local.last_response = response
         self._state.thread_local.last_audit_event_id = event_id
 
-    def _record_call(
-        self,
-        *,
-        stage: str,
-        operation: str,
-        temperature: float,
-        request_at: str,
-        started: float,
-        success: bool,
-        response: LLMResponse | None = None,
-        error: Exception | None = None,
-        prompt_chars: int = 0,
-        max_output_tokens: int = 0,
-        disable_thinking: bool | None = None,
-    ) -> str:
-        try:
-            from agent.llm_audit import record_llm_call
-
-            return record_llm_call(
-                stage=stage,
-                provider=self.profile.provider_id,
-                model=self.profile.model_name,
-                temperature=temperature,
-                request_at=request_at,
-                response_at=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-                duration_ms=round((time.perf_counter() - started) * 1000),
-                success=success,
-                provider_request_id=(response.provider_request_id if response else ""),
-                error_type=(type(error).__name__ if error else ""),
-                error_message=(str(error)[:500] if error else ""),
-                operation=operation,
-                deployment_mode=self.profile.deployment_mode,
-                profile_id=self.profile_id,
-                config_hash=self.config_hash,
-                endpoint_scope=self.profile.endpoint_scope,
-                prompt_chars=prompt_chars,
-                max_output_tokens=max_output_tokens,
-                prompt_tokens=int((response.usage if response else {}).get("prompt_tokens", 0) or 0),
-                completion_tokens=int((response.usage if response else {}).get("completion_tokens", 0) or 0),
-                total_tokens=int((response.usage if response else {}).get("total_tokens", 0) or 0),
-                cached_prompt_tokens=int((response.usage if response else {}).get("cached_prompt_tokens", 0) or 0),
-                reasoning_tokens=int((response.usage if response else {}).get("reasoning_tokens", 0) or 0),
-                timing=dict(response.timing) if response else {},
-                thinking_disabled=(
-                    bool(getattr(self.profile, "disable_thinking", False))
-                    if disable_thinking is None
-                    else bool(disable_thinking)
-                ),
-            )
-        except Exception:
-            return ""
+    def _record_call(self, **_kwargs: Any) -> str:
+        """Legacy LLM audit hook removed with the self-built runtime."""
+        return ""
 
     @staticmethod
-    def _record_schema(event_id: str, valid: bool) -> None:
-        try:
-            from agent.llm_audit import record_schema_result
-
-            record_schema_result(event_id, valid)
-        except Exception:
-            return
+    def _record_schema(_event_id: str, _valid: bool) -> None:
+        return None
 
     @staticmethod
     def _emit_generation_event(

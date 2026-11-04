@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent.graph.bootstrap import FinancialGraphBootstrapper
+from agent_graph.financial_graph.bootstrap import FinancialGraphBootstrapper
 
 
 def _read_rows(path: Path, encoding: str) -> list[dict[str, Any]]:

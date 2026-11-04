@@ -1,4 +1,4 @@
-from agent.services.strategy_binding_service import StrategyBindingService
+from agent_graph.services.strategy_binding_service import StrategyBindingService
 from strategies.binding_repository import StrategyBindingRepository
 from strategy_position_test_utils import setup_position_account
 from strategy_runtime_test_utils import bind_runtime

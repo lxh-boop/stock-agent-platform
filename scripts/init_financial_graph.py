@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from agent.graph.bootstrap import FinancialGraphBootstrapper
+from agent_graph.financial_graph.bootstrap import FinancialGraphBootstrapper
 
 
 def main() -> None:

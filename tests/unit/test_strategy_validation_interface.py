@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent.services.strategy_implementation_service import (
+from agent_graph.services.strategy_implementation_service import (
     StrategyImplementationService,
 )
-from agent.services.strategy_review_service import StrategyReviewService
+from agent_graph.services.strategy_review_service import StrategyReviewService
 from strategy_workflow_test_utils import database_path, save_draft
 
 

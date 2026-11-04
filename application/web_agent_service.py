@@ -9,18 +9,9 @@ from uuid import uuid4
 
 from config import OUTPUT_DIR
 from application.agent_service import AgentApplicationService
-from application.handoff_service import build_handoff_safe_summary
-from application.reflection_service import build_reflection_safe_summary
-from agent.memory.memory_context_bridge import build_memory_safe_summary
-from agent.react.react_context_bridge import (
-    build_react_safe_summary,
-    list_safe_observation_summaries,
-)
-from agent.runtime import load_run_snapshot
-from agent.proposals import ProposalStore
-from agent.services.strategy_proposal_service import StrategyProposalService
-from agent.artifacts import ArtifactStore
-from agent.collaboration.turn_inventory import record_turn_summary
+from agent_graph.runtime.recorder import load_run_snapshot
+from agent_graph.session.proposals import ProposalStore
+from agent_graph.services.strategy_proposal_service import StrategyProposalService
 
 
 COMPLIANCE_NOTE = "本项目仅用于机器学习、金融数据分析和项目展示，不构成投资建议，不用于实盘交易。"
@@ -543,70 +534,12 @@ class WebAgentApplicationService:
                 "metadata": {**metadata, "last_run_id": run_id, "last_task_id": task_id},
             }
         )
-        if str(answer or "").strip():
-            # 只要本轮产生了可见回答就沉淀轮次摘要。父 Run 即使部分失败，
-            # 其中已成功并落成 Artifact 的 BusinessData 仍可在后续 Need 级复用。
-            try:
-                self._record_turn_summary(
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    run_id=run_id,
-                    answer=answer,
-                )
-            except Exception:
-                pass
         return {
             **self._message(dict(row or {})),
             "run_id": run_id,
             "task_id": task_id,
             "result_summary": summary,
         }
-
-    def _record_turn_summary(
-        self,
-        *,
-        user_id: str,
-        conversation_id: str,
-        run_id: str,
-        answer: str,
-    ) -> None:
-        # 汇总本轮沉淀所需材料并写入轮次摘要：
-        # 用户提问取最近一条 user 消息；artifact 引用按 run_id 从共享存储回收
-        user_message = ""
-        recent = self.agent.list_recent_messages(conversation_id, user_id, limit=20)
-        for message in reversed(list(recent or [])):
-            if str(message.get("role") or "") == "user":
-                user_message = str(message.get("content") or "")
-                break
-        artifact_refs: list[dict[str, Any]] = []
-        if run_id:
-            rows = ArtifactStore(db_path=self.db_path).list_readable(
-                user_id=user_id,
-                run_id=str(run_id),
-                artifact_type="tool_result",
-                limit=50,
-            )
-            for artifact_row in rows:
-                # 只保留数据级保护所需的最小字段集
-                artifact_refs.append(
-                    {
-                        "artifact_id": str(artifact_row.get("artifact_id") or ""),
-                        "producer_id": str(artifact_row.get("producer_id") or ""),
-                        "produced_outputs": list(artifact_row.get("produced_outputs") or []),
-                        "trade_date": str(artifact_row.get("trade_date") or ""),
-                        "content_hash": str(artifact_row.get("content_hash") or ""),
-                        "expires_at": str(artifact_row.get("expires_at") or ""),
-                    }
-                )
-        record_turn_summary(
-            self.db_path,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            run_id=str(run_id or ""),
-            user_message=user_message,
-            assistant_answer=answer,
-            artifact_refs=artifact_refs,
-        )
 
     def _require_run(self, user_id: str, run_id: str) -> dict[str, Any]:
         user_id = self._user_id(user_id)
@@ -688,76 +621,6 @@ class WebAgentApplicationService:
             },
         }
 
-    def trace_summary(self, user_id: str, run_id: str) -> dict[str, Any]:
-        self._require_run(user_id, run_id)
-        messages, trace = self.agent.build_message_trace_summary(
-            run_id=run_id,
-            user_id=self._user_id(user_id),
-            output_dir=self.output_dir,
-        )
-        trace_payload = trace.to_dict() if hasattr(trace, "to_dict") else trace
-        return {
-            "run_id": run_id,
-            "message_count": len(messages),
-            "trace": _safe_value(trace_payload, max_chars=500),
-            "messages": [
-                _safe_value(message.to_dict() if hasattr(message, "to_dict") else message, max_chars=350)
-                for message in messages[:100]
-            ],
-        }
-
-    def reflection_summary(self, user_id: str, run_id: str) -> dict[str, Any]:
-        self._require_run(user_id, run_id)
-        return _safe_value(
-            build_reflection_safe_summary(
-                {},
-                user_id=self._user_id(user_id),
-                output_dir=self.output_dir,
-                run_id=run_id,
-            ),
-            max_chars=600,
-        )
-
-    def handoff_summary(self, user_id: str, run_id: str) -> dict[str, Any]:
-        self._require_run(user_id, run_id)
-        return _safe_value(
-            build_handoff_safe_summary(
-                {},
-                user_id=self._user_id(user_id),
-                output_dir=self.output_dir,
-                run_id=run_id,
-            ),
-            max_chars=600,
-        )
-
-    def react_summary(self, user_id: str, run_id: str) -> dict[str, Any]:
-        self._require_run(user_id, run_id)
-        summary = build_react_safe_summary(
-            user_id=self._user_id(user_id),
-            output_dir=self.output_dir,
-            run_id=run_id,
-        )
-        observations = list_safe_observation_summaries(
-            user_id=self._user_id(user_id),
-            output_dir=self.output_dir,
-            run_id=run_id,
-            limit=20,
-            offset=0,
-        )
-        return {
-            "summary": _safe_value(summary, max_chars=600),
-            "observations": _safe_value(observations, max_chars=500),
-        }
-
-    def memory_summary(self, user_id: str, run_id: str) -> dict[str, Any]:
-        self._require_run(user_id, run_id)
-        summary = build_memory_safe_summary(
-            user_id=self._user_id(user_id),
-            output_dir=self.output_dir,
-        )
-        return _safe_value(summary, max_chars=600)
-
-    @staticmethod
     def _confirmation_phrase(plan_id: str) -> str:
         suffix = str(plan_id or "")[-6:].upper()
         return f"CONFIRM-{suffix}" if suffix else "CONFIRM"

@@ -24,7 +24,7 @@ from factor_provider import latest_alpha158
 from database.connection import get_connection
 from database.repositories import SystemMonitorRepository
 from database.schemas import json_loads
-from agent.runtime_reliability import collect_runtime_health_summary
+from agent_graph.runtime.health import collect_runtime_health_summary
 from portfolio.storage import PortfolioStorage
 from rag.dense_retriever import DEFAULT_DENSE_MODEL, DENSE_INDEX_SCHEMA_VERSION
 

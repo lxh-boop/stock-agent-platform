@@ -145,7 +145,7 @@ def _check_llm() -> dict[str, Any]:
 
 
 def _check_neo4j(*, deep: bool) -> dict[str, Any]:
-    from agent.graph.settings import Neo4jSettings
+    from agent_graph.financial_graph.settings import Neo4jSettings
 
     settings = Neo4jSettings.from_env()
     settings.validate()
@@ -155,7 +155,7 @@ def _check_neo4j(*, deep: bool) -> dict[str, Any]:
         "encrypted": settings.encrypted,
     }
     if deep:
-        from agent.graph.store import Neo4jFinancialGraphStore
+        from agent_graph.financial_graph.store import Neo4jFinancialGraphStore
 
         store = Neo4jFinancialGraphStore(settings)
         try:

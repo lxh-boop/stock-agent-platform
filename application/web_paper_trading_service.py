@@ -768,7 +768,7 @@ class WebPaperTradingApplicationService:
 
     def proposals(self, user_id: str) -> list[dict[str, Any]]:
         user_id = self._user_id(user_id)
-        from agent.session.pending_action_store import load_pending_actions
+        from agent_graph.session.pending_action_store import load_pending_actions
 
         actions = load_pending_actions(user_id, self.output_dir)
         allowed_intents = {"capital_change", "paper_backfill"}
@@ -798,8 +798,8 @@ class WebPaperTradingApplicationService:
             raise ValueError("invalid_flow_type")
         if float(amount or 0) <= 0:
             raise ValueError("amount_must_be_positive")
-        from agent.session.pending_action_store import get_pending_plan
-        from agent.tool_engine import AGENT_MAIN, execute_tool
+        from agent_graph.session.pending_action_store import get_pending_plan
+        from agent_graph.domain_tools.dispatch import AGENT_MAIN, execute_tool
 
         result = execute_tool(
             "capital.change.preview",
@@ -843,8 +843,8 @@ class WebPaperTradingApplicationService:
         user_id = self._user_id(user_id)
         profile = self.profile(user_id)["profile"]
         capital = float(initial_cash or profile.get("available_capital") or DEFAULT_INITIAL_CASH)
-        from agent.session.pending_action_store import get_pending_plan
-        from agent.tool_engine import AGENT_MAIN, execute_tool
+        from agent_graph.session.pending_action_store import get_pending_plan
+        from agent_graph.domain_tools.dispatch import AGENT_MAIN, execute_tool
 
         result = execute_tool(
             "backfill.preview",
@@ -890,7 +890,7 @@ class WebPaperTradingApplicationService:
         if not str(request_id or "").strip() or not str(idempotency_key or "").strip():
             raise ValueError("request_id_and_idempotency_key_required")
         user_id = self._user_id(user_id)
-        from agent.session.pending_action_store import get_pending_plan
+        from agent_graph.session.pending_action_store import get_pending_plan
 
         plan = get_pending_plan(user_id, str(plan_id), self.output_dir)
         if not plan:
@@ -903,7 +903,7 @@ class WebPaperTradingApplicationService:
         token = str(plan.get("confirmation_token") or "")
         if not token:
             raise ValueError("confirmation_token_missing_on_server")
-        from agent.write_gateway import execute_confirmed_plan_v2
+        from agent_graph.writes import execute_confirmed_plan_v2
 
         result = execute_confirmed_plan_v2(
             plan_id=str(plan_id),
@@ -934,7 +934,7 @@ class WebPaperTradingApplicationService:
         if not str(request_id or "").strip() or not str(idempotency_key or "").strip():
             raise ValueError("request_id_and_idempotency_key_required")
         user_id = self._user_id(user_id)
-        from agent.session.confirmation_manager import reject_confirmation_plan
+        from agent_graph.session.confirmation_manager import reject_confirmation_plan
 
         success, status, plan = reject_confirmation_plan(
             user_id,

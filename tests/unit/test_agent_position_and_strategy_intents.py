@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from agent.session.pending_action_store import get_pending_plan
-from agent.tools.manual_position_operation_tool import preview_manual_position_operation
-from agent.tools.strategy_builder_tool import prepare_strategy_change
-from agent.tools.strategy_management_tool import execute_confirmed_strategy_plan
+from agent_graph.session.pending_action_store import get_pending_plan
+from agent_graph.domain_tools.manual_position_operation_tool import preview_manual_position_operation
+from agent_graph.domain_tools.strategy_builder_tool import prepare_strategy_change
+from agent_graph.domain_tools.strategy_management_tool import execute_confirmed_strategy_plan
 from agent_control_center_utils import write_agent_fixture
 from strategies.registry import get_strategy_registry
 from strategies.security import scan_strategy_source

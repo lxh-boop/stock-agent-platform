@@ -144,31 +144,6 @@ def run_detail(run_id: str, user: AuthUser = Depends(require_user)) -> Operation
     return _call(lambda: web_agent_service.run_detail(user.user_id, run_id))
 
 
-@router.get("/runs/{run_id}/trace", response_model=OperationResponse)
-def run_trace(run_id: str, user: AuthUser = Depends(require_user)) -> OperationResponse:
-    return _call(lambda: web_agent_service.trace_summary(user.user_id, run_id))
-
-
-@router.get("/runs/{run_id}/reflection", response_model=OperationResponse)
-def run_reflection(run_id: str, user: AuthUser = Depends(require_user)) -> OperationResponse:
-    return _call(lambda: web_agent_service.reflection_summary(user.user_id, run_id))
-
-
-@router.get("/runs/{run_id}/handoff", response_model=OperationResponse)
-def run_handoff(run_id: str, user: AuthUser = Depends(require_user)) -> OperationResponse:
-    return _call(lambda: web_agent_service.handoff_summary(user.user_id, run_id))
-
-
-@router.get("/runs/{run_id}/react", response_model=OperationResponse)
-def run_react(run_id: str, user: AuthUser = Depends(require_user)) -> OperationResponse:
-    return _call(lambda: web_agent_service.react_summary(user.user_id, run_id))
-
-
-@router.get("/runs/{run_id}/memory", response_model=OperationResponse)
-def run_memory(run_id: str, user: AuthUser = Depends(require_user)) -> OperationResponse:
-    return _call(lambda: web_agent_service.memory_summary(user.user_id, run_id))
-
-
 @router.get("/pending-actions", response_model=OperationResponse)
 def pending_actions(
     user: AuthUser = Depends(require_user),

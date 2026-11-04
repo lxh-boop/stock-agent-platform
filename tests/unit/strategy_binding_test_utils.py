@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from agent.services.strategy_binding_service import StrategyBindingService
+from agent_graph.services.strategy_binding_service import StrategyBindingService
 from strategy_apply_test_utils import apply_plan, apply_service
 
 

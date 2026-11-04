@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.tools.capital_management_tool import execute_confirmed_capital_plan, preview_capital_change
+from agent_graph.domain_tools.capital_management_tool import execute_confirmed_capital_plan, preview_capital_change
 from portfolio.cash_flow import list_cash_flows
 from agent_control_center_utils import write_agent_fixture
 

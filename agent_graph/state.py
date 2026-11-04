@@ -16,7 +16,7 @@ class WorkerTask(TypedDict):
     """One unit of work the supervisor assigns to a specialist worker."""
 
     task_id: str
-    worker_id: str  # W01..W09 card id from agent.collaboration.worker_directory
+    worker_id: str  # W01..W09 card id from agent_graph.workers.cards
     objective: str
     request_index: int  # 1-based index into the decomposed request bundle
     attempt: int  # 0 on first dispatch, incremented on re-dispatch

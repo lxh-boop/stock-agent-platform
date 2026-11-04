@@ -98,14 +98,3 @@ export interface AgentStrategyProposal {
   versions: Array<Record<string, unknown>>
 }
 
-export interface AgentDiagnostics {
-  run?: Record<string, unknown>
-  trace?: Record<string, unknown>
-  messages?: Array<Record<string, unknown>>
-  message_count?: number
-  reflection_available?: boolean
-  handoff_available?: boolean
-  summary?: Record<string, unknown> | string
-  observations?: Array<Record<string, unknown>>
-  [key: string]: unknown
-}

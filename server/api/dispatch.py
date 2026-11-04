@@ -111,16 +111,7 @@ DASHBOARD_CONSTANTS = {
 }
 
 AGENT_UTILITY_FUNCTIONS = {
-    "build_handoff_safe_summary",
-    "build_memory_safe_summary",
-    "build_react_safe_summary",
-    "build_reflection_safe_summary",
-    "format_handoff_caption",
-    "format_reflection_caption",
-    "list_memory_records_safe_page",
-    "list_safe_observation_summaries",
     "load_run_snapshot",
-    "summarize_mcp_usage",
 }
 
 AGENT_CONSTANTS = {"PAPER_AGENT_DISCLAIMER"}
@@ -136,12 +127,9 @@ AGENT_SERVICE_METHODS = {
     "upsert_message",
     "list_agent_runs_by_ids",
     "run",
-    "list_registered_tools",
-    "list_pending_actions",
     "query_portfolio",
     "query_scheduler",
     "control_action",
-    "build_message_trace_summary",
 }
 
 STRATEGY_PROPOSAL_METHODS = {

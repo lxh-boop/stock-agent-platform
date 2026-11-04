@@ -271,7 +271,7 @@ export function AgentPage() {
   return <Space direction="vertical" size="large" style={{ width: '100%' }} data-testid="agent-page">
     <PageHeader
       title="AI Agent"
-      description="会话、任务、SSE、Trace、Handoff、Reflection、Critic 和 Replan 均通过 FastAPI；不连接真实交易。"
+      description="会话、任务、SSE 与审批均通过 FastAPI；不连接真实交易。"
     />
     <Alert
       type="info"

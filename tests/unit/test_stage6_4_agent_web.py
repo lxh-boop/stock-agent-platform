@@ -10,12 +10,12 @@ from server.api.main import create_app
 def test_stage6_4_agent_routes_are_registered() -> None:
     paths = create_app().openapi()["paths"]
     agent_paths = {path: methods for path, methods in paths.items() if path.startswith("/api/v1/web/agent")}
-    assert len(agent_paths) >= 14
+    assert len(agent_paths) >= 9
     assert "post" in agent_paths["/api/v1/web/agent/sessions"]
     assert "patch" in agent_paths["/api/v1/web/agent/sessions/{conversation_id}"]
     assert "delete" in agent_paths["/api/v1/web/agent/sessions/{conversation_id}"]
     assert "post" in agent_paths["/api/v1/web/agent/sessions/{conversation_id}/finalize-task"]
-    assert "get" in agent_paths["/api/v1/web/agent/runs/{run_id}/trace"]
+    assert "get" in agent_paths["/api/v1/web/agent/runs/{run_id}"]
     assert "post" in agent_paths["/api/v1/web/agent/pending-actions/{plan_id}/confirm"]
 
 

@@ -80,13 +80,13 @@ def test_proposal_summary_never_exposes_confirmation_secret() -> None:
 
 
 def test_backfill_commit_is_rejected_outside_task_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = types.ModuleType("agent.session.pending_action_store")
+    module = types.ModuleType("agent_graph.session.pending_action_store")
     module.get_pending_plan = lambda *args, **kwargs: {
         "plan_id": "plan-backfill-123456",
         "intent": "paper_backfill",
         "confirmation_token": "server-only",
     }
-    monkeypatch.setitem(sys.modules, "agent.session.pending_action_store", module)
+    monkeypatch.setitem(sys.modules, "agent_graph.session.pending_action_store", module)
     service = WebPaperTradingApplicationService(output_dir="outputs", db_path=None)
     with pytest.raises(ValueError, match="paper_backfill_requires_task_runtime"):
         service.commit_proposal(

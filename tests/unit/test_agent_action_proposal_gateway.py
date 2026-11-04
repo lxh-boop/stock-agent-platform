@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent.session.confirmation_manager import create_confirmation_plan, validate_confirmation
-from agent.session.pending_action_store import update_pending_plan
+from agent_graph.session.confirmation_manager import create_confirmation_plan, validate_confirmation
+from agent_graph.session.pending_action_store import update_pending_plan
 from database.repositories.agent_repository import AgentRepository
 
 

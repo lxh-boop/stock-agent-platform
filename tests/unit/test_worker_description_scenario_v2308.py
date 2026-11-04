@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.collaboration.worker_directory import CapabilityWorkerDirectory
+from agent_graph.workers.cards import CapabilityWorkerDirectory
 
 
 def test_w04_public_description_declares_slot_driven_target_asset_scenario_requirements() -> None:

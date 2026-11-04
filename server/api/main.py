@@ -37,7 +37,6 @@ from server.api.routers.web_settings import router as web_settings_router
 from server.api.routers.web_monitor import router as web_monitor_router
 from server.api.routers.web_paper_trading import router as web_paper_trading_router
 from server.api.routers.web_agent import router as web_agent_router
-from server.api.routers.web_skills import router as web_skills_router
 from scheduler.runtime_scheduler import shutdown_runtime_scheduler, start_runtime_scheduler
 
 
@@ -143,7 +142,6 @@ def create_app() -> FastAPI:
     app.include_router(web_monitor_router, dependencies=authenticated)
     app.include_router(web_paper_trading_router, dependencies=authenticated)
     app.include_router(web_agent_router, dependencies=authenticated)
-    app.include_router(web_skills_router, dependencies=authenticated)
     app.include_router(web_auth_router)
     return app
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from agent.graph.providers.portfolio import PortfolioGraphProvider
-from agent.services.portfolio_service import PortfolioService
+from agent_graph.financial_graph.providers.portfolio import PortfolioGraphProvider
+from agent_graph.services.portfolio_service import PortfolioService
 from portfolio.paper_account import account_from_dict
 from portfolio.storage import PortfolioStorage
 
@@ -28,7 +28,7 @@ def test_portfolio_provider_does_not_treat_missing_success_key_as_failure(tmp_pa
     )
     provider = PortfolioGraphProvider(portfolio_graph=graph)
     monkeypatch.setattr(
-        "agent.services.portfolio_service.PortfolioService.get_portfolio_state",
+        "agent_graph.services.portfolio_service.PortfolioService.get_portfolio_state",
         lambda self, **kwargs: {
             "found": True,
             "account": {"account_id": "paper_u1"},

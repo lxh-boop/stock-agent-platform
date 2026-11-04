@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.tools.strategy_workflow_tools import prepare_strategy_implementation
+from agent_graph.domain_tools.strategy_workflow_tools import prepare_strategy_implementation
 from strategy_workflow_test_utils import (
     database_path,
     prepare_proposal,

@@ -126,7 +126,7 @@ def load_classic_ranking_with_ai_adjustment(
     recommendations_path=None,
     sort_by="original_rank",
     db_path=None):
-    from agent.services.market_analysis_service import market_analysis_service
+    from agent_graph.services.market_analysis_service import market_analysis_service
 
     result = market_analysis_service.get_signal_summary(
         output_dir=output_dir,

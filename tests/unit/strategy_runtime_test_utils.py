@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agent.services.strategy_config_compiler import StrategyConfigCompiler
+from agent_graph.services.strategy_config_compiler import StrategyConfigCompiler
 from database.connection import initialize_database
 from portfolio.paper_account import create_default_account
 from portfolio.paper_position import create_position

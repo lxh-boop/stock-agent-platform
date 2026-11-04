@@ -125,17 +125,6 @@ def test_decision_from_resume():
     assert decision_from_resume(None) == "invalid"
 
 
-def test_resolve_agent_engine_env_switch(monkeypatch):
-    from agent_graph.service import resolve_agent_engine
-
-    monkeypatch.delenv("STOCK_AGENT_ENGINE", raising=False)
-    assert resolve_agent_engine() == "legacy"
-    monkeypatch.setenv("STOCK_AGENT_ENGINE", "langgraph")
-    assert resolve_agent_engine() == "langgraph"
-    monkeypatch.setenv("STOCK_AGENT_ENGINE", "bogus")
-    assert resolve_agent_engine() == "legacy"
-
-
 # --------------------------------------------------------------------------
 # graph flow
 # --------------------------------------------------------------------------
@@ -190,7 +179,7 @@ def test_write_request_interrupts_and_resume_rejects(graph_module, monkeypatch):
 
 
 def _approval_tool_definition():
-    from agent.tool_runtime.contracts import OP_WRITE, ToolDefinition
+    from agent_graph.toolbox.contracts import OP_WRITE, ToolDefinition
 
     def handler(arguments, context):
         return {"success": True, "message": "已写入", "data": {"written": True}}

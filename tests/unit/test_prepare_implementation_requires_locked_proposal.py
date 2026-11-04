@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.services.strategy_implementation_service import (
+from agent_graph.services.strategy_implementation_service import (
     StrategyImplementationService,
 )
 from strategy_workflow_test_utils import database_path, save_draft

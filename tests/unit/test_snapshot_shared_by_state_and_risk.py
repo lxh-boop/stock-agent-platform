@@ -1,5 +1,5 @@
-from agent.services.portfolio_risk_service import portfolio_risk_service
-from agent.services.portfolio_service import portfolio_service
+from agent_graph.services.portfolio_risk_service import portfolio_risk_service
+from agent_graph.services.portfolio_service import portfolio_service
 from portfolio.paper_account import account_from_dict
 from portfolio.paper_position import create_position
 from portfolio.storage import PortfolioStorage

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.services.strategy_context_service import StrategyContextService
+from agent_graph.services.strategy_context_service import StrategyContextService
 from database.repositories import AgentRepository
 from portfolio.paper_account import create_default_account
 from portfolio.paper_position import create_position

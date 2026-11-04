@@ -25,32 +25,6 @@ export function AgentRunPanel({ userId, runId }: { userId: string; runId: string
     queryFn: () => agentApi.run(userId, runId),
     enabled: Boolean(runId),
   })
-  const trace = useQuery({
-    queryKey: ['web', 'agent', 'trace', userId, runId],
-    queryFn: () => agentApi.trace(userId, runId),
-    enabled: Boolean(runId),
-  })
-  const reflection = useQuery({
-    queryKey: ['web', 'agent', 'reflection', userId, runId],
-    queryFn: () => agentApi.reflection(userId, runId),
-    enabled: Boolean(runId),
-  })
-  const handoff = useQuery({
-    queryKey: ['web', 'agent', 'handoff', userId, runId],
-    queryFn: () => agentApi.handoff(userId, runId),
-    enabled: Boolean(runId),
-  })
-  const react = useQuery({
-    queryKey: ['web', 'agent', 'react', userId, runId],
-    queryFn: () => agentApi.react(userId, runId),
-    enabled: Boolean(runId),
-  })
-  const memory = useQuery({
-    queryKey: ['web', 'agent', 'memory', userId, runId],
-    queryFn: () => agentApi.memory(userId, runId),
-    enabled: Boolean(runId),
-  })
-
   if (!runId) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择一条包含 run_id 的回答查看运行详情" />
   if (run.isLoading) return <Spin />
 
@@ -155,11 +129,6 @@ export function AgentRunPanel({ userId, runId }: { userId: string; runId: string
             </List.Item>}
           />,
         },
-        { key: 'trace', label: 'Message Trace', children: trace.isLoading ? <Spin /> : <JsonBlock value={trace.data ?? trace.error} /> },
-        { key: 'reflection', label: 'Reflection / Critic', children: reflection.isLoading ? <Spin /> : <JsonBlock value={reflection.data ?? reflection.error} /> },
-        { key: 'handoff', label: 'Handoff', children: handoff.isLoading ? <Spin /> : <JsonBlock value={handoff.data ?? handoff.error} /> },
-        { key: 'react', label: 'ReAct / Replan', children: react.isLoading ? <Spin /> : <JsonBlock value={react.data ?? react.error} /> },
-        { key: 'memory', label: 'Memory 安全摘要', children: memory.isLoading ? <Spin /> : <JsonBlock value={memory.data ?? memory.error} /> },
       ]}
     />
   </Space>

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from agent.services.strategy_position_service import StrategyPositionService
+from agent_graph.services.strategy_position_service import StrategyPositionService
 from database.connection import initialize_database
 from portfolio.paper_account import create_default_account
 from portfolio.paper_position import create_position

@@ -1,39 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-from agent.collaboration import execute_control_action
-from agent.communication import MessageStore
-from agent.console_trace import trace_event, trace_exception
-from agent.executor import run_agent_request
-from agent.mcp.registry_bridge import summarize_mcp_usage
-from agent.memory.memory_context_bridge import (
-    build_memory_safe_summary,
-    list_memory_records_safe_page,
-)
-from agent.react.react_context_bridge import (
-    build_react_safe_summary,
-    list_safe_observation_summaries,
-)
-from agent.runtime import load_run_snapshot
-from agent.services.strategy_proposal_service import StrategyProposalService
-from agent.tools.portfolio_state_tool import query_portfolio_state
-from agent.tools.scheduler_tool import query_scheduler_status
-from agent.tools.tool_registry import list_tools
-from agent.tools.tool_schemas import PAPER_AGENT_DISCLAIMER
-from application.handoff_service import build_handoff_safe_summary, format_handoff_caption
-from application.reflection_service import build_reflection_safe_summary, format_reflection_caption
+from agent_graph.runtime.recorder import load_run_snapshot
+from agent_graph.services.strategy_proposal_service import StrategyProposalService
+from agent_graph.domain_tools.portfolio_state_tool import query_portfolio_state
+from agent_graph.domain_tools.scheduler_tool import query_scheduler_status
+from agent_graph.domain_tools.tool_schemas import PAPER_AGENT_DISCLAIMER
+from agent_graph.trace import trace_event, trace_exception
+from agent_graph.writes import execute_control_action
 from core.llm.runtime_settings import LLMRuntimeSettings
 from database.repositories.agent_repository import AgentRepository
 
 
 @dataclass(slots=True)
 class AgentApplicationService:
-    """Single application boundary for the Streamlit Agent page.
+    """Single application boundary over the LangGraph agent engine.
 
-    Repository objects and Agent runtime modules do not escape this class.
+    Repository objects and engine internals do not escape this class.
     """
 
     db_path: str | None = None
@@ -156,21 +141,9 @@ class AgentApplicationService:
         session_id: str,
         llm_settings: LLMRuntimeSettings | None,
     ) -> dict[str, Any]:
-        from agent_graph.service import resolve_agent_engine
+        from agent_graph.service import run_langgraph_agent_request
 
-        if resolve_agent_engine() == "langgraph":
-            from agent_graph.service import run_langgraph_agent_request
-
-            return run_langgraph_agent_request(
-                str(query),
-                user_id=str(user_id),
-                output_dir=str(output_dir),
-                db_path=self.db_path,
-                top_k=int(top_k),
-                session_id=str(session_id),
-                llm_settings=llm_settings,
-            )
-        return run_agent_request(
+        return run_langgraph_agent_request(
             str(query),
             user_id=str(user_id),
             output_dir=str(output_dir),
@@ -179,9 +152,6 @@ class AgentApplicationService:
             session_id=str(session_id),
             llm_settings=llm_settings,
         )
-
-    def list_registered_tools(self) -> list[Any]:
-        return list(list_tools() or [])
 
     def query_portfolio(self, user_id: str, *, output_dir: str, db_path: str | None = None) -> dict[str, Any]:
         return query_portfolio_state(
@@ -196,34 +166,14 @@ class AgentApplicationService:
     def control_action(self, **kwargs: Any) -> dict[str, Any]:
         return dict(execute_control_action(**kwargs) or {})
 
-    def build_message_trace_summary(
-        self,
-        *,
-        run_id: str,
-        user_id: str,
-        output_dir: str | Path,
-    ) -> tuple[list[Any], Any]:
-        store = MessageStore(output_dir=output_dir)
-        messages = store.list_messages_by_run(str(run_id), user_id=str(user_id))
-        trace = store.build_trace(str(run_id), user_id=str(user_id))
-        return list(messages or []), trace
-
 
 __all__ = [
     "AgentApplicationService",
     "LLMRuntimeSettings",
     "PAPER_AGENT_DISCLAIMER",
     "StrategyProposalService",
-    "build_handoff_safe_summary",
-    "build_memory_safe_summary",
-    "build_react_safe_summary",
-    "build_reflection_safe_summary",
-    "format_handoff_caption",
-    "format_reflection_caption",
-    "list_memory_records_safe_page",
-    "list_safe_observation_summaries",
+    "execute_control_action",
     "load_run_snapshot",
-    "summarize_mcp_usage",
     "trace_event",
     "trace_exception",
 ]

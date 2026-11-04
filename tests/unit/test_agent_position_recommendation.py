@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.tools.position_recommendation_tool import recommend_position_weight
+from agent_graph.domain_tools.position_recommendation_tool import recommend_position_weight
 from agent_control_center_utils import write_agent_fixture
 
 

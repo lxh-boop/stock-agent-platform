@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent.services.strategy_implementation_service import sha256_file
+from agent_graph.services.strategy_implementation_service import sha256_file
 from strategy_workflow_test_utils import prepare_proposal
 
 

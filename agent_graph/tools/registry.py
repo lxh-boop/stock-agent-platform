@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool
 
-from agent.collaboration.worker_directory import CapabilityWorkerDirectory
-from agent.tool_runtime.registry import ToolRegistry
+from agent_graph.workers.cards import CapabilityWorkerDirectory
+from agent_graph.toolbox.registry import ToolRegistry
 
 from agent_graph.tools.adapter import sanitize_tool_name, wrap_tool_definition
 
