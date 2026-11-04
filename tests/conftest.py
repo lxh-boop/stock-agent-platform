@@ -80,5 +80,3 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.slow)
         if any(token in path_text or token in name for token in ["slow", "timeout", "long_running"]):
             item.add_marker(pytest.mark.slow)
-        if "ragas_eval" in path_text and "optional_dependency" not in path_text:
-            item.add_marker(pytest.mark.external)

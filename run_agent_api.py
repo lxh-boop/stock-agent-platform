@@ -20,7 +20,6 @@ def _reload_directories() -> list[str]:
     """
 
     candidates = (
-        "agent",
         "server",
         "core",
         "application",
@@ -29,7 +28,6 @@ def _reload_directories() -> list[str]:
         "scoring",
         "portfolio",
         "rag",
-        "skills",
     )
     return [
         str(path)

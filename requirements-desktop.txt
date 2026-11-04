@@ -1,3 +1,0 @@
-# Thin Windows launcher for the production React deployment.
-pywebview
-pyinstaller
