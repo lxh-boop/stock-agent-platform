@@ -79,3 +79,8 @@ frontend/node_modules/
 # Local pytest scratch dirs (machine-bound test runs)
 .pytest_tmp*/
 .pytest_tmp2/
+
+# 部署迁移数据与服务器密钥
+deploy/migration/
+deploy/server.env
+runtime_data/
