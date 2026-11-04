@@ -308,7 +308,6 @@ stock_daily_app/
 ├─ database/              # PostgreSQL Repository、Migration 与运行数据导入
 │  ├─ migrations/         # Proposal 与业务运行数据表迁移
 │  └─ repositories/       # 数据库权威访问层
-├─ contracts/stage6/      # 冻结的 HTTP、Task、SSE 和写操作合同
 ├─ scripts/docker/        # 正式启动与端到端验收
 ├─ scripts/migrations/    # 运行数据一次性导入与审计工具
 ├─ scripts/refactor/      # 架构、合同与真实浏览器检查

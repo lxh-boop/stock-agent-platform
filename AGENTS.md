@@ -104,7 +104,6 @@ application/          应用服务与 support helper
 agent_graph/          LangGraph 唯一引擎 + 业务基础子包（图谱/服务/工具/写链路/会话审批）
 portfolio/            模拟盘与组合逻辑
 rag/                  混合检索
-contracts/stage6/     冻结合同
 scripts/docker/       生产启动与验收
 ```
 
