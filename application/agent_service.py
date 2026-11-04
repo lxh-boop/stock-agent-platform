@@ -156,6 +156,20 @@ class AgentApplicationService:
         session_id: str,
         llm_settings: LLMRuntimeSettings | None,
     ) -> dict[str, Any]:
+        from agent_graph.service import resolve_agent_engine
+
+        if resolve_agent_engine() == "langgraph":
+            from agent_graph.service import run_langgraph_agent_request
+
+            return run_langgraph_agent_request(
+                str(query),
+                user_id=str(user_id),
+                output_dir=str(output_dir),
+                db_path=self.db_path,
+                top_k=int(top_k),
+                session_id=str(session_id),
+                llm_settings=llm_settings,
+            )
         return run_agent_request(
             str(query),
             user_id=str(user_id),

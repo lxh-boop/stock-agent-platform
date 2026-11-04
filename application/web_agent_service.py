@@ -824,6 +824,16 @@ class WebAgentApplicationService:
         self._require_session(user_id, conversation_id)
         if not request_id or not idempotency_key:
             raise ValueError("request_id_and_idempotency_key_required")
+        if str(plan_id).startswith("lg_approve_"):
+            return self._resume_langgraph_action(
+                action=action,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                plan_id=str(plan_id),
+                confirmation_text=confirmation_text,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+            )
         store = ProposalStore(output_dir=self.output_dir, db_path=self.db_path)
         proposal = store.get(str(plan_id))
         if proposal is None:
@@ -849,6 +859,44 @@ class WebAgentApplicationService:
         elif action != "reject":
             raise ValueError("invalid_control_action")
         result = self.agent.control_action(action=action, **kwargs)
+        return {
+            "request_id": request_id,
+            "idempotency_key": idempotency_key,
+            "result": _safe_value(result, max_chars=600),
+        }
+
+    def _resume_langgraph_action(
+        self,
+        *,
+        action: str,
+        user_id: str,
+        conversation_id: str,
+        plan_id: str,
+        confirmation_text: str = "",
+        request_id: str = "",
+        idempotency_key: str = "",
+    ) -> dict[str, Any]:
+        """Complete a LangGraph engine run paused at a write-approval interrupt."""
+
+        from agent_graph.service import resume_langgraph_agent, run_id_from_plan_id
+
+        normalized = str(action or "").lower()
+        if normalized == "confirm":
+            if str(confirmation_text or "").strip().upper() != self._confirmation_phrase(plan_id):
+                raise ValueError("confirmation_text_mismatch")
+            decision = "approved"
+        elif normalized == "reject":
+            decision = "rejected"
+        else:
+            raise ValueError("invalid_control_action")
+        result = resume_langgraph_agent(
+            session_id=str(conversation_id),
+            user_id=user_id,
+            run_id=run_id_from_plan_id(plan_id),
+            decision=decision,
+            output_dir=self.output_dir,
+            db_path=self.db_path,
+        )
         return {
             "request_id": request_id,
             "idempotency_key": idempotency_key,
