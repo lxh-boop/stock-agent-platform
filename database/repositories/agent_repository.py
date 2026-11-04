@@ -34,17 +34,8 @@ AGENT_RUNTIME_JSON_FIELDS: dict[str, list[str]] = {
     "action_approvals": ["metadata_json"],
     "action_commits": ["result_summary_json", "metadata_json"],
     "conversation_summaries": ["metadata_json"],
-    "memory_items": [
-        "topics_json",
-        "stock_codes_json",
-        "company_names_json",
-        "industries_json",
-        "metadata_json",
-    ],
-    "memory_links": ["metadata_json"],
     "user_feedback": ["metadata_json"],
     "artifacts": ["metadata_json"],
-    "agent_turn_summaries": ["artifact_refs_json", "metadata_json"],
 }
 
 JSON_ALIASES: dict[str, str] = {
@@ -359,35 +350,11 @@ class AgentRepository:
             filters["conversation_id"] = conversation_id
         return self._list_runtime("conversation_summaries", filters=filters, order_by="updated_at", limit=limit)
 
-    def upsert_memory_item(self, record: dict[str, Any]) -> dict[str, Any]:
-        return self._upsert_runtime("memory_items", record)
 
-    def get_memory_item(self, memory_id: str) -> dict[str, Any] | None:
-        return self._decode_runtime_record(
-            "memory_items",
-            self.store.get("memory_items", {"memory_id": memory_id}),
-        )
 
-    def update_memory_item(self, memory_id: str, changes: dict[str, Any]) -> int:
-        return self.store.update("memory_items", {"memory_id": memory_id}, self._encode_runtime_record("memory_items", changes))
 
-    def list_memory_items(
-        self,
-        user_id: str,
-        memory_type: str | None = None,
-        status: str = "active",
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        filters = {"user_id": user_id, "status": status}
-        if memory_type:
-            filters["memory_type"] = memory_type
-        return self._list_runtime("memory_items", filters=filters, order_by="updated_at", limit=limit)
 
-    def upsert_memory_link(self, record: dict[str, Any]) -> dict[str, Any]:
-        return self._upsert_runtime("memory_links", record)
 
-    def list_memory_links(self, memory_id: str) -> list[dict[str, Any]]:
-        return self._list_runtime("memory_links", filters={"memory_id": memory_id}, order_by="created_at")
 
     def upsert_user_feedback(self, record: dict[str, Any]) -> dict[str, Any]:
         return self._upsert_runtime("user_feedback", record)
@@ -406,9 +373,6 @@ class AgentRepository:
     def upsert_artifact(self, record: dict[str, Any]) -> dict[str, Any]:
         return self._upsert_runtime("artifacts", record)
 
-    def upsert_turn_summary(self, record: dict[str, Any]) -> dict[str, Any]:
-        # 写入/更新轮次摘要条目（ConversationInventory 数据源）
-        return self._upsert_runtime("agent_turn_summaries", record)
 
     def get_turn_summary(self, turn_id: str) -> dict[str, Any] | None:
         # 按轮次编号读取单条摘要
@@ -417,21 +381,6 @@ class AgentRepository:
             self.store.get("agent_turn_summaries", {"turn_id": str(turn_id or "")}),
         )
 
-    def list_turn_summaries(
-        self,
-        user_id: str,
-        limit: int = 50,
-        *,
-        descending: bool = True,
-    ) -> list[dict[str, Any]]:
-        # 按用户列出轮次摘要（默认按生成时间倒序，新的在前）
-        return self._list_runtime(
-            "agent_turn_summaries",
-            filters={"user_id": str(user_id or "")},
-            order_by="created_at",
-            descending=descending,
-            limit=limit,
-        )
 
     @staticmethod
     def _decode_decision_row(row: dict[str, Any]) -> dict[str, Any]:

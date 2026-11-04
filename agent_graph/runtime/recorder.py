@@ -626,41 +626,6 @@ def load_run_snapshot(db_path: str | Path | None, run_id: str) -> dict[str, Any]
         commits.extend(repo._list_runtime("action_commits", filters={"plan_id": plan_id}, order_by="created_at"))
 
     metadata = run.get("metadata_json") if isinstance(run.get("metadata_json"), dict) else {}
-    memory_refs: list[dict[str, Any]] = []
-    memory_ids: set[str] = set()
-    memory_used = metadata.get("memory_used") if isinstance(metadata, dict) else {}
-    if isinstance(memory_used, dict):
-        for phase, rows in memory_used.items():
-            if not isinstance(rows, list):
-                continue
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                memory_id = str(row.get("memory_id") or "")
-                if not memory_id or memory_id in memory_ids:
-                    continue
-                memory_ids.add(memory_id)
-                memory_refs.append({"phase": phase, **sanitize_payload(row, max_chars=300)})
-    memories: list[dict[str, Any]] = []
-    for memory_id in sorted(memory_ids):
-        memory = repo.get_memory_item(memory_id)
-        if memory:
-            memories.append(
-                sanitize_payload(
-                    {
-                        "memory_id": memory.get("memory_id"),
-                        "memory_type": memory.get("memory_type"),
-                        "content": str(memory.get("content") or "")[:300],
-                        "importance": memory.get("importance"),
-                        "status": memory.get("status"),
-                        "source_type": memory.get("source_type"),
-                        "source_id": memory.get("source_id"),
-                        "metadata": memory.get("metadata_json") or {},
-                    },
-                    max_chars=500,
-                )
-            )
-
     decision_replay = {
         "run": {
             "run_id": run.get("run_id"),
@@ -668,8 +633,6 @@ def load_run_snapshot(db_path: str | Path | None, run_id: str) -> dict[str, Any]
             "status": run.get("status"),
             "status_transitions": (metadata or {}).get("status_transitions", []),
         },
-        "used_memories": memory_refs,
-        "memory_records": memories,
         "agent_handoffs": [
             {
                 "step_id": row.get("step_id"),
@@ -711,32 +674,3 @@ def load_run_snapshot(db_path: str | Path | None, run_id: str) -> dict[str, Any]
         "decision_replay": decision_replay,
     }
 
-
-def compare_run_decisions(
-    db_path: str | Path | None,
-    left_run_id: str,
-    right_run_id: str,
-) -> dict[str, Any]:
-    left = load_run_snapshot(db_path, left_run_id).get("decision_replay") or {}
-    right = load_run_snapshot(db_path, right_run_id).get("decision_replay") or {}
-
-    def ids(rows: list[dict[str, Any]], key: str) -> set[str]:
-        return {str(row.get(key) or "") for row in rows if row.get(key)}
-
-    left_memories = ids(left.get("used_memories") or [], "memory_id")
-    right_memories = ids(right.get("used_memories") or [], "memory_id")
-    left_plans = ids(left.get("proposals") or [], "plan_id")
-    right_plans = ids(right.get("proposals") or [], "plan_id")
-    return {
-        "left_run_id": left_run_id,
-        "right_run_id": right_run_id,
-        "left_status": (left.get("run") or {}).get("status"),
-        "right_status": (right.get("run") or {}).get("status"),
-        "differences": {
-            "memory_only_left": sorted(left_memories - right_memories),
-            "memory_only_right": sorted(right_memories - left_memories),
-            "proposal_only_left": sorted(left_plans - right_plans),
-            "proposal_only_right": sorted(right_plans - left_plans),
-            "status_changed": (left.get("run") or {}).get("status") != (right.get("run") or {}).get("status"),
-        },
-    }

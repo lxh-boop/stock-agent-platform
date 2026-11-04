@@ -26,44 +26,6 @@ _RUNTIME_DDL = [
         data_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, sequence)",
-    """CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
-        run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, user_id TEXT NOT NULL,
-        status TEXT NOT NULL, checkpoint_json TEXT NOT NULL, version BIGINT NOT NULL,
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_agent_run_checkpoints_session_status ON agent_run_checkpoints(session_id, status)",
-    """CREATE TABLE IF NOT EXISTS agent_request_checkpoints (
-        run_id TEXT NOT NULL, request_id TEXT NOT NULL, status TEXT NOT NULL,
-        checkpoint_json TEXT NOT NULL, updated_at TEXT NOT NULL,
-        PRIMARY KEY(run_id, request_id)
-    )""",
-    """CREATE TABLE IF NOT EXISTS agent_session_state_items (
-        memory_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, memory_key TEXT NOT NULL,
-        value_json TEXT NOT NULL, value_type TEXT NOT NULL DEFAULT 'json', summary TEXT NOT NULL DEFAULT '',
-        source_type TEXT NOT NULL DEFAULT '', source_ref TEXT NOT NULL DEFAULT '', confirmed BIGINT NOT NULL DEFAULT 0,
-        confidence DOUBLE PRECISION NOT NULL DEFAULT 0.8, version BIGINT NOT NULL DEFAULT 1,
-        status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL, UNIQUE(session_id, memory_key, version)
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_agent_session_state_lookup ON agent_session_state_items(session_id, memory_key, status, version DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_agent_session_state_expiry ON agent_session_state_items(expires_at, status)",
-    """CREATE TABLE IF NOT EXISTS agent_session_state_access_log (
-        access_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '',
-        task_id TEXT NOT NULL DEFAULT '', agent_id TEXT NOT NULL DEFAULT '', operation TEXT NOT NULL,
-        query_text TEXT NOT NULL DEFAULT '', matched_keys_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_agent_session_state_access_task ON agent_session_state_access_log(session_id, run_id, task_id, created_at)",
-    """CREATE TABLE IF NOT EXISTS memory_records (
-        memory_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, conversation_id TEXT, run_id TEXT,
-        task_id TEXT, source_type TEXT, source_id TEXT, memory_type TEXT NOT NULL,
-        memory_subtype TEXT, scope TEXT, visibility TEXT, status TEXT, content TEXT, summary TEXT,
-        topics_json TEXT, stock_codes_json TEXT, importance DOUBLE PRECISION, confidence DOUBLE PRECISION,
-        created_at TEXT, updated_at TEXT, valid_from TEXT, valid_until TEXT, supersedes_memory_id TEXT,
-        metadata_json TEXT, context_refs_json TEXT, message_refs_json TEXT, artifact_refs_json TEXT,
-        approval_refs_json TEXT, source_refs_json TEXT
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_memory_records_user_type_status ON memory_records(user_id, memory_type, status, updated_at)",
-    "CREATE INDEX IF NOT EXISTS idx_memory_records_source ON memory_records(source_type, source_id)",
 ]
 
 
