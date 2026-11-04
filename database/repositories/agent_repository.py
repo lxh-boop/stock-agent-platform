@@ -373,15 +373,6 @@ class AgentRepository:
     def upsert_artifact(self, record: dict[str, Any]) -> dict[str, Any]:
         return self._upsert_runtime("artifacts", record)
 
-
-    def get_turn_summary(self, turn_id: str) -> dict[str, Any] | None:
-        # 按轮次编号读取单条摘要
-        return self._decode_runtime_record(
-            "agent_turn_summaries",
-            self.store.get("agent_turn_summaries", {"turn_id": str(turn_id or "")}),
-        )
-
-
     @staticmethod
     def _decode_decision_row(row: dict[str, Any]) -> dict[str, Any]:
         out = dict(row)
