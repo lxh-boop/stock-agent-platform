@@ -1,9 +1,9 @@
-"""Shared state model for the LangGraph agent engine.
+"""Shared state model for the single-agent (agent-as-tool) engine.
 
-The graph flows: decompose -> route -> plan -> (Send fan-out) workers ->
-collect -> synthesize -> approval gate -> END. ``worker_results`` uses an
-add-reducer because ``Send`` dispatches workers in parallel; errors/warnings
-accumulate the same way.
+Graph shape: START -> agent -> (approval_gate -> agent)? -> END. The main
+agent owns the whole conversation loop; specialists and write capabilities
+are plain tools on it. Write-tool approvals surface as top-level
+``interrupt()`` calls so they survive checkpointing.
 """
 
 from __future__ import annotations
@@ -11,44 +11,19 @@ from __future__ import annotations
 import operator
 from typing import Annotated, Any, TypedDict
 
-
-class WorkerTask(TypedDict):
-    """One unit of work the supervisor assigns to a specialist worker."""
-
-    task_id: str
-    worker_id: str  # W01..W09 card id from agent_graph.workers.cards
-    objective: str
-    request_index: int  # 1-based index into the decomposed request bundle
-    attempt: int  # 0 on first dispatch, incremented on re-dispatch
-    stage: str  # card execution_stage: provider | analysis | decision | ...
-
-
-class WorkerResult(TypedDict, total=False):
-    """Contract-shaped outcome of one worker subgraph run."""
-
-    task_id: str
-    worker_id: str
-    request_index: int
-    status: str  # completed | failed | waiting_approval
-    answer: str
-    tool_calls: list[dict[str, Any]]
-    entity_refs: list[dict[str, Any]]
-    errors: list[str]
-    attempt: int
-    duration_ms: float
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
 
 
 class ApprovalRequest(TypedDict, total=False):
     """Payload handed to ``interrupt()`` when a write tool needs confirmation."""
 
     action: str  # constant "write_approval"
-    gate: str  # "tool" | "write_request"
+    gate: str  # "tool" | "confirm_proposal"
     tool_name: str
     worker_id: str
     args: dict[str, Any]
     summary: str
-    task_id: str
-    branch: dict[str, Any]
 
 
 class AgentState(TypedDict, total=False):
@@ -62,29 +37,21 @@ class AgentState(TypedDict, total=False):
     # conversation context injected before the run
     memory_summary: str
 
-    # decompose output
-    category: str  # general | business
-    requests: list[dict[str, Any]]
-    presentation: dict[str, Any]
+    # main agent loop transcript (subgraph node state)
+    messages: Annotated[list[AnyMessage], add_messages]
 
-    # plan output
-    worker_tasks: list[WorkerTask]
-    dispatched_task_ids: list[str]
+    # agent output
+    final_answer: str
+    tool_trace: list[dict[str, Any]]
+    entity_refs: list[dict[str, Any]]
+    duration_ms: float
 
-    # fan-out results (add-reducer across parallel Send branches)
-    worker_results: Annotated[list[WorkerResult], operator.add]
-    retried_task_ids: Annotated[list[str], operator.add]
     errors: Annotated[list[str], operator.add]
     warnings: Annotated[list[str], operator.add]
-
-    # synthesize output
-    final_answer: str
-    write_outcome: dict[str, Any]
 
     # approval gate
     pending_approval: ApprovalRequest | None
     approval_decision: str | None
-    write_executed: bool
 
 
-__all__ = ["AgentState", "WorkerTask", "WorkerResult", "ApprovalRequest"]
+__all__ = ["AgentState", "ApprovalRequest"]

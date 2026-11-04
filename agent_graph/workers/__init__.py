@@ -1,4 +1,4 @@
-"""Specialist workers. Cards are safe to import alone; the factory pulls the tool layer."""
+"""Capability cards: tool-ownership metadata for the specialist tools."""
 
 from agent_graph.workers.cards import CapabilityWorkerCard, CapabilityWorkerDirectory
 

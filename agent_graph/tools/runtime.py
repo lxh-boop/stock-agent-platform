@@ -62,6 +62,7 @@ class AgentResources:
             "run_id": str(run_id or ""),
             "output_dir": str(output_dir or "outputs"),
             "db_path": db_path,
+            "_provider": provider,
         }
         return cls(
             store=store,

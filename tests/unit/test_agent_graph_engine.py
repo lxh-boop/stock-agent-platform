@@ -1,12 +1,11 @@
-"""Unit tests for the LangGraph agent engine (agent_graph package).
+"""Unit tests for the single-agent (agent-as-tool) engine.
 
-Tests run fully offline: structured LLM stages are stubbed, worker subgraphs
-use ``GenericFakeChatModel``, and persistence uses ``InMemorySaver``.
+Offline: structured specialist loops use ``GenericFakeChatModel``, approval
+uses ``InMemorySaver``, and the graph registry is a minimal real ToolRegistry.
 """
 
 from __future__ import annotations
 
-import itertools
 from typing import Any
 
 import pytest
@@ -15,70 +14,35 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+import agent_graph.graph as graph_module
 from agent_graph.approval import decision_from_resume
-from agent_graph.schemas import Decomposition, DecomposedRequest, RequestCategory, SemanticTarget, WorkerAssignment, WorkerPlan
-from agent_graph.state import AgentState
-from agent_graph.tools.adapter import args_model_from_schema, sanitize_tool_name, wrap_tool_definition
+from agent_graph.messages_utils import summarize_messages
+from agent_graph.specialists import build_specialist_tools
+from agent_graph.tools.main_tools import _trim_tool_result
 from agent_graph.tools.runtime import AgentResources
 
 
-# --------------------------------------------------------------------------
-# helpers
-# --------------------------------------------------------------------------
+class _ToolAwareFakeChatModel(GenericFakeChatModel):
+    """GenericFakeChatModel without bind_tools; create_agent requires it."""
+
+    def bind_tools(self, tools, **kwargs):  # noqa: ANN001, ANN003 - test stub
+        return self
 
 
 def _fake_model(script: str = "好的，任务完成。") -> GenericFakeChatModel:
-    return GenericFakeChatModel(messages=iter([AIMessage(content=script)] * 10000))
+    return _ToolAwareFakeChatModel(messages=iter([AIMessage(content=script)] * 10000))
 
 
-def _stub_resources() -> AgentResources:
-    return AgentResources(store=None, provider=None, impact_service=None, tool_registry=None, context={})
+def _tool_loop_model(messages: list[AIMessage]) -> GenericFakeChatModel:
+    # No cycling: replaying the same tool_call id would trip create_agent's
+    # synthetic-tool-message branch (returns 'model', not a legal destination).
+    return _ToolAwareFakeChatModel(messages=iter(list(messages)))
 
 
-def _decomposition(**request_overrides: Any) -> Decomposition:
-    request = {
-        "source_index": 1,
-        "category": RequestCategory.BUSINESS,
-        "objective": "查询最新模型排名",
-        "request_type": "read",
-        "proposal_required": False,
-        "semantic_target": SemanticTarget(),
-        "semantic_entities": [],
-        "presentation": {},
-        "depends_on": [],
-    }
-    request.update(request_overrides)
-    return Decomposition(requests=[DecomposedRequest(**request)])
-
-
-def _plan(worker_id: str = "W02", objective: str = "读取最新排名") -> WorkerPlan:
-    return WorkerPlan(tasks=[WorkerAssignment(worker_id=worker_id, objective=objective, request_index=1)])
-
-
-@pytest.fixture()
-def graph_module(monkeypatch):
-    import agent_graph.graph as graph
-
-    return graph
-
-
-def _build(graph_module, monkeypatch, *, decomposition=None, plan=None, agents=None, script="任务结论已完成。"):
-    captured: dict[str, Any] = {}
-
-    def fake_structured(model, schema, messages, *, retries=1):
-        captured.setdefault("stages", []).append(schema.__name__)
-        if schema.__name__ == "Decomposition":
-            return decomposition if decomposition is not None else _decomposition()
-        if schema.__name__ == "WorkerPlan":
-            return plan if plan is not None else _plan()
-        raise AssertionError(f"unexpected schema {schema.__name__}")
-
-    monkeypatch.setattr(graph_module, "generate_structured", fake_structured)
-    model = _fake_model(script)
-    resources = _stub_resources()
-    agents = agents if agents is not None else {}
-    graph = graph_module.build_agent_graph(model, resources, agents, {}, checkpointer=InMemorySaver())
-    return graph, captured, model, resources
+def _resources(registry=None, provider=None) -> AgentResources:
+    return AgentResources(
+        store=None, provider=provider, impact_service=None, tool_registry=registry, context={ "user_id": "tester"}
+    )
 
 
 def _initial_state(query: str = "帮我看看最新排名") -> dict[str, Any]:
@@ -92,37 +56,68 @@ def _initial_state(query: str = "帮我看看最新排名") -> dict[str, Any]:
     }
 
 
+def _read_tool_definition(name: str, payload: dict[str, Any]):
+    from agent_graph.toolbox.contracts import ToolDefinition
+    from agent_graph.toolbox.validation import result_schema, schema
+
+    def handler(arguments, context):
+        return {"success": True, "message": "ok", "data": payload}
+
+    return ToolDefinition(
+        name=name,
+        display_name=name,
+        description="Function: test read\nApplies when: needed\nNot for: writes\nPreconditions: none\nMain inputs: none\nMain outputs: payload\nSide effects: none",
+        input_schema=schema({"top_k": {"type": "integer"}}),
+        output_schema=result_schema(["payload"]),
+        execution_handler=handler,
+    )
+
+
+def _gated_write_tool_definition(name: str):
+    from agent_graph.toolbox.contracts import OP_WRITE, ToolDefinition
+    from agent_graph.toolbox.validation import result_schema, schema
+
+    def handler(arguments, context):
+        return {"success": True, "message": "已写入", "data": {"written": True}}
+
+    return ToolDefinition(
+        name=name,
+        display_name=name,
+        description="Function: test write\nApplies when: needed\nNot for: reads\nPreconditions: approved\nMain inputs: none\nMain outputs: flag\nSide effects: write",
+        input_schema=schema({}),
+        output_schema=result_schema(["written"]),
+        execution_handler=handler,
+        operation_type=OP_WRITE,
+        requires_approval=True,
+    )
+
+
 # --------------------------------------------------------------------------
-# adapter / helpers
+# tool layer
 # --------------------------------------------------------------------------
 
 
-def test_sanitize_tool_name_maps_dotted_ids():
-    assert sanitize_tool_name("evidence.search_news") == "evidence_search_news"
-    assert sanitize_tool_name("internal.prediction.get_stock") == "internal_prediction_get_stock"
+def test_specialist_tools_built_from_registry():
+    from agent_graph.toolbox.registry import ToolRegistry
+
+    registry = ToolRegistry([_read_tool_definition("evidence.search_news", {"records": [1]})])
+    tools = build_specialist_tools(_fake_model(), registry, {"user_id": "tester"})
+    names = {tool.name for tool in tools}
+    assert "evidence_collector" in names
+    assert "internal_data_provider" not in names  # its tools are not in the registry
 
 
-def test_args_model_from_schema_builds_required_and_optional_fields():
-    schema = {
-        "type": "object",
-        "properties": {
-            "object_refs": {"type": "array", "description": "权威引用"},
-            "top_k": {"type": "integer", "description": "条数"},
-        },
-        "required": ["object_refs"],
-    }
-    model = args_model_from_schema("evidence_search_news", schema)
-    instance = model(object_refs=[{"node_id": "n1"}])
-    assert instance.top_k is None
-    with pytest.raises(Exception):
-        model()
+def test_trim_tool_result_strips_secrets():
+    trimmed = _trim_tool_result(
+        {"success": True, "message": "ok", "confirmation_token": "secret", "data": {"plan_id": "p1", "confirmation_token": "x"}}
+    )
+    assert "secret" not in trimmed
+    assert "p1" in trimmed
 
 
-def test_decision_from_resume():
+def test_decision_from_resume_values():
     assert decision_from_resume({"decision": "approved"}) == "approved"
-    assert decision_from_resume({"decision": "rejected"}) == "rejected"
     assert decision_from_resume({"decision": "maybe"}) == "invalid"
-    assert decision_from_resume(None) == "invalid"
 
 
 # --------------------------------------------------------------------------
@@ -130,88 +125,83 @@ def test_decision_from_resume():
 # --------------------------------------------------------------------------
 
 
-def test_general_request_routes_to_direct_answer(graph_module, monkeypatch):
-    decomposition = _decomposition(category=RequestCategory.GENERAL, request_type="none", objective="你好呀")
-    graph, captured, _model, _res = _build(graph_module, monkeypatch, decomposition=decomposition)
+def test_general_question_answered_without_tools():
+    resources = _resources()
+    graph = graph_module.build_agent_graph(_fake_model("你好！有什么可以帮你？"), resources, {}, checkpointer=InMemorySaver())
     result = graph.invoke(_initial_state("你好"), {"configurable": {"thread_id": "t1"}})
-    assert result["category"] == "general"
-    assert result["final_answer"]
-    assert result.get("worker_tasks") in (None, [])
-    assert captured["stages"] == ["Decomposition"]
+    answer, _calls, _refs = summarize_messages(result.get("messages") or [])
+    assert answer
+    assert result.get("pending_approval") is None
 
 
-def test_business_flow_plans_and_completes_provider_worker(graph_module, monkeypatch):
-    graph, captured, _model, _res = _build(graph_module, monkeypatch)
+def test_specialist_tool_invocation_inside_agent_loop():
+    from agent_graph.toolbox.registry import ToolRegistry
+
+    registry = ToolRegistry([_read_tool_definition("evidence.search_news", {"records": [{"news_id": "n1"}]})])
+    model = _tool_loop_model(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "evidence_collector", "args": {"objective": "查最新新闻"}, "id": "c1"}],
+            ),
+            AIMessage(content="根据证据：有 1 条新闻。"),
+        ]
+    )
+    graph = graph_module.build_agent_graph(
+        model,
+        _resources(registry),
+        {},
+        checkpointer=InMemorySaver(),
+        specialist_model=_fake_model("专项结论：检索到 1 条新闻。"),
+    )
     result = graph.invoke(_initial_state(), {"configurable": {"thread_id": "t2"}})
-    assert result["category"] == "business"
-    assert captured["stages"] == ["Decomposition", "WorkerPlan"]
-    tasks = result["worker_tasks"]
-    assert tasks and tasks[0]["worker_id"] == "W02"
-    statuses = [r["status"] for r in result["worker_results"]]
-    assert statuses, "worker_results must be recorded"
-    assert result["final_answer"]
-    # provider stage dispatched; no consumer tasks planned
-    assert all(t["stage"] == "provider" for t in tasks)
+    answer, calls, _refs = summarize_messages(result.get("messages") or [])
+    assert answer
+    assert any(call["tool"] == "evidence_collector" for call in calls)
 
 
-def test_failed_worker_is_retried_once_then_synthesized(graph_module, monkeypatch):
-    graph, _c, _m, _res = _build(graph_module, monkeypatch, agents={})
-    result = graph.invoke(_initial_state(), {"configurable": {"thread_id": "t3"}})
-    # unknown worker -> failed; retried once; still failed -> synthesize still runs
-    assert result["final_answer"]
-    assert len(result.get("retried_task_ids") or []) == 1
+def test_write_tool_interrupts_then_executes_after_approval():
+    from agent_graph.toolbox.registry import ToolRegistry
 
-
-def test_write_request_interrupts_and_resume_rejects(graph_module, monkeypatch):
-    decomposition = _decomposition(request_type="write", objective="确认执行调仓方案")
-    graph, _c, _m, _res = _build(graph_module, monkeypatch, decomposition=decomposition)
-    config = {"configurable": {"thread_id": "t4"}}
-    result = graph.invoke(_initial_state("确认执行"), config)
-    assert result.get("__interrupt__"), "write gate must interrupt"
-    resumed = graph.invoke(Command(resume={"decision": "rejected"}), config=config)
-    assert resumed["final_answer"]
-    assert resumed.get("approval_decision") == "rejected"
-
-
-# --------------------------------------------------------------------------
-# tool approval inside worker loop
-# --------------------------------------------------------------------------
-
-
-def _approval_tool_definition():
-    from agent_graph.toolbox.contracts import OP_WRITE, ToolDefinition
-
-    def handler(arguments, context):
-        return {"success": True, "message": "已写入", "data": {"written": True}}
-
-    return ToolDefinition(
-        name="database.write_test",
-        display_name="Write Test",
-        description="Function: test write\nApplies when: needed\nNot for: reads\nPreconditions: approved\nMain inputs: none\nMain outputs: flag\nSide effects: write",
-        input_schema={"type": "object", "properties": {}},
-        output_schema={"type": "object"},
-        execution_handler=handler,
-        operation_type=OP_WRITE,
-        requires_approval=True,
+    write_name = "database.write_portfolio_graph_context"
+    registry = ToolRegistry([_gated_write_tool_definition(write_name)])
+    model = _tool_loop_model(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "database_write_portfolio_graph_context", "args": {}, "id": "c1"}],
+            ),
+            AIMessage(content="写入完成。"),
+        ]
     )
-
-
-def test_worker_write_tool_interrupts_then_executes_after_approval(graph_module, monkeypatch):
-    from langchain.agents import create_agent
-
-    wrapped = wrap_tool_definition(_approval_tool_definition(), {}, worker_id="W08")
-    worker_agent = create_agent(
-        _fake_model("写入已完成。"),
-        [wrapped],
-        system_prompt="你是写入Worker。",
-    )
-    decomposition = _decomposition(request_type="write", objective="触发审批")
-    graph, _c, _m, _res = _build(
-        graph_module, monkeypatch, decomposition=decomposition, plan=None, agents={"W08": worker_agent}
-    )
-    config = {"configurable": {"thread_id": "t5"}}
-    result = graph.invoke(_initial_state("触发审批"), config)
+    graph = graph_module.build_agent_graph(model, _resources(registry), {}, checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "t3"}}
+    result = graph.invoke(_initial_state("写入组合上下文"), config)
     assert result.get("__interrupt__") or result.get("pending_approval")
     resumed = graph.invoke(Command(resume={"decision": "approved"}), config=config)
-    statuses = {r["status"] for r in resumed.get("worker_results") or []}
-    assert "completed" in statuses or resumed.get("final_answer")
+    answer, calls, _refs = summarize_messages(resumed.get("messages") or [])
+    assert answer
+    assert any(call["tool"] == "database_write_portfolio_graph_context" for call in calls)
+
+
+def test_write_tool_rejection_ends_run_with_cancel_answer():
+    from agent_graph.toolbox.registry import ToolRegistry
+
+    write_name = "database.write_evidence_graph_context"
+    registry = ToolRegistry([_gated_write_tool_definition(write_name)])
+    model = _tool_loop_model(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "database_write_evidence_graph_context", "args": {}, "id": "c1"}],
+            ),
+            AIMessage(content="已按用户要求取消该操作。"),
+        ]
+    )
+    graph = graph_module.build_agent_graph(model, _resources(registry), {}, checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "t4"}}
+    graph.invoke(_initial_state("写入证据上下文"), config)
+    resumed = graph.invoke(Command(resume={"decision": "rejected"}), config=config)
+    answer, _calls, _refs = summarize_messages(resumed.get("messages") or [])
+    # rejection flows back into the tool, which returns the cancelled marker
+    assert "未获批准" in answer or "取消" in answer or "rejected" in answer

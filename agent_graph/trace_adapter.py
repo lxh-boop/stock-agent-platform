@@ -1,10 +1,9 @@
 """Map LangGraph run activity onto the legacy run-recording surfaces.
 
-Keeps ``/runs/{run_id}``, trace and reflection pages functional for the new
-engine by writing the same tables the self-built runtime wrote: agent_runs
-(via ``AgentRuntimeRecorder``) and console trace events (via
-``trace_event``). Fidelity is intentionally reduced: one step per worker task
-plus supervisor stages, not per-token/per-stage LLM telemetry.
+Keeps ``/runs/{run_id}`` functional for the single-agent engine by writing
+the same tables: agent_runs (via ``AgentRuntimeRecorder``) plus one step for
+the agent loop and one persisted row per tool call. Fidelity is intentionally
+reduced: no per-token or per-stage LLM telemetry.
 """
 
 from __future__ import annotations
@@ -13,20 +12,16 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agent_graph.trace import trace_event
-from agent_graph.runtime.recorder import AgentRuntimeRecorder
 from agent_graph.runtime.recorder import (
     RUN_COMPLETED,
     RUN_FAILED,
-    RUN_PARTIALLY_COMPLETED,
     RUN_PLANNING,
     RUN_RUNNING,
     RUN_WAITING_FOR_APPROVAL,
+    AgentRuntimeRecorder,
 )
-
-from agent_graph.state import WorkerResult
-
-_SUPERVISOR_STEPS = {"decompose": "request_decomposition", "plan": "worker_planning", "synthesize": "result_composition"}
+from agent_graph.messages_utils import json_view
+from agent_graph.trace import trace_event
 
 
 class GraphRunTracer:
@@ -59,9 +54,9 @@ class GraphRunTracer:
     # -- lifecycle ---------------------------------------------------------
 
     def planning(self) -> None:
-        self._transition(RUN_PLANNING, "decompose_started")
+        self._transition(RUN_PLANNING, "run_started")
 
-    def running(self, reason: str = "workers_dispatched") -> None:
+    def running(self, reason: str = "agent_started") -> None:
         self._transition(RUN_RUNNING, reason)
 
     def waiting(self) -> None:
@@ -71,75 +66,45 @@ class GraphRunTracer:
         try:
             self.recorder.transition_run(status, reason)
         except ValueError:
-            # The legacy state machine rejects some jumps (e.g. created->running
-            # without planning); degrade to an event instead of failing the run.
             trace_event("agent_graph.transition_skipped", {"to": status, "reason": reason}, run_id=self.run_id)
 
-    # -- supervisor stages -------------------------------------------------
+    # -- agent loop --------------------------------------------------------
 
-    def stage(self, node: str, payload: dict[str, Any] | None = None) -> None:
-        intent = _SUPERVISOR_STEPS.get(node, node)
-        if intent not in self.steps:
-            self.steps.add(intent)
-            try:
-                self.recorder.create_step(intent, intent=intent, depends_on=[], metadata=dict(payload or {}))
-                self.recorder.transition_step(intent, "succeeded", reason=f"{node}_done")
-            except Exception:  # noqa: BLE001 - trace must never break the run
-                trace_event("agent_graph.step_record_failed", {"node": node}, run_id=self.run_id)
-        trace_event(f"agent_graph.node.{node}", dict(payload or {}), run_id=self.run_id)
-
-    # -- workers -----------------------------------------------------------
-
-    def worker_started(self, task: dict[str, Any]) -> None:
-        step_id = str(task.get("task_id"))
+    def agent_loop_step(self) -> None:
+        step_id = "agent_loop"
         if step_id in self.steps:
             return
         self.steps.add(step_id)
         try:
-            self.recorder.create_step(
-                step_id,
-                intent=str(task.get("objective") or ""),
-                depends_on=[],
-                metadata={"worker_id": task.get("worker_id"), "attempt": task.get("attempt")},
-            )
-            self.recorder.transition_step(step_id, "running", reason="worker_started")
-        except Exception:  # noqa: BLE001
-            pass
+            self.recorder.create_step(step_id, intent="main agent tool loop", depends_on=[])
+            self.recorder.transition_step(step_id, "running", reason="agent_started")
+        except Exception:  # noqa: BLE001 - trace must never break the run
+            trace_event("agent_graph.step_record_failed", {"step": step_id}, run_id=self.run_id)
 
-    def worker_finished(self, result: WorkerResult) -> None:
-        step_id = str(result.get("task_id"))
-        status = str(result.get("status") or "failed")
-        try:
-            for call in list(result.get("tool_calls") or []):
+    def record_tool_trace(self, tool_trace: list[dict[str, Any]]) -> None:
+        step_id = "agent_loop"
+        for call in list(tool_trace or []):
+            args = dict(call.get("args") or {})
+            try:
                 self.recorder.record_tool_call(
                     step_id=step_id,
                     tool_name=str(call.get("tool") or "unknown_tool"),
-                    arguments=dict(call.get("args") or {}),
-                    result={"preview": str(call.get("preview") or "")[:400], "success": bool(call.get("success", True))},
+                    arguments=args,
+                    result={"success": True, "preview": json_view(args, 400)},
                 )
-            self.recorder.transition_step(step_id, "succeeded" if status == "completed" else "failed", reason=f"worker_{status}")
-            self.recorder.record_step_result(
-                step_id,
-                {
-                    "success": status == "completed",
-                    "answer": str(result.get("answer") or "")[:800],
-                    "errors": list(result.get("errors") or []),
-                    "status": status,
-                },
-            )
-        except Exception:  # noqa: BLE001
-            pass
+            except Exception:  # noqa: BLE001
+                pass
         trace_event(
-            "agent_graph.worker_finished",
-            {
-                "task_id": step_id,
-                "worker_id": result.get("worker_id"),
-                "status": status,
-                "tool_call_count": len(list(result.get("tool_calls") or [])),
-                "duration_ms": result.get("duration_ms"),
-            },
+            "agent_graph.agent_finished",
+            {"tool_call_count": len(list(tool_trace or []))},
             run_id=self.run_id,
         )
+
+    def finish_agent_step(self, success: bool) -> None:
+        try:
+            self.recorder.transition_step("agent_loop", "succeeded" if success else "failed", reason="agent_finished")
+        except Exception:  # noqa: BLE001
+            pass
 
     def approval_requested(self, payload: dict[str, Any]) -> None:
         trace_event(
@@ -151,12 +116,11 @@ class GraphRunTracer:
     # -- finalize ----------------------------------------------------------
 
     def finalize(self, *, success: bool, answer: str, warnings: list[str], errors: list[str], started_at: float) -> str:
-        status = RUN_COMPLETED if success else RUN_PARTIALLY_COMPLETED
+        status = RUN_COMPLETED if success else RUN_FAILED
         try:
             self._transition(status, "run_finished")
         except Exception:  # noqa: BLE001
-            status = RUN_FAILED
-            self._transition(RUN_FAILED, "run_failed")
+            pass
         try:
             self.recorder.merge_metadata(
                 {

@@ -1,52 +1,51 @@
-# agent_graph — LangGraph Agent 引擎（唯一引擎）
+# agent_graph — LangGraph 单 Agent 引擎（agent-as-tool）
 
-自 2026-11 破坏式重构起，本包是平台的**唯一 Agent 引擎**（LangChain 1.x + LangGraph 1.x），旧的 `agent/` 自研编排体系（Coordinator/Planner/SpecialistRuntime/Executor/ReAct/Reflection/Handoff/ToolEngine 等）已整体删除，无兼容层、无引擎开关。
-
-同时，原 `agent/` 下被外部依赖的**业务基础模块**已搬迁至本包子包：
-
-| 子包 | 原位置 | 职责 |
-|---|---|---|
-| `financial_graph/` | `agent/graph/` | Neo4j 金融图谱（store/identity/provider_adapter/impact_service/图写入） |
-| `toolbox/` | `agent/tool_runtime/{contracts,registry,validation}` + `agent/worker_tools/` | Worker 工具合同、注册表、校验与 20 个 Worker 私有工具 |
-| `workers/cards.py` | `agent/collaboration/worker_directory.py` | 9 个专业 Worker 卡片（单一事实源） |
-| `mcp/` | `agent/mcp/` | 内部 data/rag/model MCP server 与准入 |
-| `services/` | `agent/services/` | 23 个领域服务（证据检索/模型推理/组合/策略/用户画像…） |
-| `domain_tools/` | `agent/tools/` + `agent/tool_engine.py` | 业务工具实现 + `dispatch.execute_tool` 精简调度器（51 工具，替代 1600 行 tool_engine） |
-| `session/` | `agent/session/` + `agent/proposals/` | 会话状态、确认管理、pending plans、Proposal 状态机 |
-| `runtime/` | `agent/runtime.py` + `agent/artifacts.py` | run/steps/tool_calls 记录器、run 快照、artifact 存储 |
-| `writes/` | `agent/collaboration/write_runtime.py` + `write_gateway.py` + 2 个 mutation 适配器 | 确定性写执行器（Proposal CAS/幂等/复校）与 12-intent 审批提交网关 |
-| `trace.py` | `agent/console_trace.py` | 精简 trace（控制台 + `outputs/agent_runs/<run_id>/flow.md`） |
-| `runtime/health.py` | `agent/runtime_reliability.py` | agent_runs 健康遥测（监控页消费） |
+本包是平台的**唯一 Agent 引擎**：LangChain 1.x + LangGraph 1.x，**单主 Agent + 工具化专家能力**（agent-as-tool 模式）。没有子代理节点、没有 supervisor/规划/DAG 分发——2026-11 破坏式重构删除了旧 `agent/` 自研体系，随后又删除了多 Agent 编排层（decompose/plan/Send fan-out/collect/synthesize 与 9 个 Worker 子图），全部换成工具。
 
 ## 图结构（`graph.py`）
 
 ```
-START → decompose(结构化拆解) → route
-  ├─ general → general_answer（直答） → END
-  ├─ write   → write_gate（interrupt 审批 → 新写执行器） →（有读请求则继续 plan）
-  └─ business(read) → plan → Send 并行分发 provider 阶段 Worker（W01/W02/W03）
-        worker → collect
-                  ├─ 失败 Worker 重派一次
-                  ├─ 派发 consumer 阶段 Worker（W04/W05/W09，携带兄弟结果）
-                  ├─ pending_approval → approval_gate（interrupt；批准后带授权重派）
-                  └─ 全部完成 → synthesize → END
+START → agent（create_agent 主循环）→ END
 ```
 
-## 入口
+主 Agent 直接挂三类工具：
 
-- `service.run_langgraph_agent_request(...)`：唯一运行入口，返回前端兼容的 result dict；由 `application/agent_service.py` 调用。
-- `service.resume_langgraph_agent(...)`：审批中断后经 pending-actions confirm/reject 恢复（plan_id 形如 `lg_approve_{run_id}`）。
+| 工具 | 实现方式 | 审批 |
+|---|---|---|
+| `evidence_collector` / `internal_data_provider` / `graph_relation_retriever` | **专家工具**：各自封装一个窄工具循环（`specialists/factory.py`），prompt 来自能力卡片的私有提示词，工具白名单来自卡片 | 无（只读） |
+| `risk_analyzer` | 确定性能力：直调 `GraphProviderAdapter.analyze_risk`，无 LLM 循环 | 无（只读） |
+| `preview_add_stock` / `preview_adjust_position` / `preview_manual_operation` | 直调 `domain_tools` 预览函数，内部创建待审批 Proposal（plan_id），**不执行** | 无（只产提案） |
+| `confirm_pending_proposal` | 调 `writes/executor.execute_control_action` | **interrupt 审批门** |
+| `database.write_portfolio_graph_context` / `database.write_evidence_graph_context` | 旧 ToolDefinition 合同直包（`tools/adapter.py`） | **interrupt 审批门** |
 
-## 审批流
+## 写审批流
 
-1. 写请求/写工具触发 LangGraph `interrupt()`，运行暂停在 Postgres checkpointer（thread_id=会话）；
+写类工具在主 Agent 循环内抛出 LangGraph `interrupt()`。因为编译后的主 Agent 图**直接作为节点**挂在父图上（`add_node("agent", main_agent)`），中断经父图 checkpointer（Postgres，thread_id=会话）传播到顶层：
+
+1. 运行暂停，返回 `result.requires_confirmation=true`、`plan_id="lg_approve_{run_id}"`；
 2. 前端按原界面调 `POST /api/v1/web/agent/pending-actions/{plan_id}/confirm|reject`（confirm 需 `CONFIRM-{后6位}` 短语）；
-3. `web_agent_service` → `resume_langgraph_agent` 以 `Command(resume=...)` 恢复；确定性写执行（CAS claim + preflight + 幂等）在 `writes/`。
+3. `web_agent_service` → `resume_langgraph_agent` 以 `Command(resume=...)` 恢复——**循环在被中断的工具内部继续执行**，无需重放。
 
-## 日志与数据
+## 目录速览
 
-- `agent_runs / agent_steps / agent_tool_calls / agent_sources / proposals` 等表**沿用原 schema**，由 `runtime/recorder.py` + `trace_adapter.py` 继续写入；历史数据原地保留可查。
-- `outputs/agent_runs/<run_id>/flow.md` 轨迹继续产出；旧专属文件日志（react_logs/reflection_logs/message_logs/pending_actions.json）停止产出，磁盘历史保留为存档。
+| 文件/包 | 职责 |
+|---|---|
+| `service.py` | 入口 `run_langgraph_agent_request` / 审批恢复 `resume_langgraph_agent`；返回前端兼容 result dict |
+| `graph.py` | 主图（START→agent→END）+ 初始消息构建 |
+| `state.py` | AgentState（messages 通道 + run 元数据） |
+| `specialists/` | 三个专家工具 + risk 直连工具（agent-as-tool） |
+| `tools/main_tools.py` | 提案预览 / confirm / 图写入直连工具 |
+| `tools/adapter.py` | 旧 `ToolDefinition` → LangChain 工具动态包装（JSON Schema→Pydantic；写类过 interrupt） |
+| `tools/runtime.py` | `AgentResources`：Neo4j store/identity/provider/impact_service + ToolRegistry |
+| `workers/cards.py` | 能力卡片：工具归属元数据与专家私有提示词（单一事实源，无子代理） |
+| `toolbox/` | 工具合同（contracts/registry/validation）+ 20 个领域工具实现 |
+| `domain_tools/` | 业务工具（预览/提交/查询）+ `dispatch.execute_tool` 精简调度器 |
+| `writes/` | 确定性写执行器（Proposal CAS/幂等/复校）+ 12-intent 审批提交网关 |
+| `session/` | 会话状态、确认管理、pending plans、Proposal 状态机 |
+| `runtime/` | run/steps/tool_calls 记录器、run 快照、artifacts、健康遥测 |
+| `memory.py` | LangGraph `PostgresSaver` checkpointer + store（不可用时降级） |
+| `trace.py` | trace 事件 + `outputs/agent_runs/<run_id>/flow.md` |
+| `trace_adapter.py` | 运行写回 agent_runs/agent_steps/agent_tool_calls（前端运行详情页数据源） |
 
 ## 测试
 
@@ -54,10 +53,11 @@ START → decompose(结构化拆解) → route
 .\.venv\Scripts\python.exe -m pytest tests/unit/test_agent_graph_engine.py tests/unit/test_agent_graph_writes.py -q
 ```
 
-覆盖：拆解路由、Worker 并行与重派、general 直答、写请求中断→拒绝/批准恢复、Worker 写工具审批后执行、写执行器语义。
+13 个离线用例：specialist 工具构建、预览结果脱敏、审批决策解析、general 直答、主循环内调用专家工具、写工具中断→批准后继续执行、拒绝后取消、写执行器/网关契约。
+注意：测试用 `_ToolAwareFakeChatModel`（补 `bind_tools`）；specialist 循环用独立的 fake model 实例（`specialist_model` 参数），避免与主循环共享迭代器。
 
 ## 手动 E2E
 
 1. 启动 `run_agent_api.py`（8010）+ 前端；
-2. 走三条路径：普通问答（general 直答）、业务分析（Worker 并行 + 综合报告）、写审批（interrupt → 前端确认短语 → 恢复执行）；
+2. 三条路径：普通问答（直答）、业务分析（主 Agent 调专家工具汇总）、写审批（preview 提案 → confirm → interrupt → 面板批准 → 恢复执行）；
 3. 对照 `/runs/{run_id}` 运行详情与 `flow.md`。
