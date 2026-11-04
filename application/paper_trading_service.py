@@ -5,7 +5,6 @@ from typing import Any
 
 import pandas as pd
 
-from agent_graph.domain_tools.dispatch import AGENT_MAIN, execute_tool as _execute_tool
 from agent_graph.writes import execute_confirmed_plan_v2 as _execute_confirmed_plan_v2
 from config import DEFAULT_INITIAL_CASH, DEFAULT_PAPER_TRADING_START_DATE
 from evaluation.evaluation_store import load_ai_reliability_state
@@ -148,19 +147,12 @@ class PaperTradingApplicationService:
         return not self.load_latest_ranking(output_dir, db_path).empty
 
     @staticmethod
-    def execute_tool(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        return dict(_execute_tool(*args, **kwargs) or {})
-
     @staticmethod
     def execute_confirmed_plan_v2(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return dict(_execute_confirmed_plan_v2(*args, **kwargs) or {})
 
 
 paper_trading_service = PaperTradingApplicationService()
-
-
-def execute_tool(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    return paper_trading_service.execute_tool(*args, **kwargs)
 
 
 def execute_confirmed_plan_v2(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -232,7 +224,6 @@ __all__ = [
     "cash_flow_cache_versions",
     "ai_reliability_cache_version",
     "execute_confirmed_plan_v2",
-    "execute_tool",
     "explain_stock_decision_attribution",
     "format_permission_summary",
     "get_classic_user_profile_form_options",

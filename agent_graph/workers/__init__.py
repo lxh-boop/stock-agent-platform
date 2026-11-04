@@ -1,5 +1,5 @@
-"""Capability cards: tool-ownership metadata for the specialist tools."""
+"""Worker role constants (tool-ownership metadata only; there are no sub-agents)."""
 
-from agent_graph.workers.cards import CapabilityWorkerCard, CapabilityWorkerDirectory
+from agent_graph.workers.cards import DATABASE_WRITER, EVIDENCE_COLLECTOR
 
-__all__ = ["CapabilityWorkerCard", "CapabilityWorkerDirectory"]
+__all__ = ["DATABASE_WRITER", "EVIDENCE_COLLECTOR"]

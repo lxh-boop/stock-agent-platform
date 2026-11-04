@@ -1,15 +1,14 @@
 """Offline unit tests for the deterministic write path (agent_graph.writes).
 
-Covers action normalization, intent mapping, gateway failure contracts and
-approval-decision parsing. Proposal state-machine execution needs PostgreSQL
-and is exercised by the staging E2E instead.
+Covers intent mapping, gateway failure contracts and action normalization.
+Proposal state-machine execution needs PostgreSQL and is exercised by the
+staging E2E instead.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from agent_graph.approval import decision_from_resume
 from agent_graph.writes import PLAN_INTENT_TO_TOOL, execute_confirmed_plan_v2, execute_control_action
 from agent_graph.writes.gateway import _failure
 
@@ -61,8 +60,3 @@ def test_failure_result_shape() -> None:
     assert result.data == {"k": 1}
 
 
-def test_decision_from_resume_values() -> None:
-    assert decision_from_resume({"decision": "approved"}) == "approved"
-    assert decision_from_resume({"decision": "rejected", "reason": "no"}) == "rejected"
-    assert decision_from_resume("approved") == "invalid"
-    assert decision_from_resume(None) == "invalid"

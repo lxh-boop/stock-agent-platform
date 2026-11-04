@@ -29,7 +29,6 @@ from agent_graph.toolbox import (
 
 EVIDENCE_SEARCH_NEWS_TOOL = "evidence.search_news"
 EVIDENCE_SEARCH_RAG_TOOL = "evidence.search_rag"
-EVIDENCE_FINALIZE_COLLECTION_TOOL = "evidence.finalize_collection"
 
 
 def _object_refs(arguments: dict[str, Any]) -> list[GraphRef]:
@@ -380,185 +379,7 @@ def build_evidence_tool_definitions(
             ),
         )
 
-    def finalize_collection(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-        del context
-        required_refs = _object_refs({"object_refs": arguments.get("required_object_refs") or []})
-        collections = arguments.get("collections") or []
-        if not isinstance(collections, list):
-            raise ValueError("evidence_collections_list_required")
-        source_collection_count = len(collections)
-        normalized_collections: list[dict[str, Any]] = []
-        for collection in collections:
-            if not isinstance(collection, dict):
-                raise ValueError("evidence_collection_semantic_payload_required")
-            normalized_collections.append(dict(collection))
-        collections = normalized_collections
-        # Tool-DAG dependencies only expose materialized semantic output slots.
-        # A failed upstream source Tool therefore blocks this finalizer rather than
-        # passing a second legacy envelope shape into the transform. Valid empty
-        # source reads are ordinary successful semantic payloads.
-        source_success_count = source_collection_count
-        source_failure_count = 0
-        grouped: dict[str, dict[str, Any]] = {
-            ref.node_id: {
-                "focus_ref": ref.to_dict(),
-                "success": False,
-                "message": "",
-                "records": [],
-                "sources": [],
-                "warnings": [],
-                "errors": [],
-                "source_names": [],
-            }
-            for ref in required_refs
-        }
-        for envelope in collections:
-            data = _envelope_data(envelope)
-            for item in data.get("results") or []:
-                if not isinstance(item, dict):
-                    continue
-                focus_ref = item.get("focus_ref") if isinstance(item.get("focus_ref"), dict) else {}
-                node_id = str(focus_ref.get("node_id") or "")
-                if node_id not in grouped:
-                    continue
-                target = grouped[node_id]
-                target["success"] = bool(target["success"] or item.get("success"))
-                target["message"] = str(item.get("message") or target["message"])
-                source_name = str(item.get("source_name") or data.get("source_name") or "")
-                for row in item.get("records") or []:
-                    if isinstance(row, dict):
-                        enriched = dict(row)
-                        enriched["_retrieved_by"] = source_name or "unknown"
-                        target["records"].append(enriched)
-                for row in item.get("sources") or []:
-                    if isinstance(row, dict):
-                        enriched = dict(row)
-                        enriched["_retrieved_by"] = source_name or "unknown"
-                        target["sources"].append(enriched)
-                target["warnings"].extend(str(value) for value in item.get("warnings") or [])
-                target["errors"].extend(str(value) for value in item.get("errors") or [])
-                if source_name and source_name not in target["source_names"]:
-                    target["source_names"].append(source_name)
 
-        normalized_results: list[dict[str, Any]] = []
-        all_warnings: list[str] = []
-        all_errors: list[str] = []
-        aggregate_deduplication = {
-            "policy": "shared_identity_value",
-            "identity_fields": list(_IDENTITY_FIELDS),
-            "raw_record_count": 0,
-            "identified_record_count": 0,
-            "unidentified_record_count": 0,
-            "canonical_record_count": 0,
-            "duplicate_record_count": 0,
-            "duplicate_group_count": 0,
-            "cross_source_duplicate_group_count": 0,
-            "source_record_counts": {},
-            "duplicate_groups": [],
-        }
-        for ref in required_refs:
-            item = grouped[ref.node_id]
-            deduped_records, deduplication = _deduplicate_records(
-                [row for row in item["records"] if isinstance(row, dict)]
-            )
-            seen_sources: set[tuple[str, ...]] = set()
-            deduped_sources: list[dict[str, Any]] = []
-            for row in [row for row in item["sources"] if isinstance(row, dict)]:
-                key = _source_key(row)
-                if key in seen_sources:
-                    continue
-                seen_sources.add(key)
-                cleaned = dict(row)
-                cleaned.pop("_retrieved_by", None)
-                deduped_sources.append(cleaned)
-            warnings = list(dict.fromkeys(item["warnings"]))
-            errors = list(dict.fromkeys(item["errors"]))
-            all_warnings.extend(warnings)
-            all_errors.extend(errors)
-            for key in (
-                "raw_record_count", "identified_record_count", "unidentified_record_count",
-                "canonical_record_count", "duplicate_record_count", "duplicate_group_count",
-                "cross_source_duplicate_group_count",
-            ):
-                aggregate_deduplication[key] += int(deduplication.get(key) or 0)
-            for source_name, count in dict(deduplication.get("source_record_counts") or {}).items():
-                source_counts = aggregate_deduplication["source_record_counts"]
-                source_counts[source_name] = int(source_counts.get(source_name) or 0) + int(count or 0)
-            aggregate_deduplication["duplicate_groups"].extend(
-                list(deduplication.get("duplicate_groups") or [])[:20]
-            )
-            aggregate_deduplication["duplicate_groups"] = aggregate_deduplication["duplicate_groups"][:20]
-            normalized_results.append(
-                {
-                    "focus_ref": ref.to_dict(),
-                    "success": bool(deduped_records),
-                    "message": item["message"] or ("Evidence collected." if deduped_records else "No evidence found."),
-                    "records": deduped_records,
-                    "sources": deduped_sources,
-                    "source_names": list(item["source_names"]),
-                    "deduplication": deduplication,
-                    "warnings": warnings,
-                    "errors": errors,
-                }
-            )
-        covered_ids = {
-            str(item.get("focus_ref", {}).get("node_id") or "")
-            for item in normalized_results
-            if item.get("records")
-        }
-        required_ids = {ref.node_id for ref in required_refs}
-        record_count = sum(len(item.get("records") or []) for item in normalized_results)
-        source_count = sum(len(item.get("sources") or []) for item in normalized_results)
-        coverage = {
-            "required_entity_count": len(required_ids),
-            "covered_entity_count": len(covered_ids),
-            "missing_entity_ref_ids": sorted(required_ids - covered_ids),
-            "coverage_satisfied": required_ids.issubset(covered_ids),
-        }
-        all_sources_failed = bool(source_collection_count) and source_success_count == 0 and source_failure_count >= source_collection_count
-        business_empty = record_count == 0 and not all_sources_failed
-        return {
-            "success": not all_sources_failed,
-            "message": (
-                "External evidence collection finalized."
-                if record_count
-                else "All selected evidence sources failed."
-                if all_sources_failed
-                else "No external evidence was found."
-            ),
-            "data": {
-                "results": normalized_results,
-                "record_count": record_count,
-                "source_count": source_count,
-                "deduplication": aggregate_deduplication,
-                "coverage": coverage,
-                "source_collection_count": source_collection_count,
-                "source_success_count": source_success_count,
-                "source_failure_count": source_failure_count,
-                "business_empty": business_empty,
-                "warnings": list(dict.fromkeys(all_warnings)),
-                "errors": list(dict.fromkeys(all_errors)),
-                "write_performed": False,
-                "validated_evidence_collection": True,
-            },
-            "warnings": list(dict.fromkeys(all_warnings)),
-            "errors": list(dict.fromkeys(all_errors)) if all_sources_failed else [],
-            "error_type": "all_evidence_sources_failed" if all_sources_failed else "",
-            "error_message": "All selected evidence source tools failed." if all_sources_failed else "",
-            "failure_kind": "tool_failure" if all_sources_failed else "",
-            "retryable": bool(all_sources_failed),
-        }
-
-
-    common_source_schema = schema(
-        {
-            "object_refs": {"type": "array", "description": "Authoritative financial-object GraphRefs."},
-            "query": {"type": "string"},
-            "top_k": {"type": "integer"},
-            "as_of_time": {"type": "string"},
-        },
-        required=["object_refs"],
-    )
     return [
         ToolDefinition(
             name=EVIDENCE_SEARCH_NEWS_TOOL,
@@ -681,77 +502,6 @@ def build_evidence_tool_definitions(
             },
             tags=["worker_private", "evidence", "rag", "atomic", "read_only"],
         ),
-        ToolDefinition(
-            name=EVIDENCE_FINALIZE_COLLECTION_TOOL,
-            display_name="Finalize Evidence Collection",
-            description=description(
-                "Merge, deduplicate, rank, and validate one or more source-collection results.",
-                "W01 has completed one or more source reads and must produce its final evidence collection.",
-                "Source retrieval, evidence interpretation, graph persistence, portfolio work, or proposals.",
-                "collections and required_object_refs.",
-                "Validated per-entity evidence collection, counts, warnings, and coverage.",
-            ),
-            input_schema=schema(
-                {
-                    "collections": {"type": "array"},
-                    "required_object_refs": {"type": "array"},
-                    "collection_goal": {"type": "string"},
-                },
-                required=["collections", "required_object_refs"],
-            ),
-            output_schema=result_schema(
-                [
-                    "results",
-                    "record_count",
-                    "source_count",
-                    "deduplication",
-                    "coverage",
-                    "validated_evidence_collection",
-                ]
-            ),
-            execution_handler=finalize_collection,
-            supported_actions=["finalize_evidence_collection"],
-            supported_objects=["evidence_source_result_set"],
-            produced_outputs=[
-                "results",
-                "record_count",
-                "source_count",
-                "deduplication",
-                "coverage",
-                "validated_evidence_collection",
-            ],
-            input_contracts=[
-                ToolInputContract(
-                    slot_id="collections",
-                    schema_id="EvidenceSourceCollection.v1",
-                    required=True,
-                    accepted_sources=("upstream_tool",),
-                    cardinality="many",
-                    description="One or more evidence-source semantic payloads selected by the Tool DAG.",
-                    contract="evidence.source-collection",
-                    version="1.0",
-                ),
-                ToolInputContract(slot_id="required_object_refs", required=True),
-                ToolInputContract(slot_id="collection_goal", required=False),
-            ],
-            output_contracts=[
-                ToolOutputContract(slot_id="results", source_path="data.results"),
-                ToolOutputContract(slot_id="record_count", source_path="data.record_count"),
-                ToolOutputContract(slot_id="source_count", source_path="data.source_count"),
-                ToolOutputContract(slot_id="deduplication", source_path="data.deduplication"),
-                ToolOutputContract(slot_id="coverage", source_path="data.coverage"),
-                ToolOutputContract(slot_id="validated_evidence_collection", source_path="data.validated_evidence_collection"),
-            ],
-            operation_type=OP_READ,
-            allowed_agent_types=[EVIDENCE_COLLECTOR],
-            permission_scope=OP_READ,
-            visibility=TOOL_VISIBILITY_WORKER_PRIVATE,
-            side_effects=[],
-            mutates_business_state=False,
-            idempotency="pure_transform",
-            audit_level="full",
-            tags=["worker_private", "evidence", "finalizer", "atomic", "read_only"],
-        ),
 
     ]
 
@@ -759,6 +509,5 @@ def build_evidence_tool_definitions(
 __all__ = [
     "EVIDENCE_SEARCH_NEWS_TOOL",
     "EVIDENCE_SEARCH_RAG_TOOL",
-    "EVIDENCE_FINALIZE_COLLECTION_TOOL",
     "build_evidence_tool_definitions",
 ]

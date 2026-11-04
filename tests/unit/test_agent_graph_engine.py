@@ -15,7 +15,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 import agent_graph.graph as graph_module
-from agent_graph.approval import decision_from_resume
 from agent_graph.messages_utils import summarize_messages
 from agent_graph.tools.main_tools import _trim_tool_result, build_read_tools
 from agent_graph.tools.runtime import AgentResources
@@ -117,11 +116,6 @@ def test_trim_tool_result_strips_secrets():
     )
     assert "secret" not in trimmed
     assert "p1" in trimmed
-
-
-def test_decision_from_resume_values():
-    assert decision_from_resume({"decision": "approved"}) == "approved"
-    assert decision_from_resume({"decision": "maybe"}) == "invalid"
 
 
 # --------------------------------------------------------------------------
