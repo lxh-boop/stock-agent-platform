@@ -2,9 +2,9 @@
 
 Every legacy handler obeys ``execution_handler(arguments: dict, context: dict)
 -> dict``, so one adapter covers the whole registry. Argument schemas are
-derived from each definition's JSON Schema; write-class tools pass through a
-LangGraph ``interrupt()`` approval gate before executing, preserving the
-legacy two-phase confirmation semantics inside the new engine.
+derived from each definition's JSON Schema. Write-approval for gated tools is
+enforced by the official ``HumanInTheLoopMiddleware`` at the agent level, not
+here — tool bodies stay pure business logic.
 """
 
 from __future__ import annotations
@@ -14,13 +14,13 @@ import re
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.types import interrupt
 from pydantic import BaseModel, Field, create_model
 
-from agent_graph.toolbox.contracts import OP_WRITE, ToolDefinition
+from agent_graph.toolbox.contracts import ToolDefinition
 
 _NAME_PATTERN = re.compile(r"[^a-zA-Z0-9_-]")
 _MAX_TOOL_NAME_LENGTH = 64
+_MAX_RESULT_JSON = 24000
 
 _JSON_TYPES: dict[str, Any] = {
     "string": str,
@@ -50,14 +50,10 @@ def _python_type(prop_schema: dict[str, Any]) -> Any:
         return dict[str, Any]
     enum = prop_schema.get("enum")
     if enum:
-        return LiteralTuple(tuple(str(item) for item in enum))
+        from typing import Literal
+
+        return Literal[tuple(str(item) for item in enum)]  # type: ignore[valid-type]
     return _JSON_TYPES.get(prop_type, str)
-
-
-def LiteralTuple(values: tuple[str, ...]) -> Any:  # noqa: N802 - small helper
-    from typing import Literal
-
-    return Literal[values]  # type: ignore[valid-type]
 
 
 def args_model_from_schema(tool_id: str, input_schema: dict[str, Any]) -> type[BaseModel]:
@@ -84,7 +80,7 @@ def args_model_from_schema(tool_id: str, input_schema: dict[str, Any]) -> type[B
 
 
 def _normalize_raw_result(raw: Any, tool_id: str) -> dict[str, Any]:
-    """Mirror ``tool_runtime.validation.normalise_raw_result`` essentials."""
+    """Mirror ``toolbox.validation.normalise_raw_result`` essentials."""
 
     if isinstance(raw, dict) and "success" in raw:
         return raw
@@ -105,7 +101,6 @@ def wrap_tool_definition(
 ) -> BaseTool:
     """Create one LangChain StructuredTool bound to a legacy execution handler."""
 
-    requires_approval = bool(definition.requires_approval) or str(definition.operation_type) == OP_WRITE
     args_model = args_model_from_schema(definition.name, definition.input_schema)
 
     def _execute(**kwargs: Any) -> dict[str, Any]:
@@ -115,26 +110,8 @@ def wrap_tool_definition(
             arguments = dict(kwargs["arguments"])
         else:
             arguments = {key: value for key, value in kwargs.items() if value is not None}
-        if requires_approval:
-            decision = interrupt(
-                {
-                    "action": "write_approval",
-                    "tool_name": definition.name,
-                    "worker_id": worker_id,
-                    "args": arguments,
-                    "summary": definition.description.splitlines()[0] if definition.description else definition.name,
-                }
-            )
-            approved = isinstance(decision, dict) and str(decision.get("decision") or "").lower() == "approved"
-            if not approved:
-                return {
-                    "success": False,
-                    "rejected": True,
-                    "message": f"写操作 {definition.name} 未获用户批准，已取消执行",
-                    "data": {"tool_name": definition.name, "decision": "rejected"},
-                }
         try:
-            raw = definition.execution_handler(dict(arguments or {}), dict(context))
+            raw = definition.execution_handler(arguments, dict(context))
             result = _normalize_raw_result(raw, definition.name)
         except Exception as exc:  # noqa: BLE001 - tool failures flow back to the agent loop
             result = {
@@ -146,7 +123,7 @@ def wrap_tool_definition(
         # Keep tool payloads compact for the LLM context window.
         if isinstance(result.get("data"), dict):
             serialized = json.dumps(result["data"], ensure_ascii=False, default=str)
-            if len(serialized) > 24000:
+            if len(serialized) > _MAX_RESULT_JSON:
                 result = {
                     **result,
                     "data": {

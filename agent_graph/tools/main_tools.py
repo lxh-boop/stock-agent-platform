@@ -16,8 +16,6 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
-from langgraph.types import interrupt
-
 from agent_graph.messages_utils import json_view
 from agent_graph.tools.adapter import wrap_tool_definition
 
@@ -143,24 +141,7 @@ def _confirm_pending_proposal(context: dict[str, Any]):
         intent: str = Field(default="confirm", description="confirm=确认执行；reject=拒绝")
 
     def _run(query: str = "", proposal_id: str = "", intent: str = "confirm") -> str:
-        decision = interrupt(
-            {
-                "action": "write_approval",
-                "gate": "confirm_proposal",
-                "tool_name": "confirm_pending_proposal",
-                "summary": query or proposal_id or "确认执行待审批方案",
-                "args": {"query": query, "proposal_id": proposal_id, "intent": intent},
-            }
-        )
-        approved = isinstance(decision, dict) and str(decision.get("decision") or "").lower() == "approved"
-        if not approved:
-            return json_view(
-                {
-                    "status": "rejected",
-                    "answer": "用户未批准该操作，已取消执行。",
-                    "entity_refs": [],
-                }
-            )
+        # Approval is enforced by HumanInTheLoopMiddleware before this body runs.
         result = execute_control_action(
             action="confirm" if str(intent).lower() != "reject" else "reject",
             query=query,

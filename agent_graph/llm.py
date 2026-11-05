@@ -64,32 +64,3 @@ def build_chat_model(
     )
 
 
-def generate_structured(
-    model: BaseChatModel,
-    schema: type[_TModel],
-    messages: Sequence[BaseMessage | dict[str, str] | tuple[str, str]],
-    *,
-    retries: int = 1,
-) -> _TModel:
-    """``LLMService.generate_json`` equivalent: validated parse with one retry.
-
-    The legacy contract is primary call -> validator -> at most one repair
-    request; ``with_structured_output`` does the validated parse and the retry
-    loop keeps the "exactly one repair" semantics.
-    """
-
-    structured_model = model.with_structured_output(schema)
-    last_error: Exception | None = None
-    for attempt in range(max(1, retries + 1)):
-        try:
-            parsed = structured_model.invoke(list(messages))
-        except Exception as exc:  # noqa: BLE001 - degrade to repair-then-raise
-            last_error = exc
-            continue
-        if isinstance(parsed, schema):
-            return parsed
-        last_error = TypeError(f"structured output returned {type(parsed).__name__}, expected {schema.__name__}")
-    raise RuntimeError(f"structured output failed after {retries + 1} attempts: {last_error}") from last_error
-
-
-__all__ = ["build_chat_model", "generate_structured"]

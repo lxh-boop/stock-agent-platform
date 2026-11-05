@@ -7,14 +7,14 @@ from agent_graph.writes.executor import (
     WriteRequestExecutor,
     execute_control_action,
 )
-from agent_graph.writes.gateway import PLAN_INTENT_TO_TOOL, execute_confirmed_plan_v2
+from agent_graph.writes.gateway import execute_confirmed_plan_v2, plan_intent_to_tool
 
 __all__ = [
     "ApprovalGuard",
     "MutationCapabilityResolver",
-    "PLAN_INTENT_TO_TOOL",
     "ProposalResolver",
     "WriteRequestExecutor",
     "execute_confirmed_plan_v2",
+    "plan_intent_to_tool",
     "execute_control_action",
 ]

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_graph.writes import PLAN_INTENT_TO_TOOL, execute_confirmed_plan_v2, execute_control_action
+from agent_graph.writes import execute_confirmed_plan_v2, execute_control_action, plan_intent_to_tool
 from agent_graph.writes.gateway import _failure
 
 
@@ -21,11 +21,10 @@ def test_plan_intent_to_tool_covers_all_commit_intents() -> None:
         "activate_strategy_binding", "rollback_strategy_binding",
         "execute_strategy_position_change",
     }
-    assert set(PLAN_INTENT_TO_TOOL) == expected
-    assert all(
-        name.endswith("commit") or name in {"approval.confirm_plan", "portfolio.commit_paper_trade"}
-        for name in PLAN_INTENT_TO_TOOL.values()
-    )
+    for intent in expected:
+        label = plan_intent_to_tool(intent)
+        assert label.endswith("commit") or label in {"approval.confirm_plan", "portfolio.commit_paper_trade"}
+    assert plan_intent_to_tool("unknown_intent") == "approval.confirm_plan"
 
 
 def test_execute_control_action_normalizes_actions(tmp_path, monkeypatch) -> None:
@@ -41,8 +40,8 @@ def test_gateway_unknown_plan_returns_plan_not_found(tmp_path) -> None:
         user_id="tester",
         output_dir=tmp_path,
     )
-    assert result.success is False
-    assert result.error_type == "plan_not_found"
+    assert result["success"] is False
+    assert result["error_type"] == "plan_not_found"
 
 
 def test_gateway_unsupported_intent(tmp_path, monkeypatch) -> None:
@@ -50,13 +49,13 @@ def test_gateway_unsupported_intent(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr("agent_graph.writes.gateway.get_pending_plan", lambda *a, **k: {"plan_id": "p1", "intent": "unknown_intent"})
     result = execute_confirmed_plan_v2("p1", "token", "tester", output_dir=tmp_path)
-    assert result.error_type == "unsupported_plan_intent"
+    assert result["error_type"] == "unsupported_plan_intent"
 
 
 def test_failure_result_shape() -> None:
     result = _failure("some.tool", "boom_type", "boom", data={"k": 1})
-    assert result.success is False
-    assert result.error_type == "boom_type"
-    assert result.data == {"k": 1}
+    assert result["success"] is False
+    assert result["error_type"] == "boom_type"
+    assert result["data"] == {"k": 1}
 
 

@@ -23,7 +23,6 @@ uvicorn[standard]>=0.30,<1
 pydantic>=2.8,<3
 jieba
 pyyaml
-mcp>=2,<3
 jsonschema>=4.20,<5
 psycopg[binary]>=3.2,<4
 langchain>=1.0,<2

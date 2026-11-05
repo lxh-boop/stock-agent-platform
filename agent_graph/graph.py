@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 
@@ -26,6 +27,14 @@ from agent_graph.tools.main_tools import build_main_capability_tools, build_read
 from agent_graph.tools.runtime import AgentResources
 
 _MAIN_RECURSION_LIMIT = 48
+
+# Write tools gated by the official human-in-the-loop middleware (per-call
+# interrupt; resume with {"type": "approve" | "reject", "message": str}).
+GATED_WRITE_TOOLS = (
+    "confirm_pending_proposal",
+    "database_write_portfolio_graph_context",
+    "database_write_evidence_graph_context",
+)
 
 
 def build_initial_messages(state: dict[str, Any]) -> list[HumanMessage]:
@@ -51,7 +60,21 @@ def build_agent_graph(
         *build_read_tools(resources.tool_registry, resources.context),
         *build_main_capability_tools(resources.tool_registry, resources.context),
     ]
-    main_agent = create_agent(model, tools, system_prompt=MAIN_AGENT_SYSTEM_PROMPT)
+    main_agent = create_agent(
+        model,
+        tools,
+        system_prompt=MAIN_AGENT_SYSTEM_PROMPT,
+        middleware=[
+            HumanInTheLoopMiddleware(
+                interrupt_on={
+                    name: {"allowed_decisions": ["approve", "reject"]}
+                    for name in GATED_WRITE_TOOLS
+                },
+                interrupt_mode="per_call",
+                description_prefix="写操作需要用户批准后才会执行",
+            )
+        ],
+    )
     builder = StateGraph(AgentState)
     builder.add_node("agent", main_agent)
     builder.add_edge(START, "agent")

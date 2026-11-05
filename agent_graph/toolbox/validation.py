@@ -47,68 +47,6 @@ def _extract_path(payload: dict[str, Any], path: str) -> tuple[bool, Any]:
     return True, current
 
 
-def materialise_semantic_output_slots(
-    definition: ToolDefinition,
-    result: dict[str, Any],
-) -> list[str]:
-    """Map concrete Tool return paths to stable semantic output slots.
-
-    The mapping is Runtime-only. Worker planners never see ``source_path`` and
-    therefore do not depend on Python return-field names such as ``records``.
-    """
-
-    contracts = output_contracts_for(definition)
-    if not contracts or not definition.output_contracts:
-        return []
-    data = result.get("data") if isinstance(result.get("data"), dict) else {}
-    slots = dict(data.get("slots") or {}) if isinstance(data.get("slots"), dict) else {}
-    slot_contracts = (
-        dict(data.get("slot_contracts") or {})
-        if isinstance(data.get("slot_contracts"), dict)
-        else {}
-    )
-    published: list[str] = []
-    envelope = {**dict(result), "data": data}
-    for contract in contracts:
-        found, value = _extract_path(envelope, contract.source_path)
-        if not found:
-            continue
-        slots[str(contract.slot_id)] = deepcopy(value)
-        slot_contracts[str(contract.slot_id)] = contract.contract_descriptor()
-        published.append(str(contract.slot_id))
-    if slots:
-        data["slots"] = slots
-        existing = [str(item) for item in data.get("produced_information_slots") or [] if str(item)]
-        data["produced_information_slots"] = list(dict.fromkeys([*existing, *published]))
-        data["slot_contracts"] = slot_contracts
-        result["data"] = data
-    return published
-
-
-def validate_semantic_output_contracts(
-    definition: ToolDefinition,
-    result: dict[str, Any],
-) -> list[str]:
-    if not definition.output_contracts or not bool(result.get("success")):
-        return []
-    data = result.get("data") if isinstance(result.get("data"), dict) else {}
-    slots = data.get("slots") if isinstance(data.get("slots"), dict) else {}
-    slot_contracts = (
-        data.get("slot_contracts")
-        if isinstance(data.get("slot_contracts"), dict)
-        else {}
-    )
-    errors = [
-        f"missing_output_slot:{contract.slot_id}"
-        for contract in definition.output_contracts
-        if str(contract.slot_id) not in slots
-    ]
-    errors.extend(
-        f"missing_output_contract:{contract.slot_id}"
-        for contract in definition.output_contracts
-        if str(contract.slot_id) not in slot_contracts
-    )
-    return errors
 
 
 def schema(
@@ -240,27 +178,4 @@ def validate_input(
     return errors
 
 
-def validate_output(
-    definition: ToolDefinition,
-    result: dict[str, Any],
-) -> list[str]:
-    data = result.get("data") if isinstance(result.get("data"), dict) else {}
-    return [
-        f"missing_output:{name}"
-        for name in definition.output_schema.get("required_data_keys") or []
-        if name not in data
-    ]
 
-
-def safe_argument_keys(arguments: dict[str, Any]) -> list[str]:
-    safe: list[str] = []
-    for key in sorted(arguments.keys()):
-        lowered = str(key or "").lower()
-        if any(
-            marker in lowered
-            for marker in ("confirmation_token", "api_key", "password", "secret", "token")
-        ):
-            safe.append("secret_arg")
-        else:
-            safe.append(str(key))
-    return sorted(set(safe))

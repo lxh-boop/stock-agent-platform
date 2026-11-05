@@ -13,7 +13,6 @@ def build_worker_tool_registry(
     *,
     provider: GraphProviderAdapter,
     impact_service: GraphImpactService | None = None,
-    mcp_context: dict[str, Any] | None = None,
 ) -> ToolRegistry:
     from .evidence import build_evidence_tool_definitions
     from .graph_context import build_graph_context_tool_definitions
@@ -31,15 +30,4 @@ def build_worker_tool_registry(
         *build_graph_context_tool_definitions(provider),
         *graph_relation_tools,
     ]
-    from agent_graph.mcp.runtime_registry import build_mcp_runtime_registry
-
-    projected = set(
-        build_mcp_runtime_registry(mcp_context).projected_worker_tool_ids()
-    )
-    admitted_definitions = [
-        definition
-        for definition in definitions
-        if str((definition.runtime_policy or {}).get("provider_type") or "") != "mcp"
-        or definition.name in projected
-    ]
-    return ToolRegistry(admitted_definitions)
+    return ToolRegistry(definitions)

@@ -17,7 +17,6 @@ AGENT_READ = "read_worker"
 AGENT_WRITE = "write_worker"
 
 TOOL_RESULT_SCHEMA_VERSION = "tool-result-v1"
-TOOL_IO_CONTRACT_VERSION = "tool-io-contract.v2"
 
 TOOL_VISIBILITY_PUBLIC = "public"
 TOOL_VISIBILITY_WORKER_PRIVATE = "worker_private"
@@ -30,36 +29,6 @@ TOOL_VISIBILITIES = frozenset(
     }
 )
 
-
-@dataclass(frozen=True)
-class ToolError:
-    """Minimal Tool-to-Worker error contract.
-
-    Runtime context already identifies the run, task, Worker and Tool call, so
-    only the stable error id, attempted operation and safe reason are returned
-    to the owning Worker.
-    """
-
-    error_id: str
-    operation: str
-    reason: str
-
-    @classmethod
-    def create(
-        cls,
-        *,
-        error_id: str,
-        operation: str,
-        reason: str,
-    ) -> "ToolError":
-        return cls(
-            error_id=str(error_id or "tool_failure")[:120],
-            operation=str(operation or "tool_operation")[:500],
-            reason=str(reason or "Tool execution failed.")[:2000],
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -74,7 +43,6 @@ class UnifiedToolResult:
     errors: list[str] = field(default_factory=list)
     error_type: str = ""
     error_message: str = ""
-    error: ToolError | None = None
     sources: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     artifact_id: str = ""
@@ -83,7 +51,6 @@ class UnifiedToolResult:
     duration_ms: float = 0.0
     retry_count: int = 0
     circuit_state: str = ""
-    schema_version: str = TOOL_RESULT_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -125,7 +92,7 @@ class ToolInputContract:
             "accepted_versions": list(accepted),
         }
 
-    def planner_view(self) -> dict[str, Any]:
+
         descriptor = self.contract_descriptor()
         return {
             "slot_id": str(self.slot_id),
@@ -167,7 +134,7 @@ class ToolOutputContract:
             "schema_id": schema_id,
         }
 
-    def planner_view(self) -> dict[str, Any]:
+
         descriptor = self.contract_descriptor()
         return {
             "slot_id": str(self.slot_id),
@@ -212,10 +179,3 @@ class ToolDefinition:
     idempotency: str = "unspecified"
     audit_level: str = "standard"
 
-    def public_view(self) -> dict[str, Any]:
-        data = asdict(self)
-        data.pop("execution_handler", None)
-        # Runtime-only field mappings must never leak into planner/public views.
-        data["output_contracts"] = [item.planner_view() for item in self.output_contracts]
-        data["input_contracts"] = [item.planner_view() for item in self.input_contracts]
-        return data

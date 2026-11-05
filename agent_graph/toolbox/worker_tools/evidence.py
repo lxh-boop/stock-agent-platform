@@ -14,7 +14,7 @@ import hashlib
 from agent_graph.workers.cards import EVIDENCE_COLLECTOR
 from agent_graph.financial_graph.contracts import GraphNodeKind, GraphRef, refs_from
 from agent_graph.financial_graph.provider_adapter import GraphProviderAdapter
-from agent_graph.mcp.worker_adapter import invoke_worker_mcp
+from agent_graph.services.evidence_service import evidence_service
 from agent_graph.toolbox import (
     OP_READ,
     TOOL_VISIBILITY_WORKER_PRIVATE,
@@ -345,16 +345,11 @@ def build_evidence_tool_definitions(
             provider=provider,
             refs=refs,
             source_name="news_and_announcements",
-            collector=lambda code: invoke_worker_mcp(
-                "rag",
-                "search_news",
-                {
-                    "stock_code": code,
-                    "as_of_date": as_of_time,
-                    "limit": top_k,
-                },
-                context,
-                caller_tool_id=EVIDENCE_SEARCH_NEWS_TOOL,
+            collector=lambda code: evidence_service.search_news(
+                code,
+                as_of_date=as_of_time or None,
+                db_path=context.get("db_path"),
+                limit=top_k,
             ),
         )
 
@@ -366,20 +361,24 @@ def build_evidence_tool_definitions(
             provider=provider,
             refs=refs,
             source_name="rag_evidence",
-            collector=lambda code: invoke_worker_mcp(
-                "rag",
-                "search_documents",
-                {
-                    "stock_code": code,
-                    "query": query or code,
-                    "top_k": top_k,
-                },
-                context,
-                caller_tool_id=EVIDENCE_SEARCH_RAG_TOOL,
+            collector=lambda code: evidence_service.search_documents(
+                query or code,
+                stock_code=code,
+                top_k=top_k,
+                output_dir=str(context.get("output_dir") or "outputs"),
             ),
         )
 
 
+    common_source_schema = schema(
+        {
+            "object_refs": {"type": "array", "description": "Authoritative financial-object GraphRefs."},
+            "query": {"type": "string"},
+            "top_k": {"type": "integer"},
+            "as_of_time": {"type": "string"},
+        },
+        required=["object_refs"],
+    )
     return [
         ToolDefinition(
             name=EVIDENCE_SEARCH_NEWS_TOOL,

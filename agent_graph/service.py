@@ -262,9 +262,20 @@ def resume_langgraph_agent(
                 "configurable": {"thread_id": session_id, "user_id": user_id, "run_id": tracer.run_id},
                 "recursion_limit": 96,
             }
-            final_state = dict(
-                graph.invoke(Command(resume={"decision": decision, "reason": reason}), config=config) or {}
-            )
+            snapshot = graph.get_state(config)
+            answers: dict[str, dict[str, str]] = {}
+            for task in snapshot.tasks or ():
+                for pending in getattr(task, "interrupts", ()) or ():
+                    if decision == "approved":
+                        answers[pending.id] = {"type": "approve"}
+                    else:
+                        answers[pending.id] = {
+                            "type": "reject",
+                            "message": reason or "用户拒绝了该操作",
+                        }
+            if not answers:
+                raise RuntimeError("no_pending_interrupt_on_thread")
+            final_state = dict(graph.invoke(Command(resume=answers), config=config) or {})
         return _compose_response(
             final_state=final_state,
             query=str(final_state.get("query") or ""),
@@ -323,7 +334,18 @@ def _compose_response(
         pending = None
         plan_id = ""
     else:
-        pending = dict(final_state.get("pending_approval") or {})
+        pending = {}
+        for item in final_state.get("__interrupt__") or ():
+            value = getattr(item, "value", None)
+            if isinstance(value, dict):
+                if value.get("type") == "tool_approval" or value.get("name"):
+                    pending = {
+                        "tool_name": str(value.get("name") or ""),
+                        "summary": str(value.get("description") or value.get("name") or "请确认该操作"),
+                        "args": dict(value.get("args") or {}),
+                        "gate": "middleware",
+                    }
+                    break
         tracer.approval_requested(pending)
         tracer.waiting()
         status = "waiting_for_approval"

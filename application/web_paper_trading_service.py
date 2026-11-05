@@ -798,11 +798,10 @@ class WebPaperTradingApplicationService:
             raise ValueError("invalid_flow_type")
         if float(amount or 0) <= 0:
             raise ValueError("amount_must_be_positive")
+        from agent_graph.domain_tools.write_operation_adapters import capital_change_preview_adapter
         from agent_graph.session.pending_action_store import get_pending_plan
-        from agent_graph.domain_tools.dispatch import AGENT_MAIN, execute_tool
 
-        result = execute_tool(
-            "capital.change.preview",
+        result = capital_change_preview_adapter(
             {
                 "user_id": user_id,
                 "flow_type": normalized_type,
@@ -812,7 +811,6 @@ class WebPaperTradingApplicationService:
                 "idempotency_key": str(idempotency_key),
             },
             context=self._tool_context(user_id, request_id=request_id),
-            agent_type=AGENT_MAIN,
         )
         payload = self._result_payload(result)
         plan_id = str((payload.get("data") or {}).get("plan_id") or "")
@@ -843,11 +841,11 @@ class WebPaperTradingApplicationService:
         user_id = self._user_id(user_id)
         profile = self.profile(user_id)["profile"]
         capital = float(initial_cash or profile.get("available_capital") or DEFAULT_INITIAL_CASH)
+        from agent_graph.domain_tools.write_operation_adapters import backfill_preview_adapter
         from agent_graph.session.pending_action_store import get_pending_plan
-        from agent_graph.domain_tools.dispatch import AGENT_MAIN, execute_tool
 
-        result = execute_tool(
-            "backfill.preview",
+        result = backfill_preview_adapter(
+
             {
                 "user_id": user_id,
                 "start_date": str(start_date),
@@ -865,7 +863,6 @@ class WebPaperTradingApplicationService:
                 "idempotency_key": str(idempotency_key),
             },
             context=self._tool_context(user_id, request_id=request_id),
-            agent_type=AGENT_MAIN,
         )
         payload = self._result_payload(result)
         plan_id = str((payload.get("data") or {}).get("plan_id") or "")

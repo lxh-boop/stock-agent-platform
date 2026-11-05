@@ -6,9 +6,9 @@ engine under ``agent/`` stays untouched and remains the default until the
 ``agent_engine`` setting is switched to ``"langgraph"``.
 """
 
-from agent_graph.llm import build_chat_model, generate_structured
+from agent_graph.llm import build_chat_model
 
-__all__ = ["build_chat_model", "generate_structured", "run_langgraph_agent_request"]
+__all__ = ["build_chat_model", "run_langgraph_agent_request"]
 
 
 def __getattr__(name: str):  # lazy re-export avoids heavy import at package load

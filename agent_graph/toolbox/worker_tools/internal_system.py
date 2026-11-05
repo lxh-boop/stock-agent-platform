@@ -11,7 +11,8 @@ import pandas as pd
 
 from agent_graph.workers.cards import PORTFOLIO_ANALYST
 from agent_graph.financial_graph.provider_adapter import GraphProviderAdapter
-from agent_graph.mcp.worker_adapter import invoke_worker_mcp
+from agent_graph.services.data_query_service import data_query_service
+from agent_graph.services.model_inference_service import model_inference_service
 from agent_graph.toolbox import (
     OP_READ,
     TOOL_VISIBILITY_WORKER_PRIVATE,
@@ -112,16 +113,31 @@ def build_internal_system_tool_definitions(
 ) -> list[ToolDefinition]:
     """Bind W02 private tools to current project services."""
 
+    def _data_envelope(service_result: dict[str, Any], default_message: str) -> dict[str, Any]:
+        """Replicate the retired Data MCP envelope: unwrap data.data, keep keys."""
+        nested = service_result.get("data")
+        payload = dict(nested) if isinstance(nested, dict) else dict(service_result)
+        return {
+            "success": bool(service_result.get("success", True)),
+            "message": str(service_result.get("message") or default_message),
+            "data": payload,
+            "warnings": list(service_result.get("warnings") or []),
+            "errors": list(service_result.get("errors") or []),
+        }
+
     def get_prediction(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         code = _stock_code(arguments)
         top_k = max(1, min(int(arguments.get("top_k") or 10), 500))
-        result = invoke_worker_mcp(
-            "model",
-            "predict_stock_score",
-            {"stock_code": code},
-            context,
-            caller_tool_id=INTERNAL_PREDICTION_GET_STOCK,
+        payload = model_inference_service.predict_stock_score(
+            code,
+            db_path=context.get("db_path"),
         )
+        result = {
+            "success": bool(payload.get("success", True)),
+            "message": str(payload.get("message") or ""),
+            "status": str(payload.get("status") or ""),
+            "data": dict(payload.get("data") or {}),
+        }
         data = dict(result.get("data") or {})
         records = [dict(row) for row in data.get("records") or [] if isinstance(row, dict)]
         total_count = int(data.get("record_count") or len(records))
@@ -171,13 +187,16 @@ def build_internal_system_tool_definitions(
 
     def get_ranking(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         top_k = max(1, min(int(arguments.get("top_k") or 10), 500))
-        result = invoke_worker_mcp(
-            "model",
-            "predict_rank",
-            {"top_k": top_k},
-            context,
-            caller_tool_id=INTERNAL_RANKING_GET_LATEST,
+        payload = model_inference_service.predict_rank(
+            top_k=top_k,
+            db_path=context.get("db_path"),
         )
+        result = {
+            "success": bool(payload.get("success", True)),
+            "message": str(payload.get("message") or ""),
+            "status": str(payload.get("status") or ""),
+            "data": dict(payload.get("data") or {}),
+        }
         data = dict(result.get("data") or {})
         return {
             "success": bool(result.get("success")),
@@ -377,18 +396,13 @@ def build_internal_system_tool_definitions(
         }
 
     def get_portfolio(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-        raw = invoke_worker_mcp(
-            "data",
-            "get_portfolio_state",
-            {
-                "user_id": str(
-                    arguments.get("user_id")
-                    or context.get("user_id")
-                    or "default"
-                )
-            },
-            context,
-            caller_tool_id=INTERNAL_PORTFOLIO_GET_STATE,
+        raw = _data_envelope(
+            data_query_service.get_portfolio_state(
+                str(arguments.get("user_id") or context.get("user_id") or "default"),
+                output_dir=str(context.get("output_dir") or "outputs"),
+                db_path=context.get("db_path"),
+            ),
+            "Portfolio state queried.",
         )
         if raw.get("success") is not True:
             return raw
@@ -426,18 +440,13 @@ def build_internal_system_tool_definitions(
         }
 
     def get_account(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-        raw = invoke_worker_mcp(
-            "data",
-            "get_portfolio_state",
-            {
-                "user_id": str(
-                    arguments.get("user_id")
-                    or context.get("user_id")
-                    or "default"
-                )
-            },
-            context,
-            caller_tool_id=INTERNAL_ACCOUNT_GET_STATE,
+        raw = _data_envelope(
+            data_query_service.get_portfolio_state(
+                str(arguments.get("user_id") or context.get("user_id") or "default"),
+                output_dir=str(context.get("output_dir") or "outputs"),
+                db_path=context.get("db_path"),
+            ),
+            "Account state queried.",
         )
         value = dict(raw.get("data") or {})
         return {
@@ -457,18 +466,13 @@ def build_internal_system_tool_definitions(
         }
 
     def get_profile(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-        raw = invoke_worker_mcp(
-            "data",
-            "get_user_profile",
-            {
-                "user_id": str(
-                    arguments.get("user_id")
-                    or context.get("user_id")
-                    or "default"
-                )
-            },
-            context,
-            caller_tool_id=INTERNAL_USER_PROFILE_GET,
+        raw = _data_envelope(
+            data_query_service.get_user_profile(
+                str(arguments.get("user_id") or context.get("user_id") or "default"),
+                output_dir=str(context.get("output_dir") or "outputs"),
+                db_path=context.get("db_path"),
+            ),
+            "User profile queried.",
         )
         data = dict(raw.get("data") or {})
         constraints = data.pop("constraints", {})

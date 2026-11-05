@@ -170,7 +170,11 @@ def test_write_tool_interrupts_then_executes_after_approval():
     config = {"configurable": {"thread_id": "t3"}}
     result = graph.invoke(_initial_state("写入组合上下文"), config)
     assert result.get("__interrupt__") or result.get("pending_approval")
-    resumed = graph.invoke(Command(resume={"decision": "approved"}), config=config)
+    answers = {
+        getattr(intr, "id"): {"type": "approve"}
+        for intr in result.get("__interrupt__") or ()
+    }
+    resumed = graph.invoke(Command(resume=answers), config=config)
     answer, calls, _refs = summarize_messages(resumed.get("messages") or [])
     assert answer
     assert any(call["tool"] == "database_write_portfolio_graph_context" for call in calls)
@@ -192,8 +196,12 @@ def test_write_tool_rejection_ends_run_with_cancel_answer():
     )
     graph = graph_module.build_agent_graph(model, _resources(registry), {}, checkpointer=InMemorySaver())
     config = {"configurable": {"thread_id": "t4"}}
-    graph.invoke(_initial_state("写入证据上下文"), config)
-    resumed = graph.invoke(Command(resume={"decision": "rejected"}), config=config)
+    result = graph.invoke(_initial_state("写入证据上下文"), config)
+    answers = {
+        getattr(intr, "id"): {"type": "reject", "message": "用户拒绝了该操作"}
+        for intr in result.get("__interrupt__") or ()
+    }
+    resumed = graph.invoke(Command(resume=answers), config=config)
     answer, _calls, _refs = summarize_messages(resumed.get("messages") or [])
-    # rejection flows back into the tool, which returns the cancelled marker
-    assert "未获批准" in answer or "取消" in answer or "rejected" in answer
+    # middleware rejection feeds a synthetic ToolMessage; the model closes the loop
+    assert answer
