@@ -23,6 +23,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent_graph.prompts import MAIN_AGENT_SYSTEM_PROMPT
 from agent_graph.state import AgentState
+from agent_graph.tools.external_mcp import build_research_docs_tools
 from agent_graph.tools.main_tools import build_main_capability_tools, build_read_tools
 from agent_graph.tools.runtime import AgentResources
 
@@ -56,10 +57,14 @@ def build_agent_graph(
 ):
     """Compile the single-agent graph. One model + one resources bundle per run."""
 
+    external_warnings: list[str] = []
     tools = [
         *build_read_tools(resources.tool_registry, resources.context),
         *build_main_capability_tools(resources.tool_registry, resources.context),
+        *build_research_docs_tools(external_warnings),
     ]
+    if external_warnings:
+        run_meta.setdefault("warnings", []).extend(external_warnings)
     main_agent = create_agent(
         model,
         tools,

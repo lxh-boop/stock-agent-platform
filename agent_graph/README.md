@@ -10,7 +10,7 @@ START → agent（create_agent 主循环）→ END
 
 主 Agent 直接挂两类工具：
 
-**领域只读工具**（`tools/main_tools.build_read_tools`，旧 ToolDefinition 合同直包，无审批）：
+**领域只读工具**（`tools/main_tools.build_read_tools`，旧 ToolDefinition 合同直包，无审批；另经外部文件系统 MCP 合并 `research_docs_*` 只读工具，读取人工策展的 `data/research` 目录，见 `docs/adr/0003`）：
 `evidence_search_news`、`evidence_search_rag`、`internal_prediction_get_stock`、`internal_ranking_get_latest`、`internal_entity_resolve_ranked_security`、`internal_model_get_metrics`、`internal_backtest_get_summary`、`internal_strategy_get_selected`、`internal_portfolio_get_state`、`internal_account_get_state`、`internal_user_profile_get`、`graph_relations_read_neighborhood`、`graph_relations_find_paths`，以及确定性 `risk_analyzer`（直调 `GraphProviderAdapter.analyze_risk`，无 LLM）。
 
 **提案与写入工具**（`tools/main_tools.py`）：
@@ -46,6 +46,7 @@ START → agent（create_agent 主循环）→ END
 | `session/` | 会话状态、确认管理、pending plans、Proposal 状态机 |
 | `runtime/` | run/steps/tool_calls 记录器、run 快照、artifacts、健康遥测 |
 | `memory.py` | LangGraph `PostgresSaver` checkpointer（仅服务审批中断恢复；无长期记忆存储，不可用时降级） |
+| `tools/external_mcp.py` | 外部 MCP 接入：经 langchain-mcp-adapters 消费官方 filesystem server（人工策展的研究文档目录），失败优雅降级 |
 | `trace.py` | trace 事件 + `outputs/agent_runs/<run_id>/flow.md` |
 | `trace_adapter.py` | 运行写回 agent_runs/agent_steps/agent_tool_calls（前端运行详情页数据源） |
 

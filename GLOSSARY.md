@@ -20,6 +20,7 @@
 | 术语 | 含义 |
 | --- | --- |
 | 提交网关（gateway） | `agent_graph/writes/gateway.py`：intent → 提交 adapter 直调（无调度器间接层），服务模拟盘 REST 与审批提交。 |
+| 研究文档工具（research_docs_*） | 经外部文件系统 MCP 暴露给主 Agent 的只读工具，读取**人工策展**目录（默认 `data/research`）中的研报/公告/笔记。进入目录即审核动作；工具名一律带 `research_docs_` 前缀并按只读允许清单过滤。 |
 | toolbox 工具合同 | `toolbox/worker_tools` 里的 ToolDefinition（JSON Schema + handler），主 Agent 领域读工具与图写入的来源；handler 直调 services。 |
 
 ## 已删除概念（见 git 历史，不再有含义）
@@ -27,4 +28,4 @@
 Coordinator / Planner / Worker DAG / Tool DAG / Send fan-out / Replan /
 Specialist Worker / ReAct / Reflection / Handoff / Critic / 会话记忆复用 /
 长期记忆 Store / Tool Engine / ToolSpec 注册表 / Skills / 内部 MCP 运输层 /
-外部 MCP 接入（评估后拒绝，理由见 ADR 0002）。
+联网搜索/实时行情类外部 MCP（评估后拒绝，见 ADR 0002）。
