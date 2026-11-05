@@ -51,6 +51,7 @@ services:
       dockerfile: Dockerfile.compose
       target: api
       args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     init: true
     restart: unless-stopped
