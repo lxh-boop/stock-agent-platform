@@ -123,9 +123,13 @@ def run_recorded_step(
         )
         save_job_status(status, root)
         if error and not allow_failure:
+            # Already recorded above; do not record the same error twice.
             raise error
         return result
     except Exception as exc:
+        # A returned failure was already persisted in the try block.
+        if step.finished_at:
+            raise
         finish_step(status, step, SchedulerStatus.FAILED, error=exc, started_perf=started)
         save_job_status(status, root)
         if not allow_failure:
