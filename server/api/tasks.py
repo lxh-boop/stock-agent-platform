@@ -151,6 +151,8 @@ def submit_task(request: TaskSubmitRequest, user: AuthUser = Depends(require_use
     kwargs = dict(decode_transport(request.kwargs) or {})
     owner_id = user.user_id
     secrets: dict[str, str] = {}
+    if request.task_type == "paper-profile.scheduler-manual" and not user.is_admin:
+        raise HTTPException(status_code=403, detail="admin_required_for_global_scheduler")
     if request.task_type == "agent.run":
         # Browser clients submit only business identifiers. Server-owned paths and
         # identity fields are injected here so they cannot drift across surfaces.
