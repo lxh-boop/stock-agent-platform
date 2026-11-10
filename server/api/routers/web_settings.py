@@ -7,11 +7,11 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends
 
-from application.web_settings_service import web_settings_service
+from application.user_credentials_service import public_settings_for_user, save_settings_for_user
 from server.api.contracts import OperationResponse
 from server.api.presenters.settings import present_settings
 from server.api.schemas.settings import SettingsUpdateRequest
-from server.api.security import require_admin
+from server.api.security import AuthUser, require_user
 
 router = APIRouter(prefix="/api/v1/web/settings", tags=["web-settings"])
 logger = logging.getLogger(__name__)
@@ -64,17 +64,14 @@ def _call(action: Callable[[], Any], *, write: bool = False) -> OperationRespons
 
 
 @router.get("", response_model=OperationResponse)
-def settings() -> OperationResponse:
-    return _call(lambda: present_settings(web_settings_service.public_settings()))
+def settings(user: AuthUser = Depends(require_user)) -> OperationResponse:
+    return _call(lambda: present_settings(public_settings_for_user(user.user_id)))
 
 
 @router.put("", response_model=OperationResponse)
-def update_settings(request: SettingsUpdateRequest, _admin: object = Depends(require_admin)) -> OperationResponse:
+def update_settings(request: SettingsUpdateRequest, user: AuthUser = Depends(require_user)) -> OperationResponse:
     # LLM/数据源/调度配置是平台级全局资源，仅管理员可修改。
     return _call(
-        lambda: {
-            **web_settings_service.update_settings(**request.model_dump()),
-            "settings": present_settings(web_settings_service.public_settings()),
-        },
+        lambda: save_settings_for_user(user.user_id, is_admin=user.is_admin, values=request.model_dump()),
         write=True,
     )
