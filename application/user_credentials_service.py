@@ -5,7 +5,9 @@ Platform scheduled market updates continue to use system credentials.
 """
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
+from urllib.parse import urlsplit
 
 from core.config.user_credentials import decrypt_credential, encrypt_credential
 from database.repositories.auth_repository import AuthRepository
@@ -132,6 +134,26 @@ def public_settings_for_user(user_id: str) -> dict[str, Any]:
     return shared
 
 
+def _validate_user_api_endpoint(url: str) -> None:
+    """Prevent user-editable API URLs from targeting local infrastructure."""
+    if not url:
+        return
+    parsed = urlsplit(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or not hostname or parsed.username or parsed.password:
+        raise ValueError("user_api_endpoint_must_be_public_https")
+    if hostname in {"localhost", "host.docker.internal"} or hostname.endswith(
+        (".localhost", ".local", ".internal")
+    ):
+        raise ValueError("user_api_endpoint_must_be_public_https")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return
+    if not address.is_global:
+        raise ValueError("user_api_endpoint_must_be_public_https")
+
+
 def save_settings_for_user(user_id: str, *, is_admin: bool, values: dict[str, Any]) -> dict[str, Any]:
     """All credential changes are owned by the authenticated user."""
     from core.llm.profiles import build_model_profile
@@ -153,6 +175,7 @@ def save_settings_for_user(user_id: str, *, is_admin: bool, values: dict[str, An
         raise ValueError("api_model_required")
     if mode == "local" and not config["llm_local_model"]:
         raise ValueError("local_model_required")
+    _validate_user_api_endpoint(config["llm_api_base_url"])
     profile = build_model_profile(config, mode=mode, credential_ref="account")
     if mode == "local" and profile.endpoint_scope != "loopback":
         raise ValueError("local_llm_endpoint_must_be_local")
