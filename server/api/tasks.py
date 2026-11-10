@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from config import OUTPUT_DIR
 from server.api.contracts import OperationResponse
-from server.api.dispatch import llm_settings_registry
+from application.user_credentials_service import get_user_llm_settings
 from server.api.serialization import decode_transport, encode_transport
 from server.api.security import AuthUser, require_user
 from server.task_runtime.manager import TaskManager
@@ -162,7 +162,7 @@ def submit_task(request: TaskSubmitRequest, user: AuthUser = Depends(require_use
         # configuration. Browser-side tokens or stale descriptors cannot switch
         # the task back to a previously selected local model.
         kwargs.pop("llm_settings", None)
-        settings = llm_settings_registry.resolve_current()
+        settings = get_user_llm_settings(user.user_id)
         if settings is not None:
             kwargs["llm_settings_descriptor"] = {
                 "profile_id": str(settings.profile_id),
