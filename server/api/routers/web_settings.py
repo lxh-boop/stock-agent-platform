@@ -70,7 +70,7 @@ def settings(user: AuthUser = Depends(require_user)) -> OperationResponse:
 
 @router.put("", response_model=OperationResponse)
 def update_settings(request: SettingsUpdateRequest, user: AuthUser = Depends(require_user)) -> OperationResponse:
-    # LLM/数据源/调度配置是平台级全局资源，仅管理员可修改。
+    # Account-owned keys are editable by the current user; only cron remains global.
     return _call(
         lambda: save_settings_for_user(user.user_id, is_admin=user.is_admin, values=request.model_dump()),
         write=True,
