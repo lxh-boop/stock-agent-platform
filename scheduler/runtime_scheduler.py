@@ -305,6 +305,32 @@ def shutdown_runtime_scheduler() -> None:
         _save_runtime_file(runtime)
 
 
+def _latest_failure_details(latest_job: dict[str, Any]) -> tuple[str, str, str]:
+    """Expose concise failed-step diagnostics without returning tracebacks or secrets."""
+    steps = latest_job.get("step_status") or {}
+    failed = list(latest_job.get("failed_steps") or [])
+    for step_name in reversed(failed):
+        info = steps.get(step_name) or {}
+        reason = str(info.get("error_message") or "").strip()
+        error_type = str(info.get("error_type") or "").strip()
+        if reason:
+            return str(step_name), error_type, _safe_scheduler_error(reason)
+    for name, info in reversed(list(steps.items())):
+        if (info or {}).get("status") == "failed":
+            return str(name), str(info.get("error_type") or ""), _safe_scheduler_error(str(info.get("error_message") or ""))
+    return "", "", ""
+
+
+def _safe_scheduler_error(value: str) -> str:
+    """Avoid exposing tokens, passwords, raw URLs or server tracebacks in settings."""
+    import re
+
+    value = value.split("\\nTraceback", 1)[0].split("\nTraceback", 1)[0]
+    value = re.sub(r"(?i)(api[_-]?key|token|password|secret)\s*[=:]\s*[^\s,;]+", r"\1=[redacted]", value)
+    value = re.sub(r"(?i)https?://[^\s]+", "[url-redacted]", value)
+    return value[:600]
+
+
 def scheduler_public_status(root: str | Path = ".") -> dict[str, Any]:
     config = _scheduler_config()
     latest_job = load_latest_job_status(root)
@@ -329,6 +355,7 @@ def scheduler_public_status(root: str | Path = ".") -> dict[str, Any]:
         ranking_signal_error = type(exc).__name__
 
     public_state = _public_data_state(latest_job, expected)
+    failed_step, error_type, failure_reason = _latest_failure_details(latest_job)
     market_stale = bool(expected and signal_date != expected)
     public_stale = not bool(public_state["healthy"])
 
@@ -361,7 +388,9 @@ def scheduler_public_status(root: str | Path = ".") -> dict[str, Any]:
         "last_trade_date": str(runtime.get("last_trade_date") or latest_job.get("trade_date") or ""),
         "last_status": str(runtime.get("last_status") or latest_job.get("overall_status") or "unknown"),
         "current_step": str(latest_job.get("current_step") or ""),
-        "last_error": str(runtime.get("last_error") or "")[:2000],
+        "last_error": failure_reason or _safe_scheduler_error(str(runtime.get("last_error") or latest_job.get("error_message") or "")),
+        "last_failed_step": failed_step,
+        "last_error_type": error_type,
     }
 
 
