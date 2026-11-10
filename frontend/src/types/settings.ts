@@ -53,6 +53,8 @@ export interface SchedulerSettings {
   last_status: string
   current_step: string
   last_error: string
+  last_failed_step?: string
+  last_error_type?: string
 }
 
 export interface PublicSettings {
