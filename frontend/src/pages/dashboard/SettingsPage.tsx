@@ -150,7 +150,7 @@ export function SettingsPage() {
     const values = await form.validateFields()
     Modal.confirm({
       title: '确认保存运行配置？',
-      content: '配置会写入本机 local_app_config.json。密钥不会回显到浏览器，正在运行的任务不受影响。',
+      content: '个人配置将保存到你的账号记录；Token 会加密存储且不回显。管理员的定时计划设置同时更新全局调度器。',
       okText: '确认保存',
       onOk: () => mutation.mutate(values),
     })
@@ -169,12 +169,7 @@ export function SettingsPage() {
         description="保存后，下一次 Agent、新闻或行情任务会重新读取配置。正在运行的任务继续使用启动时的配置快照。"
       />
       {!isAdmin ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="仅管理员可修改运行配置"
-          description="LLM、数据源与调度配置是平台级全局资源，当前账号为普通用户，只能查看。"
-        />
+        <Alert type="info" showIcon message="你的 API Key 和 Token 仅属于当前账号" description="你可以独立修改个人 LLM 和 Tushare 配置。公共日更计划仅管理员可修改。" />
       ) : null}
 
       <Row gutter={[16, 16]}>
@@ -289,22 +284,22 @@ export function SettingsPage() {
           <Row gutter={[16, 0]}>
             <Col xs={24} lg={8}>
               <Form.Item name="scheduler_enabled" valuePropName="checked" label="计划任务">
-                <Checkbox>启用 FastAPI 常驻自动更新</Checkbox>
+                <Checkbox disabled={!isAdmin}>启用 FastAPI 常驻自动更新</Checkbox>
               </Form.Item>
             </Col>
             <Col xs={12} lg={6}>
               <Form.Item name="scheduler_hour" label="小时" rules={[{ required: true, message: '请填写小时' }]}>
-                <InputNumber min={0} max={23} precision={0} style={{ width: '100%' }} />
+                <InputNumber disabled={!isAdmin} min={0} max={23} precision={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={12} lg={6}>
               <Form.Item name="scheduler_minute" label="分钟" rules={[{ required: true, message: '请填写分钟' }]}>
-                <InputNumber min={0} max={59} precision={0} style={{ width: '100%' }} />
+                <InputNumber disabled={!isAdmin} min={0} max={59} precision={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col xs={24} lg={8}>
               <Form.Item name="scheduler_catch_up" valuePropName="checked" label="错过计划时间">
-                <Checkbox>API 启动后自动补跑缺失交易日</Checkbox>
+                <Checkbox disabled={!isAdmin}>API 启动后自动补跑缺失交易日</Checkbox>
               </Form.Item>
             </Col>
             <Col span={24}>
@@ -316,7 +311,7 @@ export function SettingsPage() {
         </Card>
 
         <Space style={{ marginTop: 16 }}>
-          <Button type="primary" loading={mutation.isPending} onClick={submit} disabled={!isAdmin}>保存配置</Button>
+          <Button type="primary" loading={mutation.isPending} onClick={submit} >保存配置</Button>
           <Button onClick={() => void query.refetch()}>重新读取</Button>
         </Space>
       </Form>
