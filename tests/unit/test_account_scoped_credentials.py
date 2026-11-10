@@ -44,6 +44,9 @@ def test_user_tokens_are_encrypted_and_isolated(accounts):
     assert accounts["bob"]["llm_api_key_ciphertext"] == ""
     assert decrypt_credential(accounts["alice"]["llm_api_key_ciphertext"]) == "alice-key"
     assert service.get_user_tushare_token("alice") == "alice-tushare"
+    assert service.get_user_llm_settings("alice").credential == "alice-key"
+    with pytest.raises(ValueError, match="user_llm_credential_not_configured"):
+        service.get_user_llm_settings("bob")
     with pytest.raises(ValueError, match="user_tushare_token_not_configured"):
         service.get_user_tushare_token("bob")
     assert service.public_user_settings("alice")["llm_configured"] is True
