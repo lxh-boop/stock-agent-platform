@@ -162,7 +162,10 @@ def submit_task(request: TaskSubmitRequest, user: AuthUser = Depends(require_use
         # configuration. Browser-side tokens or stale descriptors cannot switch
         # the task back to a previously selected local model.
         kwargs.pop("llm_settings", None)
-        settings = get_user_llm_settings(user.user_id)
+        try:
+            settings = get_user_llm_settings(user.user_id)
+        except (ValueError, RuntimeError) as exc:
+            return _failure(exc)
         if settings is not None:
             kwargs["llm_settings_descriptor"] = {
                 "profile_id": str(settings.profile_id),
