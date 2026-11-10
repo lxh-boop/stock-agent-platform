@@ -742,6 +742,7 @@ class WebAgentApplicationService:
         """Complete a LangGraph engine run paused at a write-approval interrupt."""
 
         from agent_graph.service import resume_langgraph_agent, run_id_from_plan_id
+        from application.user_credentials_service import get_user_llm_settings
 
         normalized = str(action or "").lower()
         if normalized == "confirm":
@@ -757,6 +758,7 @@ class WebAgentApplicationService:
             user_id=user_id,
             run_id=run_id_from_plan_id(plan_id),
             decision=decision,
+            llm_settings=get_user_llm_settings(user_id),
             output_dir=self.output_dir,
             db_path=self.db_path,
         )
