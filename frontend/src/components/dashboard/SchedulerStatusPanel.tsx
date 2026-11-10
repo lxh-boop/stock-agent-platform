@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Descriptions, Modal, Space, Tag, Typography, message } from 'antd'
 import { submitTask } from '../../api/taskApi'
 import { useCurrentUserId } from '../../hooks/useCurrentUserId'
+import { useAuthStore } from '../../stores/authStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTaskStore } from '../../stores/taskStore'
 import type { PublicSettings } from '../../types/settings'
@@ -20,6 +21,7 @@ function statusColor(status: string): string {
 export function SchedulerStatusPanel({ settings }: { settings: PublicSettings }) {
   const scheduler = settings.scheduler
   const ownerId = useCurrentUserId()
+  const isAdmin = useAuthStore((state) => state.user?.role === 'admin')
   const sessionId = useSessionStore((state) => state.sessionId)
   const activeTask = useTaskStore((state) => state.task)
   const setTask = useTaskStore((state) => state.setTask)
@@ -119,7 +121,7 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
         <Button
           type="primary"
           loading={mutation.isPending}
-          disabled={taskBusy}
+          disabled={taskBusy || !isAdmin}
           onClick={() => Modal.confirm({
             title: '确认立即执行完整日更？',
             content: '任务会先下载行情并生成最新排名，再执行新闻、用户推荐和模拟盘链路。',
@@ -130,7 +132,7 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
           立即运行完整日更
         </Button>
         <Typography.Text type="secondary">
-          自动任务由 FastAPI 常驻调度器执行，不依赖浏览器页面或 Streamlit。
+          自动任务由 FastAPI 常驻调度器执行，不依赖浏览器页面；完整日更仅管理员可触发。
         </Typography.Text>
         {activeTask?.task_type === 'paper-profile.scheduler-manual' ? <TaskProgress task={activeTask} /> : null}
       </Space>
