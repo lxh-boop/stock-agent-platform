@@ -83,6 +83,9 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
           <Tag color={statusColor(scheduler.last_status)}>{scheduler.last_status || 'unknown'}</Tag>
         </Descriptions.Item>
         <Descriptions.Item label="当前步骤">{scheduler.current_step || '—'}</Descriptions.Item>
+        {scheduler.last_failed_step ? (
+          <Descriptions.Item label="失败步骤"><Typography.Text type="danger">{scheduler.last_failed_step}</Typography.Text></Descriptions.Item>
+        ) : null}
         <Descriptions.Item label="应有信号日">{scheduler.expected_signal_date || '—'}</Descriptions.Item>
         <Descriptions.Item label="当前信号日">
           <Tag color={scheduler.stale ? 'error' : 'success'}>{scheduler.latest_signal_date || '无数据'}</Tag>
@@ -99,7 +102,17 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
         />
       ) : null}
       {scheduler.last_error ? (
-        <Alert type="error" showIcon style={{ marginTop: 12 }} message="上次错误" description={scheduler.last_error} />
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginTop: 12 }}
+          message={scheduler.last_failed_step ? `上次失败：${scheduler.last_failed_step}` : '上次错误'}
+          description={
+            <Typography.Paragraph copyable style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
+              {scheduler.last_error_type ? `${scheduler.last_error_type}: ` : ''}{scheduler.last_error}
+            </Typography.Paragraph>
+          }
+        />
       ) : null}
 
       <Space direction="vertical" style={{ width: '100%', marginTop: 16 }}>
