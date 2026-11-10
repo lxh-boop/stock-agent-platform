@@ -34,7 +34,7 @@ jobs:
       - name: 安装依赖（引擎子集）
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest "psycopg[binary]>=3.2,<4" "neo4j>=6,<7" "mcp>=2,<3" pandas numpy pydantic requests pyyaml jsonschema "langchain>=1.0,<2" "langchain-openai>=1.0,<2" "langgraph>=1.0,<2" "langgraph-checkpoint-postgres>=2.0,<4"
+          python -m pip install pytest "cryptography>=43,<47" "psycopg[binary]>=3.2,<4" "neo4j>=6,<7" "mcp>=2,<3" pandas numpy pydantic requests pyyaml jsonschema "langchain>=1.0,<2" "langchain-openai>=1.0,<2" "langgraph>=1.0,<2" "langgraph-checkpoint-postgres>=2.0,<4"
 
       - name: 编译检查
         run: python -m compileall -q agent_graph application server core database rag portfolio pipelines strategies scheduler tools
@@ -44,6 +44,7 @@ jobs:
           python -m pytest -q
           tests/unit/test_agent_graph_engine.py
           tests/unit/test_agent_graph_writes.py
+          tests/unit/test_account_scoped_credentials.py
 
   frontend-quality:
     name: 前端类型、单测与生产构建
