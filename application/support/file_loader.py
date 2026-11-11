@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +26,7 @@ def safe_read_csv(
     dtype: dict | None = None,
     parse_dates: list[str] | tuple[str, ...] | None = None,
 ) -> LoadResult:
-    file_path = Path(path)
+    file_path = owned_path(path)
     required = list(required_columns or [])
 
     if not file_path.exists():
@@ -64,7 +66,7 @@ def safe_read_csv(
 
 
 def safe_read_json(path: str | Path) -> LoadResult:
-    file_path = Path(path)
+    file_path = owned_path(path)
 
     if not file_path.exists():
         return LoadResult(False, {}, f"文件不存在：{file_path}", str(file_path), [])

@@ -4,7 +4,7 @@ import traceback
 import uuid
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from server.api.contracts import OperationRequest, OperationResponse
 from server.api.serialization import decode_transport, encode_transport
@@ -56,6 +56,9 @@ def build_operation_router(
     def call_operation(
         operation: str, request: OperationRequest, user: AuthUser = Depends(require_user)
     ) -> OperationResponse:
+        # 旧 Streamlit 通用 RPC 无可靠参数边界，正式 React 不依赖它。
+        # 不允许它绕过个人设置、文件目录及 Task 的所有者校验。
+        raise HTTPException(status_code=410, detail="use_scoped_web_or_task_api")
         request_id = uuid.uuid4().hex
         try:
             args = decode_transport(request.args)

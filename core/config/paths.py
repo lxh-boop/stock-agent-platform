@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import os
 import json
 import shutil
@@ -52,27 +54,27 @@ def get_user_data_root() -> Path:
 
 
 def get_cache_dir() -> Path:
-    return get_user_data_root() / "cache" if is_frozen_app() else _SOURCE_ROOT / "data"
+    return owned_path(get_user_data_root() / "cache" if is_frozen_app() else _SOURCE_ROOT / "data")
 
 
 def get_data_dir() -> Path:
-    return get_cache_dir() / "data" if is_frozen_app() else _SOURCE_ROOT / "data"
+    return owned_path(get_cache_dir() / "data" if is_frozen_app() else _SOURCE_ROOT / "data")
 
 
 def get_database_dir() -> Path:
-    return get_user_data_root() / "database" if is_frozen_app() else _SOURCE_ROOT / "data"
+    return owned_path(get_user_data_root() / "database" if is_frozen_app() else _SOURCE_ROOT / "data")
 
 
 def get_outputs_dir() -> Path:
-    return get_user_data_root() / "outputs" if is_frozen_app() else _SOURCE_ROOT / "outputs"
+    return owned_path(get_user_data_root() / "outputs" if is_frozen_app() else _SOURCE_ROOT / "outputs")
 
 
 def get_logs_dir() -> Path:
-    return get_user_data_root() / "logs" if is_frozen_app() else _SOURCE_ROOT / "logs"
+    return owned_path(get_user_data_root() / "logs" if is_frozen_app() else _SOURCE_ROOT / "logs")
 
 
 def get_config_dir() -> Path:
-    return get_user_data_root() / "config" if is_frozen_app() else _SOURCE_ROOT
+    return owned_path(get_user_data_root() / "config" if is_frozen_app() else _SOURCE_ROOT)
 
 
 def get_models_dir() -> Path:
@@ -80,7 +82,7 @@ def get_models_dir() -> Path:
 
 
 def get_runtime_dir() -> Path:
-    return get_user_data_root() / "runtime" if is_frozen_app() else _SOURCE_ROOT / "runtime"
+    return owned_path(get_user_data_root() / "runtime" if is_frozen_app() else _SOURCE_ROOT / "runtime")
 
 
 def get_local_config_path() -> Path:

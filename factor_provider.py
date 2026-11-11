@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,7 +106,7 @@ def load_raw_data(
     *,
     source_numeric_dtype: str | None = None,
 ) -> pd.DataFrame:
-    raw_path = Path(path)
+    raw_path = owned_path(path)
     if not raw_path.is_file():
         raise FileNotFoundError(f"raw market data not found: {raw_path}")
     frame = pd.read_csv(
@@ -152,10 +154,10 @@ def latest_alpha158(
 
 
 def training_raw_path() -> Path:
-    train = Path(TRAIN_RAW_DATA_PATH)
+    train = owned_path(TRAIN_RAW_DATA_PATH)
     if train.is_file():
         return train
-    raw = Path(RAW_DATA_PATH)
+    raw = owned_path(RAW_DATA_PATH)
     if raw.is_file():
         return raw
     raise FileNotFoundError(f"training raw data not found: {train} or {raw}")

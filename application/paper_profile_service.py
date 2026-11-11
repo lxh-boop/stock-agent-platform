@@ -243,6 +243,10 @@ def start_scheduler_manual_run(
     展示成功、失败、超时和最终结果。
     """
 
+    from core.user_scope import current_owner
+    if current_owner():
+        from application.user_daily_service import run_personal_daily
+        return run_personal_daily(current_owner(), force=bool(force))
     from scheduler.daily_worker import run_scheduled_daily_update
 
     selected_users = None if all_users else ([str(user_id)] if user_id else None)

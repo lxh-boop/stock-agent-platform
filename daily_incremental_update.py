@@ -161,6 +161,7 @@ def prepare_latest_feature_data(
     include_news_features: bool = True,
     sync_news_db: bool = True,
     fetch_workers: int | None = None,
+    end_date: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Timestamp, dict[str, str]]:
     stock_pool = get_stock_pool(token=token, enrich_name=True)
     print(f"[Universe] update stock count = {len(stock_pool)}")
@@ -171,7 +172,8 @@ def prepare_latest_feature_data(
     recent_raw = fetch_stock_pool_recent_daily_fast(
         token=token,
         stock_pool=stock_pool,
-        recent_trade_days=FETCH_RECENT_TRADE_DAYS,
+        recent_trade_days=300 if old_raw.empty else FETCH_RECENT_TRADE_DAYS,
+        end_date=end_date,
         include_adj_factor=True,
         max_workers=fetch_workers,
     )
@@ -244,21 +246,26 @@ def _historical_validation(ranking_report: dict) -> dict:
 def active_ranker_daily_update(
     token: str | None = None,
     fetch_workers: int | None = None,
+    trade_date: str | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     token = get_token(token)
     ensure_dirs()
     print("=" * 80)
     print("[Active Ranker Daily Update]", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     print("=" * 80)
+    pro = init_tushare_pro(token)
+    market_window = build_market_data_window(pro)
+    signal_date = str(trade_date or market_window["expected_signal_date"])
+    if signal_date != str(market_window["expected_signal_date"]):
+        raise ValueError(f"目标日期已过期或尚未就绪：requested={signal_date}, ready={market_window['expected_signal_date']}")
+    prediction_date = str(market_window["prediction_target_date"])
     feature_data, _raw_data, _, stock_pool = prepare_latest_feature_data(
         token,
         include_news_features=False,
         sync_news_db=False,
         fetch_workers=fetch_workers,
+        end_date=signal_date,
     )
-    market_window = build_market_data_window(init_tushare_pro(token))
-    signal_date = str(market_window["expected_signal_date"])
-    prediction_date = str(market_window["prediction_target_date"])
     if _raw_data is not None and not _raw_data.empty and "date" in _raw_data.columns:
         raw_dates = pd.to_datetime(_raw_data["date"], errors="coerce").dt.strftime("%Y-%m-%d")
         merge_paper_market_ohlc(
@@ -356,6 +363,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--checkpoint-path", type=str, default="", help="兼容参数；模型资产由注册清单解析。")
     parser.add_argument("--fetch-workers", type=int, default=None)
+    parser.add_argument("--trade-date", default=None, help="调度器确定的信号日；禁止子进程改成其他日期。")
     return parser.parse_args(argv)
 
 
@@ -366,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError(
             f"仅支持主动排名模型后端 {ACTIVE_MODEL_BACKEND}；actual={backend}"
         )
-    active_ranker_daily_update(token=args.token or None, fetch_workers=args.fetch_workers)
+    active_ranker_daily_update(token=args.token or None, fetch_workers=args.fetch_workers, trade_date=args.trade_date)
     return 0
 
 

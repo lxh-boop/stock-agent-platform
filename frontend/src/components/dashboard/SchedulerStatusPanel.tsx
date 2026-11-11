@@ -3,7 +3,6 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Descriptions, Modal, Space, Tag, Typography, message } from 'antd'
 import { submitTask } from '../../api/taskApi'
 import { useCurrentUserId } from '../../hooks/useCurrentUserId'
-import { useAuthStore } from '../../stores/authStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTaskStore } from '../../stores/taskStore'
 import type { PublicSettings } from '../../types/settings'
@@ -21,7 +20,6 @@ function statusColor(status: string): string {
 export function SchedulerStatusPanel({ settings }: { settings: PublicSettings }) {
   const scheduler = settings.scheduler
   const ownerId = useCurrentUserId()
-  const isAdmin = useAuthStore((state) => state.user?.role === 'admin')
   const sessionId = useSessionStore((state) => state.sessionId)
   const activeTask = useTaskStore((state) => state.task)
   const setTask = useTaskStore((state) => state.setTask)
@@ -34,7 +32,7 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
       return submitTask({
         task_type: 'paper-profile.scheduler-manual',
         kwargs: {
-          all_users: true,
+          all_users: false,
           force: true,
           dry_run: false,
           output_dir: 'outputs',
@@ -48,7 +46,7 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
     },
     onSuccess: (task) => {
       setTask(task)
-      message.success('完整日更任务已提交，可在任务中心查看')
+      message.success('我的日更任务已提交，可在任务中心查看')
     },
     onError: (error) => message.error(`任务提交失败：${String(error)}`),
   })
@@ -63,7 +61,7 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
   const taskBusy = Boolean(activeTask && !TERMINAL_TASK_STATUSES.has(activeTask.status))
 
   return (
-    <Card title="自动更新运行状态">
+    <Card title="我的自动更新运行状态">
       <Descriptions column={1} size="small">
         <Descriptions.Item label="计划状态">
           <Tag color={scheduler.enabled ? 'success' : 'default'}>
@@ -121,18 +119,18 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
         <Button
           type="primary"
           loading={mutation.isPending}
-          disabled={taskBusy || !isAdmin}
+          disabled={taskBusy}
           onClick={() => Modal.confirm({
-            title: '确认立即执行完整日更？',
-            content: '任务会先下载行情并生成最新排名，再执行新闻、用户推荐和模拟盘链路。',
+            title: '确认立即执行我的日更？',
+            content: '将使用你保存的 Tushare Token 下载行情和新闻，更新你的排名、推荐与模拟盘；不会更新其他用户。',
             okText: '确认运行',
             onOk: () => mutation.mutate(),
           })}
         >
-          立即运行完整日更
+          立即运行我的日更
         </Button>
         <Typography.Text type="secondary">
-          自动任务由 FastAPI 常驻调度器执行，不依赖浏览器页面；完整日更仅管理员可触发。
+          自动任务由 FastAPI 常驻调度器执行，不依赖浏览器页面；使用你自己的数据源，只更新你的数据和模拟盘。
         </Typography.Text>
         {activeTask?.task_type === 'paper-profile.scheduler-manual' ? <TaskProgress task={activeTask} /> : null}
       </Space>

@@ -15,20 +15,31 @@ def _driver():
     return psycopg, dict_row
 
 
-def get_connection(*, runtime: bool = False):
+def get_connection(*, runtime: bool = False, scoped: bool = True):
     """Return a PostgreSQL connection with the application schema on search_path."""
     settings = PostgresSettings.from_env()
     psycopg, dict_row = _driver()
     schema = settings.runtime_schema if runtime else settings.app_schema
     conn = psycopg.connect(**settings.connection_kwargs(), row_factory=dict_row)
-    with conn.cursor() as cur:
-        cur.execute(f'SET search_path TO "{schema}", public')
-    return conn
+    try:
+        from core.user_scope import current_owner
+        owner = current_owner() if scoped and not runtime else ""
+        if owner:
+            from database.user_data_schema import ensure_user_data_schema
+            data_schema = ensure_user_data_schema(conn, settings, owner)
+            # 所有 DATA_TABLES 必须存在；初始化失败即报错，不能回落公共数据。
+            conn.execute(f'SET search_path TO "{data_schema}", "{schema}", public')
+        else:
+            conn.execute(f'SET search_path TO "{schema}", public')
+        return conn
+    except Exception:
+        conn.close()
+        raise
 
 
 @contextmanager
-def transaction(*, runtime: bool = False) -> Iterator[object]:
-    conn = get_connection(runtime=runtime)
+def transaction(*, runtime: bool = False, scoped: bool = True) -> Iterator[object]:
+    conn = get_connection(runtime=runtime, scoped=scoped)
     try:
         yield conn
         conn.commit()

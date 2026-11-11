@@ -90,10 +90,19 @@ def get_user_tushare_token(user_id: str) -> str:
 
 def public_settings_for_user(user_id: str) -> dict[str, Any]:
     """Combine shared read-only runtime status with account-owned editable fields."""
-    from application.web_settings_service import web_settings_service
+    import config as defaults
     from core.llm.profiles import build_model_profile
+    from ranking_runtime.settings import ACTIVE_MODEL_BACKEND, ACTIVE_MODEL_VERSION
+    from scheduler.account_scheduler import public_status
 
-    shared = web_settings_service.public_settings()
+    # 页面只读取密文是否存在，不解密 Token，也不读取别人的/平台的设置。
+    shared = {
+        "universe": defaults.UNIVERSE, "model_backend": ACTIVE_MODEL_BACKEND,
+        "model_version": ACTIVE_MODEL_VERSION, "default_topk": int(getattr(defaults, "TOPK", 10)),
+        "feature_flags": {"news": defaults.ENABLE_NEWS_FEATURES, "rag": defaults.ENABLE_RAG,
+                          "llm_explainer": defaults.ENABLE_LLM_EXPLAINER},
+        "scheduler": public_status(user_id), "read_only": False,
+    }
     account = public_user_settings(user_id)
     cfg = account["config"]
     mode = str(cfg.get("llm_mode") or "api")
@@ -157,8 +166,6 @@ def _validate_user_api_endpoint(url: str) -> None:
 def save_settings_for_user(user_id: str, *, is_admin: bool, values: dict[str, Any]) -> dict[str, Any]:
     """All credential changes are owned by the authenticated user."""
     from core.llm.profiles import build_model_profile
-    from local_config import load_local_config, save_local_config
-    from scheduler.runtime_scheduler import reload_runtime_scheduler
 
     if not values.get("confirmed"):
         raise ValueError("settings_update_confirmation_required")
@@ -179,6 +186,13 @@ def save_settings_for_user(user_id: str, *, is_admin: bool, values: dict[str, An
     profile = build_model_profile(config, mode=mode, credential_ref="account")
     if mode == "local" and profile.endpoint_scope != "loopback":
         raise ValueError("local_llm_endpoint_must_be_local")
+    from scheduler.account_scheduler import normalize_schedule
+    schedule = normalize_schedule({
+        "auto_retrain_enabled": values.get("scheduler_enabled", False),
+        "auto_retrain_hour": values.get("scheduler_hour", 20),
+        "auto_retrain_minute": values.get("scheduler_minute", 0),
+        "auto_retrain_catch_up": values.get("scheduler_catch_up", True),
+    })
     update_user_settings(
         user_id, config=config,
         llm_key=values.get("api_credential"),
@@ -186,20 +200,31 @@ def save_settings_for_user(user_id: str, *, is_admin: bool, values: dict[str, An
         clear_llm=bool(values.get("clear_api_credential")),
         clear_tushare=bool(values.get("clear_tushare_credential")),
     )
-    if is_admin:
-        # Scheduling remains platform-wide: only an administrator may change it.
-        global_cfg = load_local_config()
-        global_cfg.update({
-            "auto_retrain_enabled": bool(values.get("scheduler_enabled", False)),
-            "auto_retrain_hour": int(values.get("scheduler_hour", 20)),
-            "auto_retrain_minute": int(values.get("scheduler_minute", 0)),
-            "auto_retrain_catch_up": bool(values.get("scheduler_catch_up", True)),
-        })
-        save_local_config(global_cfg)
-        reload_runtime_scheduler()
+    AuthRepository().save_scheduler_settings(user_id, schedule)
     return {
         "request_id": str(values.get("request_id") or ""),
         "idempotency_key": str(values.get("idempotency_key") or ""),
         "status": "saved",
         "settings": public_settings_for_user(user_id),
     }
+
+
+def private_credential_for_user(user_id: str, secret_id: str) -> str:
+    columns = {"llm_api_key": "llm_api_key_ciphertext", "tushare_token": "tushare_token_ciphertext"}
+    if secret_id not in columns:
+        raise ValueError("unsupported_account_credential")
+    return decrypt_credential(AuthRepository().account_settings(user_id)[columns[secret_id]])
+
+
+def runtime_config_for_user(user_id: str) -> dict[str, Any]:
+    from local_config import DEFAULT_LOCAL_CONFIG
+    repo = AuthRepository()
+    account = repo.account_settings(user_id)
+    # 拷贝静态默认值，而非读取 local_app_config.json 或服务端个人 Token 文件。
+    cfg = dict(DEFAULT_LOCAL_CONFIG)
+    cfg.update({key: value for key, value in account["config"].items() if key in LLM_CONFIG_KEYS})
+    cfg["current_user_id"] = user_id
+    cfg["llm_api_key"] = decrypt_credential(account["llm_api_key_ciphertext"])
+    cfg["tushare_token"] = decrypt_credential(account["tushare_token_ciphertext"])
+    cfg.update(repo.scheduler_settings(user_id))
+    return cfg

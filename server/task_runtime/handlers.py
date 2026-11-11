@@ -192,9 +192,10 @@ def execute_task(
         return run_ai_news_adjustment_from_latest(*args, **kwargs)
 
     if task_type == "paper-profile.scheduler-manual":
-        from application.paper_profile_service import start_scheduler_manual_run
-
         emit("stage", {"progress": 0.08, "message": "正在执行调度器手动任务"})
-        return start_scheduler_manual_run(*args, **kwargs)
+        from core.user_scope import current_owner
+        from application.user_daily_service import run_personal_daily
+        return run_personal_daily(current_owner(), force=bool(kwargs.get("force", True)),
+                                  source=str(kwargs.get("source") or "manual"))
 
     raise KeyError(f"Unsupported task type: {task_type}")

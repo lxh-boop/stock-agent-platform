@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -163,7 +165,8 @@ def _open_dates_for_catchup(pro: Any, directory: Path, signal_date: str) -> list
         dates = _cached_dates(path)
         if dates:
             latest_dates.append(pd.Timestamp(max(dates)))
-    recent_start = signal - timedelta(days=90)
+    # 新用户没有别人的历史缓存；先补齐当前模型最长 250 日特征所需历史。
+    recent_start = signal - timedelta(days=450 if not latest_dates else 90)
     catchup_start = min(latest_dates) + timedelta(days=1) if latest_dates else signal
     start = min(recent_start, catchup_start)
     calendar = pro.trade_cal(
@@ -198,7 +201,7 @@ def refresh_ranker_features_through(
     trade_date = str(signal_date).replace("-", "")[:8]
     if len(trade_date) != 8:
         raise ValueError("signal_date必须是YYYY-MM-DD或YYYYMMDD")
-    directory = Path(feature_dir)
+    directory = owned_path(feature_dir)
     directory.mkdir(parents=True, exist_ok=True)
     pro = init_tushare_pro(token)
     trade_dates = _open_dates_for_catchup(pro, directory, trade_date)

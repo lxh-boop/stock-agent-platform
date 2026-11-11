@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import hashlib
 import math
 from datetime import date, datetime
@@ -299,7 +301,7 @@ class WebReadApplicationService:
         ]
         rows: list[dict[str, Any]] = []
         for key, label, raw_path in items:
-            path = Path(raw_path)
+            path = owned_path(raw_path)
             exists = bool(raw_path) and path.exists()
             stat = path.stat() if exists else None
             rows.append(

@@ -40,6 +40,11 @@ def main() -> int:
 
     store = TaskStore()
     task = store.get(args.task_id)
+    from core.user_scope import current_owner
+    if str(task.get("owner_id") or "") != current_owner():
+        store.update(args.task_id, status="failed", finished_at=utc_now(),
+                     message="task_owner_scope_mismatch", error={"code": "task_owner_scope_mismatch"})
+        return 1
     secret_raw = os.environ.pop("STOCK_TASK_SECRET_B64", "")
     secrets: dict[str, str] = {}
     if secret_raw:
@@ -142,12 +147,14 @@ def main() -> int:
                     store.add_event(args.task_id, "retry", {"attempt": attempt, "message": str(exc)})
                     time.sleep(min(2 ** attempt, 10))
                     continue
+                from scheduler.runtime_scheduler import _safe_scheduler_error
+                safe_message = _safe_scheduler_error(str(exc))
                 error = {
                     "code": type(exc).__name__,
-                    "message": str(exc),
-                    "traceback_tail": traceback.format_exc()[-6000:],
+                    "message": safe_message,
+                    "traceback_tail": _safe_scheduler_error(traceback.format_exc()[-6000:]),
                 }
-                store.update(args.task_id, status="failed", finished_at=utc_now(), progress=1, message=str(exc), error=error, worker_pid=None)
+                store.update(args.task_id, status="failed", finished_at=utc_now(), progress=1, message=safe_message, error=error, worker_pid=None)
                 store.add_event(args.task_id, "failed", {
                     **error,
                     "total_seconds": round(time.monotonic() - task_started_monotonic, 3),

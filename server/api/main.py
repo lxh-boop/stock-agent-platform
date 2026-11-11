@@ -77,6 +77,8 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
     app.state.service_settings = settings
+    from server.api.user_scope_middleware import UserScopeMiddleware
+    app.add_middleware(UserScopeMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),

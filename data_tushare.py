@@ -26,6 +26,10 @@ def _tushare_module():
 
 
 def get_token(token: str | None = None) -> str:
+    from core.user_scope import current_owner
+    if current_owner():
+        from application.user_credentials_service import get_user_tushare_token
+        return str(token).strip() if token else get_user_tushare_token(current_owner())
     try:
         from local_config import load_local_config
 
@@ -51,7 +55,7 @@ def get_token(token: str | None = None) -> str:
 
 def init_tushare(token: str | None = None):
     token = get_token(token)
-    _tushare_module().set_token(token)
+    # pro_api 显式接收 token，不写跨用户共享的 ~/.tushare.token 文件。
     return token
 
 

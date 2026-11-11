@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -36,7 +38,7 @@ def load_ranker_close_for_date(
     *,
     feature_dir: str | Path = ACTIVE_RANKING_FEATURE_DIR,
 ) -> pd.DataFrame:
-    path = Path(feature_dir) / "daily_basic.csv"
+    path = owned_path(feature_dir) / "daily_basic.csv"
     if not path.is_file():
         return pd.DataFrame(columns=["code", "date", "close"])
     rows = _cached_close_rows(str(path.resolve()), path.stat().st_mtime_ns, str(trade_date))

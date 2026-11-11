@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import json
 from pathlib import Path
 from typing import Any
@@ -91,7 +93,7 @@ def get_ai_explanation_path(stock_row: dict | pd.Series) -> Path:
     row = _to_plain_dict(stock_row)
     date_text = str(row.get("date", "unknown")).split(" ")[0]
     code_text = str(row.get("code", "unknown")).zfill(6)
-    return Path(AI_EXPLANATION_DIR) / f"{date_text}_{code_text}.md"
+    return owned_path(AI_EXPLANATION_DIR) / f"{date_text}_{code_text}.md"
 
 
 def load_cached_ai_explanation(stock_row: dict | pd.Series) -> str:

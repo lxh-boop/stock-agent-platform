@@ -150,9 +150,24 @@ def submit_task(request: TaskSubmitRequest, user: AuthUser = Depends(require_use
     args = list(decode_transport(request.args) or [])
     kwargs = dict(decode_transport(request.kwargs) or {})
     owner_id = user.user_id
+    from core.user_scope import workspace
+    if args:
+        raise HTTPException(status_code=422, detail="task_positional_arguments_not_allowed")
+    for key in tuple(kwargs):
+        if key in {"output_dir", "db_path", "database_path", "_service_db_path", "root", "token", "api_key", "llm_settings", "llm_settings_descriptor", "sync_kwargs"}:
+            kwargs.pop(key, None)
+    # 有 user_id 的任务即使漏传也必须写入本人，而非落到 default 账户。
+    if request.task_type in {"agent.run", "paper-trading.update", "paper-trading.backfill", "paper-profile.ai-news-adjustment"}:
+        kwargs["user_id"] = user.user_id
+    if request.task_type in {"agent.run", "paper-trading.update", "paper-profile.ai-news-adjustment"}:
+        kwargs["output_dir"] = str(workspace(user.user_id) / "outputs")
     secrets: dict[str, str] = {}
-    if request.task_type == "paper-profile.scheduler-manual" and not user.is_admin:
-        raise HTTPException(status_code=403, detail="admin_required_for_global_scheduler")
+    if request.task_type in {"paper-profile.scheduler-manual", "dashboard.rolling_update"}:
+        from application.user_daily_service import submit_personal_daily
+        try:
+            return _success(submit_personal_daily(user.user_id, session_id=request.session_id))
+        except Exception as exc:
+            return _failure(exc)
     if request.task_type == "agent.run":
         # Browser clients submit only business identifiers. Server-owned paths and
         # identity fields are injected here so they cannot drift across surfaces.

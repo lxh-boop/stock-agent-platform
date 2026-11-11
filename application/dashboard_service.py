@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import json
 import os
 import subprocess
@@ -162,13 +164,13 @@ class DashboardApplicationService:
             if is_frozen_app()
             else self.base_dir / "rolling_update_time_history.json"
         )
-        self.log_dir = get_logs_dir()
+        self.log_dir = self.base_dir / "logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.rolling_update_log_path = self.log_dir / "rolling_update_app.log"
 
     @staticmethod
     def path_cache_version(path: str | Path) -> tuple[str, int, int]:
-        resolved = Path(path)
+        resolved = owned_path(path)
         try:
             stat = resolved.stat()
             size = stat.st_size if resolved.is_file() else 0
@@ -206,7 +208,7 @@ class DashboardApplicationService:
 
     @staticmethod
     def read_log_tail(path: str | Path, max_chars: int = 2000) -> str:
-        log_path = Path(path)
+        log_path = owned_path(path)
         if not log_path.exists():
             return ""
         try:
@@ -358,7 +360,7 @@ class DashboardApplicationService:
 
     @staticmethod
     def load_metrics(path: str | Path | None = None) -> Any:
-        file_path = Path(path or ACTIVE_RANKING_MODEL_METRICS_PATH)
+        file_path = owned_path(path or ACTIVE_RANKING_MODEL_METRICS_PATH)
         if not file_path.exists():
             return None
         try:
@@ -370,7 +372,7 @@ class DashboardApplicationService:
 
     @staticmethod
     def load_json_file(path: str | Path) -> dict[str, Any] | None:
-        file_path = Path(path)
+        file_path = owned_path(path)
         if not file_path.exists():
             return None
         try:
@@ -383,10 +385,10 @@ class DashboardApplicationService:
     def load_backtest_outputs() -> tuple[Any, Any, Any, Any]:
         nav_df = trades_df = predictions_df = None
         metrics_data = None
-        if Path(BACKTEST_METRICS_PATH).exists():
+        if owned_path(BACKTEST_METRICS_PATH).exists():
             try:
                 candidate_metrics = json.loads(
-                    Path(BACKTEST_METRICS_PATH).read_text(encoding="utf-8")
+                    owned_path(BACKTEST_METRICS_PATH).read_text(encoding="utf-8")
                 )
                 if str(candidate_metrics.get("model_name") or "").strip() == ACTIVE_MODEL_NAME:
                     metrics_data = candidate_metrics
@@ -394,15 +396,15 @@ class DashboardApplicationService:
                 metrics_data = None
         if metrics_data is None:
             return None, None, None, None
-        if Path(BACKTEST_NAV_PATH).exists():
-            nav_df = pd.read_csv(BACKTEST_NAV_PATH)
+        if owned_path(BACKTEST_NAV_PATH).exists():
+            nav_df = pd.read_csv(owned_path(BACKTEST_NAV_PATH))
             if "date" in nav_df.columns:
                 nav_df["date"] = pd.to_datetime(nav_df["date"])
-        if Path(BACKTEST_TRADES_PATH).exists():
-            trades_df = pd.read_csv(BACKTEST_TRADES_PATH, dtype={"code": str})
+        if owned_path(BACKTEST_TRADES_PATH).exists():
+            trades_df = pd.read_csv(owned_path(BACKTEST_TRADES_PATH), dtype={"code": str})
             trades_df["code"] = trades_df["code"].astype(str).str.zfill(6)
-        if Path(BACKTEST_DAILY_PREDICTIONS_PATH).exists():
-            predictions_df = pd.read_csv(BACKTEST_DAILY_PREDICTIONS_PATH, dtype={"code": str})
+        if owned_path(BACKTEST_DAILY_PREDICTIONS_PATH).exists():
+            predictions_df = pd.read_csv(owned_path(BACKTEST_DAILY_PREDICTIONS_PATH), dtype={"code": str})
             predictions_df["code"] = predictions_df["code"].astype(str).str.zfill(6)
             if "date" in predictions_df.columns:
                 predictions_df["date"] = pd.to_datetime(predictions_df["date"])
@@ -424,7 +426,7 @@ class DashboardApplicationService:
 
     @staticmethod
     def load_external_backtest_summary() -> pd.DataFrame:
-        path = Path(OUTPUT_DIR) / "backtests" / "backtest_summary.csv"
+        path = owned_path(OUTPUT_DIR) / "backtests" / "backtest_summary.csv"
         if not path.exists():
             return pd.DataFrame()
         try:
@@ -439,7 +441,7 @@ class DashboardApplicationService:
     def load_external_daily_returns(model_name: str, topk: int) -> pd.DataFrame:
         if str(model_name or "").strip() != ACTIVE_MODEL_NAME:
             return pd.DataFrame()
-        path = Path(OUTPUT_DIR) / "backtests" / f"{model_name}_top{int(topk)}_daily_returns.csv"
+        path = owned_path(OUTPUT_DIR) / "backtests" / f"{model_name}_top{int(topk)}_daily_returns.csv"
         if not path.exists():
             return pd.DataFrame()
         try:
@@ -452,7 +454,7 @@ class DashboardApplicationService:
 
     @staticmethod
     def load_latest_raw_data() -> pd.DataFrame:
-        path = Path(LATEST_RAW_DATA_PATH)
+        path = owned_path(LATEST_RAW_DATA_PATH)
         if not path.exists():
             return pd.DataFrame()
         frame = pd.read_csv(path, dtype={"code": str})
@@ -480,15 +482,15 @@ class DashboardApplicationService:
         return [
             {
                 "项目": str(label),
-                "状态": "已生成" if Path(path).exists() else "未生成",
-                "路径": str(Path(path)),
+                "状态": "已生成" if owned_path(path).exists() else "未生成",
+                "路径": str(owned_path(path)),
             }
             for label, path in items
         ]
 
     @staticmethod
     def rag_ready() -> bool:
-        return Path(RAG_DOCUMENTS_PATH).exists() and Path(RAG_INDEX_PATH).exists()
+        return owned_path(RAG_DOCUMENTS_PATH).exists() and owned_path(RAG_INDEX_PATH).exists()
 
     @staticmethod
     def load_external_model_status(
@@ -533,7 +535,7 @@ class DashboardApplicationService:
 
         def cache_status(cache_path: str | Path, usecols: list[str], *, index: bool = False) -> dict[str, Any]:
             result: dict[str, Any] = {
-                "exists": Path(cache_path).exists(),
+                "exists": owned_path(cache_path).exists(),
                 "path": str(cache_path),
                 "rows": 0,
                 "date_min": "",
