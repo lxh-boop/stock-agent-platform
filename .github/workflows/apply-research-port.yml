@@ -112,8 +112,65 @@ jobs:
           source = source.replace('tests/integration/test_strategy_backtest_postgres.py\n', 'tests/integration/test_strategy_backtest_postgres.py tests/integration/test_alpha158_postgres.py tests/integration/test_account_datasets_postgres.py\n')
           path.write_text(source, encoding='utf-8')
           print('Shared initialization fixed; no business assertions removed')
+          def replace_one(path, old, new):
+              target = Path(path)
+              source = target.read_text(encoding='utf-8')
+              assert source.count(old) == 1, (path, old)
+              target.write_text(source.replace(old, new), encoding='utf-8')
+          page = 'frontend/src/pages/dashboard/BacktestPage.tsx'
+          replace_one(page,
+              'const values=await form.validateFields(), spec=toStudySpec(values,kind)',
+              'await form.validateFields()\n    // 折叠面板尚未挂载的参数也必须保留，校验结果只含已注册字段。\n    const spec=toStudySpec(form.getFieldsValue(true),kind)')
+          replace_one(page,
+              'const values=await form.validateFields(),spec=toBacktestSpec(values)',
+              'await form.validateFields()\n    const spec=toBacktestSpec(form.getFieldsValue(true))')
+          utils = 'frontend/src/utils/backtest.ts'
+          replace_one(utils, "bt.sizing?.proportions.join(', ')", "bt.sizing?.proportions?.join(', ')")
+          replace_one(utils, 'if (pool_schedule_text?.trim()) {\n    try { pool = JSON.parse(pool_schedule_text) }',
+              "if (pool_schedule_text !== undefined) {\n    try { pool = pool_schedule_text.trim() ? JSON.parse(pool_schedule_text) : [] }")
+          watch = 'frontend/src/components/dashboard/ResearchForm.tsx'
+          for expression in ("['weighting', 'method']", "['sizing', 'method']", "'timing_enabled'"):
+              replace_one(watch, f'Form.useWatch({expression}, form)', f'Form.useWatch({expression}, {{ form, preserve: true }})')
+          tests = Path('frontend/src/tests/backtest.test.ts')
+          tests.write_text(tests.read_text(encoding='utf-8') + '''
+
+          it('imports omitted optional sizing proportions without crashing', () => {
+            const partial = { ...form, sizing: { method: 'factor', field: 'MA5' } }
+            expect(fromStudySpec(partial as Parameters<typeof fromStudySpec>[0]).proportions_text).toBe('')
+          })
+
+          it('clears inherited historical membership snapshots when the editor is emptied', () => {
+            const value = { ...form, pool_schedule: [{ as_of: '2026-01-01', stock_codes: ['000001'] }] }
+            expect(toBacktestSpec({ ...fromStudySpec(value), ...form, pool_schedule: value.pool_schedule, pool_schedule_text: '' }).pool_schedule).toEqual([])
+          })
+          ''', encoding='utf-8')
+          browser = 'tests/browser/test_strategy_research_browser.py'
+          replace_one(browser, "    page,calls,strategies=browser_page\n    page.get_by_role('button',name='另存为新策略')", """    page,calls,strategies=browser_page
+              # 高级折叠面板始终保持关闭，验证保存和再次编辑不能丢失导入参数。
+              page.get_by_role('button',name='导入 / 查看 JSON 参数').click()
+              dialog=page.get_by_role('dialog')
+              dialog.locator('textarea').fill(json.dumps(SPEC,ensure_ascii=False))
+              dialog.get_by_role('button',name='应用到表单').click()
+              page.get_by_role('button',name='另存为新策略')""")
+          replace_one(browser, '    assert len(strategies)==1\n', """    assert len(strategies)==1
+              assert strategies[0]['spec']['weighting']==SPEC['weighting']
+              assert strategies[0]['spec']['sizing']==SPEC['sizing']
+              assert strategies[0]['spec']['timing']==SPEC['timing']
+          """)
+          replace_one(browser, "    assert strategies[0]['spec']['name']=='编辑后的个人策略'\n", """    assert strategies[0]['spec']['name']=='编辑后的个人策略'
+              assert strategies[0]['spec']['weighting']==SPEC['weighting']
+              assert strategies[0]['spec']['sizing']==SPEC['sizing']
+              assert strategies[0]['spec']['timing']==SPEC['timing']
+          """)
+          replace_one(browser, "    assert request['spec']['start_date']==request['spec']['end_date']\n", """    assert request['spec']['start_date']==request['spec']['end_date']
+              assert request['spec']['weighting']==SPEC['weighting']
+              assert request['spec']['sizing']==SPEC['sizing']
+              assert request['spec']['timing']==SPEC['timing']
+          """)
+          ast.parse(Path(browser).read_text(encoding='utf-8'))
+          print('Fixed unmounted advanced fields in submissions and saves; strengthened browser regression assertions')
           PY
-          git add agent_graph/services/strategy_implementation_service.py tests/integration .github/workflows/strategy-backtest-tests.yml
+          git add agent_graph/services/strategy_implementation_service.py tests/integration .github/workflows/strategy-backtest-tests.yml frontend/src/pages/dashboard/BacktestPage.tsx frontend/src/components/dashboard/ResearchForm.tsx frontend/src/utils/backtest.ts frontend/src/tests/backtest.test.ts tests/browser/test_strategy_research_browser.py
           git diff --cached --check
           git diff --cached --stat | tee validation-results/changes.txt
       - name: Install offline test dependencies
