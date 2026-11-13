@@ -18,15 +18,7 @@ USERS = ('factor_alice', 'factor_bob')
 
 
 @pytest.fixture(scope='module', autouse=True)
-def schema():
-    psycopg = pytest.importorskip('psycopg')
-    from database.postgres_config import PostgresSettings
-    settings = PostgresSettings.from_env()
-    assert settings.database == 'stock_test_isolation', 'Refuse non-test database'
-    script = (Path(__file__).resolve().parents[2] / 'database/postgres_migrations/001_baseline.sql').read_text()
-    script = '\n'.join(line for line in script.splitlines() if not line.startswith('\\'))
-    with psycopg.connect(**settings.connection_kwargs()) as conn:
-        conn.execute(script)
+def schema(isolated_postgres_schema):
     yield
 
 

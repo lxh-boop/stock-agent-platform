@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent_graph.services.strategy_backtest_service import StrategyBacktestService
 from agent_graph.services.strategy_implementation_service import (
     StrategyImplementation,
     StrategyImplementationService,
@@ -68,7 +67,6 @@ class StrategyReviewService:
             runtime_dir=runtime_dir,
         )
         self.validator = StrategyValidationService()
-        self.backtester = StrategyBacktestService()
         self.project_root = Path(project_root).resolve()
 
     def validate_and_preview(
@@ -119,19 +117,12 @@ class StrategyReviewService:
             },
         }
         semantic_change_required = config_result["status"] != "passed"
-        backtest = (
-            self.backtester.run(config)
-            if test_result["status"] == "passed"
-            else {
-                "status": "blocked",
-                "reason": "validation_failed",
-                "tradeoffs": [],
-                "isolation": {
-                    "writes_formal_account": False,
-                    "writes_formal_outputs": False,
-                },
-            }
-        )
+        backtest = {
+            "status": "blocked",
+            "reason": "旧配置/生成插件的固定收益比较已删除；它不是因子回测规格，不能自动标记回测通过。请使用策略回测页面或 run_strategy_backtest。",
+            "tradeoffs": [],
+            "isolation": {"writes_formal_account": False, "writes_formal_outputs": False},
+        }
         formal_hashes_before = self._formal_hashes()
         (root / "security_report.json").write_text(
             json.dumps(

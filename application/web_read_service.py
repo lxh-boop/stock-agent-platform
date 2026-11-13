@@ -438,19 +438,6 @@ class WebReadApplicationService:
             "read_only": True,
         }
 
-    def backtest_bundle(self) -> dict[str, Any]:
-        from application.dashboard_service import dashboard_service
-
-        nav, metrics, trades, predictions = dashboard_service.load_backtest_outputs()
-        return {
-            "backtest_id": "latest",
-            "available": nav is not None and not getattr(nav, "empty", True),
-            "metrics": metrics or {},
-            "equity": nav if nav is not None else [],
-            "trades": trades if trades is not None else [],
-            "predictions": predictions if predictions is not None else [],
-        }
-
     def news_events(
         self,
         *,

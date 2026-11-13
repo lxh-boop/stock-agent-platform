@@ -33,6 +33,10 @@ _MAIN_RECURSION_LIMIT = 48
 # interrupt; resume with {"type": "approve" | "reject", "message": str}).
 GATED_WRITE_TOOLS = (
     "confirm_pending_proposal",
+    "run_strategy_backtest",
+    "analyze_factors",
+    "screen_factor_strategy",
+    "save_factor_strategy",
     "database_write_portfolio_graph_context",
     "database_write_evidence_graph_context",
 )

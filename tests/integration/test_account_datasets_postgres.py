@@ -8,17 +8,7 @@ import pytest
 pytestmark = pytest.mark.skipif(os.environ.get("STOCK_TEST_DATABASE") != "1", reason="requires isolated test database")
 
 @pytest.fixture(scope="module", autouse=True)
-def initialize_schema():
-    psycopg = pytest.importorskip("psycopg")
-    from database.postgres_config import PostgresSettings
-    settings = PostgresSettings.from_env()
-    assert settings.database == "stock_test_isolation", "Refuse non-test database"
-    root = Path(__file__).resolve().parents[2]
-    sql = (root / "database/postgres_migrations/001_baseline.sql").read_text()
-    sql = "\n".join(line for line in sql.splitlines() if not line.startswith("\\"))
-    with psycopg.connect(**settings.connection_kwargs()) as conn:
-        conn.execute(sql)
-        conn.commit()
+def initialize_schema(isolated_postgres_schema):
     from database.auth_schema import ensure_auth_schema
     ensure_auth_schema()
     yield

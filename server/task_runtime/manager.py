@@ -24,7 +24,7 @@ ALLOWED_TASK_TYPES = {
     "diagnostic.flaky",
     "agent.run",
     "dashboard.rolling_update",
-    "dashboard.backtest",
+    "backtest.run",
     "paper-trading.update",
     "paper-trading.backfill",
     "paper-profile.ai-news-adjustment",

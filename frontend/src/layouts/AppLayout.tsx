@@ -44,7 +44,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               { key: 'model-group', label: '模型与回测', children: [
                 { key: '/models/metrics', label: '模型指标' },
                 { key: '/models/search', label: '模型搜索结果' },
-                { key: '/backtests', label: '回测分析' },
+                { key: '/backtests', label: '策略研究' },
               ] },
               { key: '/news', label: '新闻事件' },
               { key: '/paper-trading', label: 'AI 模拟盘' },

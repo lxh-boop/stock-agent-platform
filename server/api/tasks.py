@@ -168,6 +168,21 @@ def submit_task(request: TaskSubmitRequest, user: AuthUser = Depends(require_use
             return _success(submit_personal_daily(user.user_id, session_id=request.session_id))
         except Exception as exc:
             return _failure(exc)
+    if request.task_type == "backtest.run":
+        from backtesting.contracts import BacktestRequest, AnalysisRequest, ScreenRequest
+        from application.backtest_service import BacktestService
+        from core.user_scope import user_scope
+        try:
+            kind = kwargs.pop("kind", "backtest")
+            request_cls = {"backtest": BacktestRequest, "analysis": AnalysisRequest, "screen": ScreenRequest}.get(kind)
+            if request_cls is None:
+                raise ValueError("unknown_research_task_kind")
+            spec_request = request_cls.model_validate(kwargs)
+            with user_scope(user.user_id):
+                return _success(BacktestService.submit(spec_request.spec.model_dump(mode="json"),
+                                                      request_id=str(spec_request.request_id), kind=kind))
+        except (ValueError, RuntimeError) as exc:
+            return _failure(exc)
     if request.task_type == "agent.run":
         # Browser clients submit only business identifiers. Server-owned paths and
         # identity fields are injected here so they cannot drift across surfaces.
@@ -234,8 +249,7 @@ def list_tasks(
     limit: int = 20,
 ) -> OperationResponse:
     # 归属强制：普通用户只能看到自己的任务，客户端传入的 owner_id 被忽略。
-    if user.role != "admin":
-        owner_id = user.user_id
+    owner_id = user.user_id
     try:
         return _success(task_manager.store.list(
             owner_id=owner_id,
@@ -255,7 +269,7 @@ def _require_owned_task(task_id: str, user: AuthUser) -> dict[str, Any]:
     except KeyError:
         raise HTTPException(status_code=404, detail="task_not_found")
     owner = str(task.get("owner_id") or "")
-    if owner != user.user_id and not (user.role == "admin"):
+    if owner != user.user_id:
         raise HTTPException(status_code=403, detail="task_forbidden")
     return task
 

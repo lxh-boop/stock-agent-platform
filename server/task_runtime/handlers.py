@@ -150,13 +150,16 @@ def execute_task(
             except Exception:
                 pass
 
-    if task_type == "dashboard.backtest":
-        from application.dashboard_service import run_latest_t1_backtest
-
-        emit("stage", {"progress": 0.05, "message": "正在检查行情并运行 T+1 回测"})
-        result = run_latest_t1_backtest(*args, **kwargs)
-        emit("stage", {"progress": 0.95, "message": "回测已完成，正在保存结果"})
-        return result
+    if task_type == "backtest.run":
+        from application.backtest_service import BacktestService
+        emit("stage", {"progress": 0.02, "message": "正在读取本人因子库的一致快照"})
+        return BacktestService.run(
+            kwargs["spec"], run_id=kwargs["run_id"], kind=kwargs.get("kind", "backtest"), cancelled=is_cancelled,
+            on_progress=lambda day: emit("progress", {
+                "progress": min(0.94, 0.05 + day / 1300 * 0.89),
+                "message": f"已模拟 {day} 个交易日（本人数据）",
+            }),
+        )
 
     if task_type == "paper-trading.update":
         from application.paper_trading_service import (
