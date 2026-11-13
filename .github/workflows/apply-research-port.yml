@@ -66,9 +66,14 @@ jobs:
                   lines[node.lineno-1:node.end_lineno] = [fixed]
           path.write_text(''.join(lines), encoding='utf-8')
           ast.parse(path.read_text(encoding='utf-8'))
-          print('Strategy preview validation complete')
+          path = Path('backtesting/store.py')
+          source = path.read_text(encoding='utf-8')
+          source, fixed = re.subn(r'''raise ValueError\((['"])strategy_owner_mismatch\1\)''', "raise KeyError('strategy_not_found')", source)
+          path.write_text(source, encoding='utf-8')
+          ast.parse(source)
+          print(f'Strategy preview validated; cross-owner not-found fixes: {fixed}')
           PY
-          git add agent_graph/services/strategy_implementation_service.py
+          git add agent_graph/services/strategy_implementation_service.py backtesting/store.py
           git diff --cached --stat
       - name: Install offline test dependencies
         run: python -m pip install pytest pandas numpy pydantic requests pyyaml jsonschema cryptography fastapi httpx 'psycopg[binary]>=3.2,<4' 'langchain>=1,<2' 'langchain-openai>=1,<2' 'langgraph>=1,<2' 'langgraph-checkpoint-postgres>=2,<4' 'neo4j>=6,<7' 'mcp>=2,<3'
