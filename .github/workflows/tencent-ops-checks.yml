@@ -1,0 +1,33 @@
+name: Tencent operations offline tests
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/actions/**'
+      - '.github/workflows/tencent-*.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/actions/**'
+      - '.github/workflows/tencent-*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fetch public source without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch -q --depth=1 origin "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
+      - name: Compile gateway and installer
+        run: python3 -m py_compile deploy/actions/server_gateway.py deploy/actions/install_gateway.py
+      - name: Test command allowlist, archives and private diagnostics
+        run: python3 -m unittest discover -s deploy/actions -p 'test_*.py' -v
