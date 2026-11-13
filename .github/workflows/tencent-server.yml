@@ -1,0 +1,90 @@
+name: Tencent Server Operations
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'check=connection/status; diagnose=safe categories; deploy=update API/frontend'
+        required: true
+        default: check
+        type: choice
+        options: [check, diagnose, deploy]
+      revision:
+        description: 'deploy only: full 40-character reviewed commit SHA from this repository'
+        required: false
+        type: string
+      confirmation:
+        description: 'deploy only: type DEPLOY after reviewing the exact revision'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tencent-production-operations
+  cancel-in-progress: false
+
+jobs:
+  operate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: production
+    steps:
+      - name: Validate selection and prepare source without production credentials
+        env:
+          OPERATION: ${{ inputs.operation }}
+          REVISION: ${{ inputs.revision }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$OPERATION" in check|diagnose|deploy) ;; *) exit 2 ;; esac
+          if [ "$OPERATION" = deploy ]; then
+            [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]] || { echo 'A full lowercase commit SHA is required.'; exit 2; }
+            [ "$CONFIRMATION" = DEPLOY ] || { echo 'Confirmation must be DEPLOY.'; exit 2; }
+            mkdir "$RUNNER_TEMP/source"
+            git -C "$RUNNER_TEMP/source" init -q
+            git -C "$RUNNER_TEMP/source" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+            git -C "$RUNNER_TEMP/source" fetch -q --depth=1 origin "$REVISION"
+            actual=$(git -C "$RUNNER_TEMP/source" rev-parse FETCH_HEAD)
+            [ "$actual" = "$REVISION" ] || exit 2
+            git -C "$RUNNER_TEMP/source" archive --format=tar.gz -o "$RUNNER_TEMP/source.tar.gz" "$actual"
+            echo "Reviewed source revision: $actual" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Connect using pinned host identity and restricted deployment key
+        env:
+          OPERATION: ${{ inputs.operation }}
+          REVISION: ${{ inputs.revision }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
+          SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo 'Invalid SSH_USER.'; exit 2; }
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { echo 'Invalid SSH_HOST (IPv4 or DNS only).'; exit 2; }
+          [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] || exit 2
+          [[ "$SSH_HOST_KEY" =~ ^ssh-ed25519\ [A-Za-z0-9+/=]+$ ]] || { echo 'SSH_HOST_KEY must contain exactly: ssh-ed25519 BASE64'; exit 2; }
+          key_dir=$(mktemp -d "$RUNNER_TEMP/stock-ssh.XXXXXX")
+          trap 'rm -rf -- "$key_dir"' EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$key_dir/key"
+          printf 'stock-production %s\n' "$SSH_HOST_KEY" > "$key_dir/known_hosts"
+          unset SSH_PRIVATE_KEY
+          ssh-keygen -y -P '' -f "$key_dir/key" > /dev/null
+          options=(-i "$key_dir/key" -p "$SSH_PORT" -T -o BatchMode=yes
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+            -o HostKeyAlias=stock-production -o HostKeyAlgorithms=ssh-ed25519
+            -o UserKnownHostsFile="$key_dir/known_hosts"
+            -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+          if [ "$OPERATION" = deploy ]; then
+            checksum=$(sha256sum "$RUNNER_TEMP/source.tar.gz" | cut -d ' ' -f1)
+            ssh "${options[@]}" "$SSH_USER@$SSH_HOST" "deploy $REVISION $checksum" < "$RUNNER_TEMP/source.tar.gz"
+          else
+            ssh "${options[@]}" "$SSH_USER@$SSH_HOST" "$OPERATION"
+          fi
+          echo "Operation completed: $OPERATION. Raw server logs were not published." >> "$GITHUB_STEP_SUMMARY"
