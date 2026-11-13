@@ -49,6 +49,16 @@ jobs:
           PY
           git apply --check "$RUNNER_TEMP/migration.patch"
           git apply --index --whitespace=error-all "$RUNNER_TEMP/migration.patch"
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('agent_graph/services/strategy_implementation_service.py')
+          source = path.read_text(encoding='utf-8')
+          before = '"status": "blocked",\n            "baseline_config": baseline_config,'
+          after = '"status": "blocked",\n            "baseline_config": raw_config,'
+          assert source.count(before) == 1, 'preview fix must match exactly once'
+          path.write_text(source.replace(before, after), encoding='utf-8')
+          PY
+          git add agent_graph/services/strategy_implementation_service.py
           git diff --cached --stat
       - name: Install offline test dependencies
         run: python -m pip install pytest pandas numpy pydantic requests pyyaml jsonschema cryptography fastapi httpx 'psycopg[binary]>=3.2,<4' 'langchain>=1,<2' 'langchain-openai>=1,<2' 'langgraph>=1,<2' 'langgraph-checkpoint-postgres>=2,<4' 'neo4j>=6,<7' 'mcp>=2,<3'
@@ -60,6 +70,8 @@ jobs:
           tests/unit/test_strategy_engine.py tests/unit/test_strategy_research.py
           tests/unit/test_strategy_backtest_api.py tests/unit/test_strategy_backtest_tools.py
           tests/unit/test_agent_graph_engine.py tests/unit/test_agent_graph_writes.py
+          tests/unit/test_agent_strategy_implementation.py tests/unit/test_agent_strategy_review.py
+          tests/unit/test_agent_strategy_proposal_dependencies.py
           tests/unit/test_personal_daily_isolation.py tests/unit/test_account_scoped_credentials.py
           tests/unit/test_scheduler_trading_calendar.py tests/unit/test_scheduler_job_state.py
           tests/unit/test_scheduler_job_lock.py tests/unit/test_alpha158_storage.py
@@ -100,6 +112,11 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/REVISION.txt"
           git archive --format=tar.gz -o "$RUNNER_TEMP/source.tar.gz" HEAD
           echo "Published tested revision $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve source for failed-test diagnosis without publishing it
+        if: failure()
+        run: |
+          git archive --format=tar.gz -o "$RUNNER_TEMP/source.tar.gz" "$(git write-tree)"
+          echo 'UNPUBLISHED: tests did not all pass' > "$RUNNER_TEMP/REVISION.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
