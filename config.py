@@ -15,6 +15,11 @@ from core.config.paths import (
 
 
 def _mode_path(path, dev_value: str) -> str:
+    from core.user_scope import current_owner, owned_path
+    if current_owner():
+        if dev_value in {"data", "outputs", "logs", "runtime", "."}:
+            return str(owned_path(dev_value))
+        return str(path)
     return str(path) if is_frozen_app() else dev_value
 
 
@@ -233,6 +238,8 @@ ACTIVE_RANKING_MODEL_METRICS_PATH = os.path.join(
     ACTIVE_RANKING_MODEL_DIR,
     "metrics.json",
 )
+from core.user_scope import owned_path as _owned_path
+ACTIVE_RANKING_MODEL_METRICS_PATH = str(_owned_path(ACTIVE_RANKING_MODEL_METRICS_PATH))
 ACTIVE_RANKING_FEATURE_DIR = os.path.join(DATA_DIR, "model_precision", "tushare")
 
 # 旧运行时仍可读取这些名字；正式业务代码不再依赖它们。

@@ -31,12 +31,13 @@ class PostgresStore:
     PostgreSQL is the single authoritative read/write boundary.
     """
 
-    def __init__(self, *, runtime: bool = False) -> None:
+    def __init__(self, *, runtime: bool = False, scoped: bool = True) -> None:
         self.runtime = bool(runtime)
+        self.scoped = bool(scoped)
         self.settings = PostgresSettings.from_env()
 
     def _connect(self):
-        return get_connection(runtime=self.runtime)
+        return get_connection(runtime=self.runtime, scoped=self.scoped)
 
     @contextmanager
     def transaction(self) -> Iterator[object]:

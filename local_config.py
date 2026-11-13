@@ -159,6 +159,10 @@ def _write_payload(path: Path, cfg: Dict[str, Any]) -> None:
 
 
 def load_local_config() -> Dict[str, Any]:
+    from core.user_scope import current_owner
+    if current_owner():
+        from application.user_credentials_service import runtime_config_for_user
+        return runtime_config_for_user(current_owner())
     path = Path(LOCAL_CONFIG_PATH)
     if not path.exists():
         return _legacy_compatible_view(_merge_local_secret_store(DEFAULT_LOCAL_CONFIG))
@@ -185,6 +189,9 @@ def save_local_config(config: Dict[str, Any]) -> None:
     blank secret fields so Git/build artifacts cannot capture credentials.
     """
 
+    from core.user_scope import current_owner
+    if current_owner():
+        raise ValueError("use_personal_settings_api")
     input_config = dict(config or {})
     cfg = _normalise_config(input_config)
     store = LocalSecretStore()

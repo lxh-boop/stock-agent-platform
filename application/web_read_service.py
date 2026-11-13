@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import hashlib
 import math
 from datetime import date, datetime
@@ -299,7 +301,7 @@ class WebReadApplicationService:
         ]
         rows: list[dict[str, Any]] = []
         for key, label, raw_path in items:
-            path = Path(raw_path)
+            path = owned_path(raw_path)
             exists = bool(raw_path) and path.exists()
             stat = path.stat() if exists else None
             rows.append(
@@ -434,19 +436,6 @@ class WebReadApplicationService:
             "selected_strategy": service.load_selected_strategy(),
             "discovery_report": service.load_model_discovery_report(),
             "read_only": True,
-        }
-
-    def backtest_bundle(self) -> dict[str, Any]:
-        from application.dashboard_service import dashboard_service
-
-        nav, metrics, trades, predictions = dashboard_service.load_backtest_outputs()
-        return {
-            "backtest_id": "latest",
-            "available": nav is not None and not getattr(nav, "empty", True),
-            "metrics": metrics or {},
-            "equity": nav if nav is not None else [],
-            "trades": trades if trades is not None else [],
-            "predictions": predictions if predictions is not None else [],
         }
 
     def news_events(

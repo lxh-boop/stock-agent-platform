@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 from pathlib import Path
 from typing import Any
 from collections import OrderedDict
@@ -108,7 +110,7 @@ class RagRepository:
         top_k: int = 5,
         output_dir: str | Path = "outputs",
     ) -> list[dict[str, Any]]:
-        index_dir = Path(output_dir) / "rag_indexes"
+        index_dir = owned_path(output_dir) / "rag_indexes"
         signature = self._index_signature(index_dir)
         final_rerank_limit = 5
         cache_key = (*signature, str(stock_code), str(query), final_rerank_limit)

@@ -46,6 +46,19 @@ def _ranking_signal_date(db_path: str | Path | None) -> str:
     return str((rows[0] if rows else {}).get("trade_date") or "")[:10]
 
 
+def _process_failure_details(path: Path) -> str:
+    from scheduler.runtime_scheduler import _safe_scheduler_error
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - 8192))
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+        details = "\n".join(line for line in lines[-12:] if line.strip())
+        return _safe_scheduler_error(details)
+    except OSError:
+        return "未能读取子进程错误日志"
+
+
 def run_market_update_from_local_config(
     *,
     trade_date: str,
@@ -92,7 +105,8 @@ def run_market_update_from_local_config(
     timeout_seconds = max(1, int(config.get("scheduler_market_update_timeout_seconds") or 997200))
 
     project_root = Path(root).resolve()
-    script = project_root / "daily_incremental_update.py"
+    from core.config.paths import get_project_root
+    script = get_project_root() / "daily_incremental_update.py"
     if not script.exists():
         raise FileNotFoundError(f"daily_incremental_update.py not found: {script}")
 
@@ -103,6 +117,8 @@ def run_market_update_from_local_config(
         model_version,
         "--model-backend",
         model_backend,
+        "--trade-date",
+        trade_date,
     ]
 
     log_dir = project_root / SCHEDULER_LOG_DIR
@@ -127,7 +143,7 @@ def run_market_update_from_local_config(
     if completed.returncode != 0:
         raise RuntimeError(
             f"daily_incremental_update failed with return code {completed.returncode}; "
-            f"see {stderr_path}"
+            f"see {stderr_path}; {_process_failure_details(stderr_path)}"
         )
 
     signal_date = _ranking_signal_date(db_path)
@@ -287,7 +303,8 @@ def run_news_refresh_and_rebuild(
             },
         }
 
-    script = project_root / "scripts" / "refresh_news_rag_fulltext.py"
+    from core.config.paths import get_project_root
+    script = get_project_root() / "scripts" / "refresh_news_rag_fulltext.py"
     if not script.exists():
         raise FileNotFoundError(f"full-text news/RAG refresh script not found: {script}")
 
@@ -348,7 +365,7 @@ def run_news_refresh_and_rebuild(
         )
     if completed.returncode != 0:
         raise RuntimeError(
-            f"news/RAG refresh failed with return code {completed.returncode}; see {stderr_path}"
+            f"news/RAG refresh failed with return code {completed.returncode}; see {stderr_path}; {_process_failure_details(stderr_path)}"
         )
 
     after_events, after_chunks = _count_news(resolved_db)

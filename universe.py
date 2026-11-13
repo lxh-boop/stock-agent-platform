@@ -1,6 +1,8 @@
 # universe
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import calendar
 import os
 import tempfile
@@ -137,7 +139,7 @@ def _normalize_pool_frame(
 
 
 def _atomic_write_csv(frame: pd.DataFrame, path: str) -> None:
-    destination = Path(path)
+    destination = owned_path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     fd, temporary_name = tempfile.mkstemp(
@@ -165,14 +167,14 @@ def _save_pool_cache(frame: pd.DataFrame) -> None:
 
 
 def _cache_age_days(path: str) -> float:
-    modified = datetime.fromtimestamp(Path(path).stat().st_mtime)
+    modified = datetime.fromtimestamp(owned_path(path).stat().st_mtime)
     return max(0.0, (datetime.now() - modified).total_seconds() / 86400.0)
 
 
 def load_cached_csi300_pool(
     path: str | None = None,
 ) -> dict[str, str]:
-    cache_path = path or CSI300_POOL_CACHE_PATH
+    cache_path = owned_path(path or CSI300_POOL_CACHE_PATH)
     if not os.path.exists(cache_path):
         raise FileNotFoundError(cache_path)
 

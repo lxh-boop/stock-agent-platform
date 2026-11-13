@@ -238,12 +238,13 @@ REFLECTION_FUNCTIONS = {
 class LLMSettingsRegistry:
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._items: dict[str, Any] = {}
+        self._items: dict[tuple[str, str], Any] = {}
 
     def register(self, settings: Any) -> dict[str, Any]:
         token = uuid.uuid4().hex
         with self._lock:
-            self._items[token] = settings
+            from core.user_scope import current_owner
+            self._items[(current_owner(), token)] = settings
         return {
             "settings_token": token,
             "profile_id": str(settings.profile_id),
@@ -273,7 +274,8 @@ class LLMSettingsRegistry:
         token = str(payload.get("settings_token") or "")
         if token:
             with self._lock:
-                settings = self._items.get(token)
+                from core.user_scope import current_owner
+                settings = self._items.get((current_owner(), token))
             if settings is not None:
                 return settings
         profile_id = str(payload.get("profile_id") or "")

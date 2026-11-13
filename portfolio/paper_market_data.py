@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 from functools import lru_cache
 import os
 from pathlib import Path
@@ -77,7 +79,7 @@ def load_paper_ohlc_for_date(
     *,
     cache_path: str | Path = PAPER_MARKET_OHLC_CACHE_PATH,
 ) -> pd.DataFrame:
-    path = Path(cache_path)
+    path = owned_path(cache_path)
     if not path.is_file():
         return _empty()
     frame = _read_cache(str(path.resolve()), path.stat().st_mtime_ns)
@@ -92,7 +94,7 @@ def merge_paper_market_ohlc(
     cache_path: str | Path = PAPER_MARKET_OHLC_CACHE_PATH,
 ) -> dict[str, Any]:
     incoming = _normalized_frame(value, source=source)
-    path = Path(cache_path)
+    path = owned_path(cache_path)
     existing = (
         _normalized_frame(pd.read_csv(path, dtype={"code": str, "date": str}), source="paper_market_cache")
         if path.is_file()

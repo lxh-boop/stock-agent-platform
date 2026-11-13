@@ -97,6 +97,9 @@ def _auth_from_account(account: dict[str, Any]) -> AuthUser:
 
 
 def require_user(request: Request) -> AuthUser:
+    principal = getattr(request.state, "authenticated_principal", None)
+    if isinstance(principal, AuthUser):
+        return principal
     token = request.cookies.get(SESSION_COOKIE_NAME) or ""
     if not token:
         raise HTTPException(

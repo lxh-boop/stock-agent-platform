@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 from pathlib import Path
 from functools import lru_cache
 from uuid import uuid4
@@ -10,7 +12,7 @@ from storage_governance.lifecycle import prune_stale_atomic_temp_files
 
 
 def _atomic_save(save_func, path: str | Path) -> Path:
-    out_path = Path(path)
+    out_path = owned_path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     # The active BM25/Dense path remains the sole index source of truth. Remove
     # only stale temp siblings left by interrupted atomic saves.
@@ -62,7 +64,7 @@ def _load_hybrid_index_cached(
 
 
 def load_hybrid_index(index_dir: str | Path):
-    root = Path(index_dir)
+    root = owned_path(index_dir)
     bm25_path = root / "news_bm25.pkl"
     dense_path = root / "news_dense.pkl"
     if not bm25_path.exists() or not dense_path.exists():

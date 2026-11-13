@@ -24,7 +24,7 @@ ALLOWED_TASK_TYPES = {
     "diagnostic.flaky",
     "agent.run",
     "dashboard.rolling_update",
-    "dashboard.backtest",
+    "backtest.run",
     "paper-trading.update",
     "paper-trading.backfill",
     "paper-profile.ai-news-adjustment",
@@ -93,6 +93,12 @@ class TaskManager:
             max_retries=max(0, int(max_retries)),
         )
         env = os.environ.copy()
+        worker_cwd = Path.cwd()
+        if owner_id:
+            from core.user_scope import worker_environment, workspace
+            env = worker_environment(owner_id, env)
+            worker_cwd = workspace(owner_id)
+            worker_cwd.mkdir(parents=True, exist_ok=True)
         if secrets:
             env["STOCK_TASK_SECRET_B64"] = base64.b64encode(
                 json.dumps(secrets, ensure_ascii=False).encode("utf-8")
@@ -114,14 +120,14 @@ class TaskManager:
             start_new_session = True
         # Worker stdout/stderr must survive a crash that happens before the
         # worker can record an error itself (e.g. import or DB failures).
-        log_dir = Path("logs") / "task_workers"
+        log_dir = worker_cwd / "logs" / "task_workers"
         log_dir.mkdir(parents=True, exist_ok=True)
         worker_log = open(
             log_dir / f"{task_id}.log", "w", encoding="utf-8", buffering=1
         )
         process = subprocess.Popen(
             command,
-            cwd=str(Path.cwd()),
+            cwd=str(worker_cwd),
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=worker_log,

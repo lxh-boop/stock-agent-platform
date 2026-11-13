@@ -1,0 +1,27 @@
+name: Source deployment snapshot
+on:
+  push:
+    branches: [chatgpt]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only (no runtime data or secrets)
+        run: |
+          git archive --format=tar.gz -o "$RUNNER_TEMP/source.tar.gz" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/REVISION.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot
+          path: |
+            ${{ runner.temp }}/source.tar.gz
+            ${{ runner.temp }}/REVISION.txt
+          if-no-files-found: error
+          retention-days: 3

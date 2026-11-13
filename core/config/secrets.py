@@ -169,6 +169,13 @@ def resolve_secret(
     is authoritative.
     """
 
+    from core.user_scope import current_owner
+    if current_owner() and secret_id in {"llm_api_key", "tushare_token"}:
+        if explicit is not None and _text(explicit):
+            return SecretResolution(secret_id, _text(explicit), "account:explicit", False)
+        from application.user_credentials_service import private_credential_for_user
+        value = private_credential_for_user(current_owner(), secret_id)
+        return SecretResolution(secret_id, value, "account", False)
     source = env or os.environ
     if explicit is not None and _text(explicit):
         return SecretResolution(secret_id, _text(explicit), "runtime:explicit", False)

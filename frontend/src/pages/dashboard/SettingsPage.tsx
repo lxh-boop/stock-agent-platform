@@ -25,7 +25,6 @@ import { SchedulerStatusPanel } from '../../components/dashboard/SchedulerStatus
 import { EmptyState } from '../../components/common/EmptyState'
 import { PageHeader } from '../../components/common/PageHeader'
 import { PageLoading } from '../../components/common/PageLoading'
-import { useAuthStore } from '../../stores/authStore'
 import type { PublicSettings, SettingsUpdateRequest } from '../../types/settings'
 
 interface SettingsFormValues {
@@ -86,8 +85,6 @@ function configuredText(custom: boolean, fallback: boolean, configured: boolean)
 export function SettingsPage() {
   const queryClient = useQueryClient()
   const [form] = Form.useForm<SettingsFormValues>()
-  const user = useAuthStore((state) => state.user)
-  const isAdmin = user?.role === 'admin'
   const query = useQuery({ queryKey: ['web', 'settings'], queryFn: settingsApi.get })
 
   const settings = useMemo<PublicSettings | undefined>(() => query.data
@@ -150,7 +147,7 @@ export function SettingsPage() {
     const values = await form.validateFields()
     Modal.confirm({
       title: '确认保存运行配置？',
-      content: '配置会写入本机 local_app_config.json。密钥不会回显到浏览器，正在运行的任务不受影响。',
+      content: '个人配置将保存到你的账号记录；Token 会加密存储且不回显。更新计划也仅对当前账号生效。',
       okText: '确认保存',
       onOk: () => mutation.mutate(values),
     })
@@ -168,14 +165,7 @@ export function SettingsPage() {
         message="配置生效范围"
         description="保存后，下一次 Agent、新闻或行情任务会重新读取配置。正在运行的任务继续使用启动时的配置快照。"
       />
-      {!isAdmin ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="仅管理员可修改运行配置"
-          description="LLM、数据源与调度配置是平台级全局资源，当前账号为普通用户，只能查看。"
-        />
-      ) : null}
+      <Alert type="info" showIcon message="个人数据与任务" description="数据源、Token、更新计划和日更结果仅属于当前账号；所有普通用户都可以使用。" />
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
@@ -240,12 +230,12 @@ export function SettingsPage() {
               </Col>
               <Col xs={24} lg={12}>
                 <Form.Item label={`API 凭据（${configuredText(api.custom_configured, api.default_available, api.configured)}）`} name="api_credential">
-                  <Input type="password" autoComplete="new-password" placeholder="留空表示保留当前配置或继续使用默认配置" />
+                  <Input type="password" autoComplete="new-password" placeholder="留空表示保留我已保存的凭据" />
                 </Form.Item>
               </Col>
               <Col xs={24} lg={12}>
                 <Form.Item name="clear_api_credential" valuePropName="checked" label="凭据操作">
-                  <Checkbox>清除本地自定义凭据，改用环境默认配置</Checkbox>
+                  <Checkbox>清除我保存的 API Key（不使用其他人的凭据）</Checkbox>
                 </Form.Item>
               </Col>
             </Row>
@@ -274,18 +264,18 @@ export function SettingsPage() {
           <Row gutter={[16, 0]}>
             <Col xs={24} lg={12}>
               <Form.Item label={`Token（${configuredText(tushare.custom_configured, tushare.default_available, tushare.configured)}）`} name="tushare_credential">
-                <Input type="password" autoComplete="new-password" placeholder="留空表示保留当前配置或继续使用默认配置" />
+                <Input type="password" autoComplete="new-password" placeholder="留空表示保留我已保存的凭据" />
               </Form.Item>
             </Col>
             <Col xs={24} lg={12}>
               <Form.Item name="clear_tushare_credential" valuePropName="checked" label="Token 操作">
-                <Checkbox>清除本地自定义 Token，改用环境默认配置</Checkbox>
+                <Checkbox>清除我保存的 Tushare Token</Checkbox>
               </Form.Item>
             </Col>
           </Row>
         </Card>
 
-        <Card title="每日自动更新" style={{ marginTop: 16 }}>
+        <Card title="我的每日自动更新" style={{ marginTop: 16 }}>
           <Row gutter={[16, 0]}>
             <Col xs={24} lg={8}>
               <Form.Item name="scheduler_enabled" valuePropName="checked" label="计划任务">
@@ -316,7 +306,7 @@ export function SettingsPage() {
         </Card>
 
         <Space style={{ marginTop: 16 }}>
-          <Button type="primary" loading={mutation.isPending} onClick={submit} disabled={!isAdmin}>保存配置</Button>
+          <Button type="primary" loading={mutation.isPending} onClick={submit} >保存配置</Button>
           <Button onClick={() => void query.refetch()}>重新读取</Button>
         </Space>
       </Form>

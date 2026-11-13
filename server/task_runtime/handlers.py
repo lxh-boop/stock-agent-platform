@@ -150,13 +150,16 @@ def execute_task(
             except Exception:
                 pass
 
-    if task_type == "dashboard.backtest":
-        from application.dashboard_service import run_latest_t1_backtest
-
-        emit("stage", {"progress": 0.05, "message": "正在检查行情并运行 T+1 回测"})
-        result = run_latest_t1_backtest(*args, **kwargs)
-        emit("stage", {"progress": 0.95, "message": "回测已完成，正在保存结果"})
-        return result
+    if task_type == "backtest.run":
+        from application.backtest_service import BacktestService
+        emit("stage", {"progress": 0.02, "message": "正在读取本人因子库的一致快照"})
+        return BacktestService.run(
+            kwargs["spec"], run_id=kwargs["run_id"], kind=kwargs.get("kind", "backtest"), cancelled=is_cancelled,
+            on_progress=lambda day: emit("progress", {
+                "progress": min(0.94, 0.05 + day / 1300 * 0.89),
+                "message": f"已模拟 {day} 个交易日（本人数据）",
+            }),
+        )
 
     if task_type == "paper-trading.update":
         from application.paper_trading_service import (
@@ -192,9 +195,10 @@ def execute_task(
         return run_ai_news_adjustment_from_latest(*args, **kwargs)
 
     if task_type == "paper-profile.scheduler-manual":
-        from application.paper_profile_service import start_scheduler_manual_run
-
         emit("stage", {"progress": 0.08, "message": "正在执行调度器手动任务"})
-        return start_scheduler_manual_run(*args, **kwargs)
+        from core.user_scope import current_owner
+        from application.user_daily_service import run_personal_daily
+        return run_personal_daily(current_owner(), force=bool(kwargs.get("force", True)),
+                                  source=str(kwargs.get("source") or "manual"))
 
     raise KeyError(f"Unsupported task type: {task_type}")

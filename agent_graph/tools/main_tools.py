@@ -198,7 +198,6 @@ _READ_TOOL_IDS = [
     "internal.ranking.get_latest",
     "internal.entity.resolve_ranked_security",
     "internal.model.get_metrics",
-    "internal.backtest.get_summary",
     "internal.strategy.get_selected",
     "internal.portfolio.get_state",
     "internal.account.get_state",
@@ -214,7 +213,6 @@ _TOOL_PURPOSE = {
     "internal.ranking.get_latest": "读取最新全市场模型排名",
     "internal.entity.resolve_ranked_security": "把排名记录解析成权威 GraphRef 身份",
     "internal.model.get_metrics": "读取模型质量指标",
-    "internal.backtest.get_summary": "读取回测摘要",
     "internal.strategy.get_selected": "读取当前选定策略",
     "internal.portfolio.get_state": "读取当前模拟盘组合与持仓",
     "internal.account.get_state": "读取账户状态",
@@ -276,6 +274,8 @@ def build_read_tools(registry: Any, context: dict[str, Any]) -> list[StructuredT
     risk_tool = _risk_analyzer_tool(context)
     if risk_tool is not None:
         tools.append(risk_tool)
+    from agent_graph.tools.backtest_tools import build_backtest_tools
+    tools.extend(build_backtest_tools(context))
     return tools
 
 

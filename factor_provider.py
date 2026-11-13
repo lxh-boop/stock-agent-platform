@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,7 +106,7 @@ def load_raw_data(
     *,
     source_numeric_dtype: str | None = None,
 ) -> pd.DataFrame:
-    raw_path = Path(path)
+    raw_path = owned_path(path)
     if not raw_path.is_file():
         raise FileNotFoundError(f"raw market data not found: {raw_path}")
     frame = pd.read_csv(
@@ -126,8 +128,8 @@ def alpha158_from_file(
 ) -> pd.DataFrame:
     """Read authoritative raw data and recompute Alpha158 for this call.
 
-    Derived Alpha158 values are never persisted and never reused through an
-    in-process factor cache.
+    This explicit offline/training API remains a pure computation. Live daily
+    values are persisted by factor_storage and read through latest_alpha158.
     """
     raw = load_raw_data(
         path,
@@ -143,19 +145,16 @@ def latest_alpha158(
     *,
     recent_trading_days: int = DEFAULT_RECENT_TRADING_DAYS,
 ) -> pd.DataFrame:
-    # Latest cache is produced by the daily CSV/Tushare merge path and must
-    # retain pandas' native float64 CSV-read semantics observed in production.
-    return alpha158_from_file(
-        LATEST_RAW_DATA_PATH,
-        output_trading_days=recent_trading_days,
-    )
+    # 正式推理读取数据库，不静默退回全历史重算；未初始化时提示先运行个人日更。
+    from factor_storage import load_stored_alpha158
+    return load_stored_alpha158(recent_trading_days=recent_trading_days)
 
 
 def training_raw_path() -> Path:
-    train = Path(TRAIN_RAW_DATA_PATH)
+    train = owned_path(TRAIN_RAW_DATA_PATH)
     if train.is_file():
         return train
-    raw = Path(RAW_DATA_PATH)
+    raw = owned_path(RAW_DATA_PATH)
     if raw.is_file():
         return raw
     raise FileNotFoundError(f"training raw data not found: {train} or {raw}")

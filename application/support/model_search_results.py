@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import json
 import time
 from pathlib import Path
@@ -32,8 +34,9 @@ def load_selected_strategy() -> dict:
 
 
 def save_selected_strategy(strategy: dict) -> None:
-    SELECTED_STRATEGY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SELECTED_STRATEGY_PATH.write_text(
+    path = owned_path(SELECTED_STRATEGY_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
         json.dumps(strategy, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -45,7 +48,7 @@ def resolve_output_path(value) -> Path | None:
     text = str(value).strip()
     if not text:
         return None
-    return project_path(text)
+    return owned_path(project_path(text))
 
 
 def load_daily_returns_for_strategy(strategy_or_row: dict | pd.Series) -> pd.DataFrame:

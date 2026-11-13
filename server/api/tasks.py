@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from config import OUTPUT_DIR
 from server.api.contracts import OperationResponse
-from server.api.dispatch import llm_settings_registry
+from application.user_credentials_service import get_user_llm_settings
 from server.api.serialization import decode_transport, encode_transport
 from server.api.security import AuthUser, require_user
 from server.task_runtime.manager import TaskManager
@@ -150,7 +150,39 @@ def submit_task(request: TaskSubmitRequest, user: AuthUser = Depends(require_use
     args = list(decode_transport(request.args) or [])
     kwargs = dict(decode_transport(request.kwargs) or {})
     owner_id = user.user_id
+    from core.user_scope import workspace
+    if args:
+        raise HTTPException(status_code=422, detail="task_positional_arguments_not_allowed")
+    for key in tuple(kwargs):
+        if key in {"output_dir", "db_path", "database_path", "_service_db_path", "root", "token", "api_key", "llm_settings", "llm_settings_descriptor", "sync_kwargs"}:
+            kwargs.pop(key, None)
+    # 有 user_id 的任务即使漏传也必须写入本人，而非落到 default 账户。
+    if request.task_type in {"agent.run", "paper-trading.update", "paper-trading.backfill", "paper-profile.ai-news-adjustment"}:
+        kwargs["user_id"] = user.user_id
+    if request.task_type in {"agent.run", "paper-trading.update", "paper-profile.ai-news-adjustment"}:
+        kwargs["output_dir"] = str(workspace(user.user_id) / "outputs")
     secrets: dict[str, str] = {}
+    if request.task_type in {"paper-profile.scheduler-manual", "dashboard.rolling_update"}:
+        from application.user_daily_service import submit_personal_daily
+        try:
+            return _success(submit_personal_daily(user.user_id, session_id=request.session_id))
+        except Exception as exc:
+            return _failure(exc)
+    if request.task_type == "backtest.run":
+        from backtesting.contracts import BacktestRequest, AnalysisRequest, ScreenRequest
+        from application.backtest_service import BacktestService
+        from core.user_scope import user_scope
+        try:
+            kind = kwargs.pop("kind", "backtest")
+            request_cls = {"backtest": BacktestRequest, "analysis": AnalysisRequest, "screen": ScreenRequest}.get(kind)
+            if request_cls is None:
+                raise ValueError("unknown_research_task_kind")
+            spec_request = request_cls.model_validate(kwargs)
+            with user_scope(user.user_id):
+                return _success(BacktestService.submit(spec_request.spec.model_dump(mode="json"),
+                                                      request_id=str(spec_request.request_id), kind=kind))
+        except (ValueError, RuntimeError) as exc:
+            return _failure(exc)
     if request.task_type == "agent.run":
         # Browser clients submit only business identifiers. Server-owned paths and
         # identity fields are injected here so they cannot drift across surfaces.
@@ -162,7 +194,10 @@ def submit_task(request: TaskSubmitRequest, user: AuthUser = Depends(require_use
         # configuration. Browser-side tokens or stale descriptors cannot switch
         # the task back to a previously selected local model.
         kwargs.pop("llm_settings", None)
-        settings = llm_settings_registry.resolve_current()
+        try:
+            settings = get_user_llm_settings(user.user_id)
+        except (ValueError, RuntimeError) as exc:
+            return _failure(exc)
         if settings is not None:
             kwargs["llm_settings_descriptor"] = {
                 "profile_id": str(settings.profile_id),
@@ -214,8 +249,7 @@ def list_tasks(
     limit: int = 20,
 ) -> OperationResponse:
     # 归属强制：普通用户只能看到自己的任务，客户端传入的 owner_id 被忽略。
-    if user.role != "admin":
-        owner_id = user.user_id
+    owner_id = user.user_id
     try:
         return _success(task_manager.store.list(
             owner_id=owner_id,
@@ -235,7 +269,7 @@ def _require_owned_task(task_id: str, user: AuthUser) -> dict[str, Any]:
     except KeyError:
         raise HTTPException(status_code=404, detail="task_not_found")
     owner = str(task.get("owner_id") or "")
-    if owner != user.user_id and not (user.role == "admin"):
+    if owner != user.user_id:
         raise HTTPException(status_code=403, detail="task_forbidden")
     return task
 

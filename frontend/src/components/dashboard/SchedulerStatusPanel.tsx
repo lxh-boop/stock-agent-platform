@@ -32,7 +32,7 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
       return submitTask({
         task_type: 'paper-profile.scheduler-manual',
         kwargs: {
-          all_users: true,
+          all_users: false,
           force: true,
           dry_run: false,
           output_dir: 'outputs',
@@ -46,7 +46,7 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
     },
     onSuccess: (task) => {
       setTask(task)
-      message.success('完整日更任务已提交，可在任务中心查看')
+      message.success('我的日更任务已提交，可在任务中心查看')
     },
     onError: (error) => message.error(`任务提交失败：${String(error)}`),
   })
@@ -61,7 +61,7 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
   const taskBusy = Boolean(activeTask && !TERMINAL_TASK_STATUSES.has(activeTask.status))
 
   return (
-    <Card title="自动更新运行状态">
+    <Card title="我的自动更新运行状态">
       <Descriptions column={1} size="small">
         <Descriptions.Item label="计划状态">
           <Tag color={scheduler.enabled ? 'success' : 'default'}>
@@ -83,6 +83,9 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
           <Tag color={statusColor(scheduler.last_status)}>{scheduler.last_status || 'unknown'}</Tag>
         </Descriptions.Item>
         <Descriptions.Item label="当前步骤">{scheduler.current_step || '—'}</Descriptions.Item>
+        {scheduler.last_failed_step ? (
+          <Descriptions.Item label="失败步骤"><Typography.Text type="danger">{scheduler.last_failed_step}</Typography.Text></Descriptions.Item>
+        ) : null}
         <Descriptions.Item label="应有信号日">{scheduler.expected_signal_date || '—'}</Descriptions.Item>
         <Descriptions.Item label="当前信号日">
           <Tag color={scheduler.stale ? 'error' : 'success'}>{scheduler.latest_signal_date || '无数据'}</Tag>
@@ -99,7 +102,17 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
         />
       ) : null}
       {scheduler.last_error ? (
-        <Alert type="error" showIcon style={{ marginTop: 12 }} message="上次错误" description={scheduler.last_error} />
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginTop: 12 }}
+          message={scheduler.last_failed_step ? `上次失败：${scheduler.last_failed_step}` : '上次错误'}
+          description={
+            <Typography.Paragraph copyable style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
+              {scheduler.last_error_type ? `${scheduler.last_error_type}: ` : ''}{scheduler.last_error}
+            </Typography.Paragraph>
+          }
+        />
       ) : null}
 
       <Space direction="vertical" style={{ width: '100%', marginTop: 16 }}>
@@ -108,16 +121,16 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
           loading={mutation.isPending}
           disabled={taskBusy}
           onClick={() => Modal.confirm({
-            title: '确认立即执行完整日更？',
-            content: '任务会先下载行情并生成最新排名，再执行新闻、用户推荐和模拟盘链路。',
+            title: '确认立即执行我的日更？',
+            content: '将使用你保存的 Tushare Token 下载行情和新闻，更新你的排名、推荐与模拟盘；不会更新其他用户。',
             okText: '确认运行',
             onOk: () => mutation.mutate(),
           })}
         >
-          立即运行完整日更
+          立即运行我的日更
         </Button>
         <Typography.Text type="secondary">
-          自动任务由 FastAPI 常驻调度器执行，不依赖浏览器页面或 Streamlit。
+          自动任务由 FastAPI 常驻调度器执行，不依赖浏览器页面；使用你自己的数据源，只更新你的数据和模拟盘。
         </Typography.Text>
         {activeTask?.task_type === 'paper-profile.scheduler-manual' ? <TaskProgress task={activeTask} /> : null}
       </Space>

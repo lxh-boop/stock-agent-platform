@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -298,9 +300,13 @@ class WebAgentApplicationService:
         output_dir: str | Path = OUTPUT_DIR,
         db_path: str | Path | None = None,
     ) -> None:
-        self.output_dir = Path(output_dir)
+        self._output_dir = Path(output_dir)
         self.db_path = Path(db_path) if db_path else None
         self.agent = AgentApplicationService(str(self.db_path) if self.db_path else None)
+
+    @property
+    def output_dir(self) -> Path:
+        return owned_path(self._output_dir)
 
     @staticmethod
     def _user_id(value: Any) -> str:
@@ -742,6 +748,7 @@ class WebAgentApplicationService:
         """Complete a LangGraph engine run paused at a write-approval interrupt."""
 
         from agent_graph.service import resume_langgraph_agent, run_id_from_plan_id
+        from application.user_credentials_service import get_user_llm_settings
 
         normalized = str(action or "").lower()
         if normalized == "confirm":
@@ -757,6 +764,7 @@ class WebAgentApplicationService:
             user_id=user_id,
             run_id=run_id_from_plan_id(plan_id),
             decision=decision,
+            llm_settings=get_user_llm_settings(user_id),
             output_dir=self.output_dir,
             db_path=self.db_path,
         )

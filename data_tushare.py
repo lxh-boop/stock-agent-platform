@@ -26,6 +26,10 @@ def _tushare_module():
 
 
 def get_token(token: str | None = None) -> str:
+    from core.user_scope import current_owner
+    if current_owner():
+        from application.user_credentials_service import get_user_tushare_token
+        return str(token).strip() if token else get_user_tushare_token(current_owner())
     try:
         from local_config import load_local_config
 
@@ -51,7 +55,7 @@ def get_token(token: str | None = None) -> str:
 
 def init_tushare(token: str | None = None):
     token = get_token(token)
-    _tushare_module().set_token(token)
+    # pro_api 显式接收 token，不写跨用户共享的 ~/.tushare.token 文件。
     return token
 
 
@@ -377,6 +381,8 @@ def fetch_stock_pool_recent_daily_fast(
     max_workers: int | None = None,
     max_retries: int = 3,
     sleep_seconds: float = 0.2,
+    trade_dates: list[str] | None = None,
+    require_complete: bool = False,
 ) -> pd.DataFrame:
     """
     按交易日批量获取最近日线。
@@ -397,11 +403,12 @@ def fetch_stock_pool_recent_daily_fast(
     code_name_map = {format_code(code): name for code, name in stock_pool.items()}
     ts_codes = {to_ts_code(code) for code in code_name_map}
 
-    trade_dates = get_recent_trade_dates(
-        pro=pro,
-        recent_trade_days=recent_trade_days,
-        end_date=resolved_end_date,
-    )
+    if trade_dates is None:
+        trade_dates = get_recent_trade_dates(pro=pro, recent_trade_days=recent_trade_days, end_date=resolved_end_date)
+    else:
+        trade_dates = sorted(set(str(day).replace("-", "") for day in trade_dates))
+        if not trade_dates or any(len(day) != 8 or not day.isdigit() or day > resolved_end_date for day in trade_dates):
+            raise ValueError("invalid_explicit_trade_dates")
 
     print(f"[Fetch Fast] recent trade dates = {trade_dates}")
     print(f"[Fetch Fast] stock pool size = {len(ts_codes)}")
@@ -410,6 +417,7 @@ def fetch_stock_pool_recent_daily_fast(
     print(f"[Fetch Fast] parallel workers = {worker_count}")
 
     fetched_by_date: dict[str, pd.DataFrame] = {}
+    completed_dates: set[str] = set()
 
     if worker_count <= 1:
         for i, trade_date in enumerate(trade_dates, start=1):
@@ -422,6 +430,8 @@ def fetch_stock_pool_recent_daily_fast(
                 include_adj_factor=include_adj_factor,
                 max_retries=max_retries,
             )
+            if status in {"ok", "empty_stock_pool"}:
+                completed_dates.add(date)
             if status == "ok" and not df.empty:
                 fetched_by_date[date] = df
                 print(f"[OK][Fetch Fast] trade_date={date}, rows={len(df)}")
@@ -454,6 +464,8 @@ def fetch_stock_pool_recent_daily_fast(
                     print(f"[Error][Fetch Fast] trade_date={requested_date}, failed: {e}")
                     continue
 
+                if status in {"ok", "empty_stock_pool"}:
+                    completed_dates.add(date)
                 if status == "ok" and not df.empty:
                     fetched_by_date[date] = df
                     print(
@@ -466,6 +478,9 @@ def fetch_stock_pool_recent_daily_fast(
                         f"trade_date={date}, status={status}"
                     )
 
+    if require_complete and set(trade_dates) - completed_dates:
+        missing = sorted(set(trade_dates) - completed_dates)
+        raise RuntimeError(f"Tushare 日线下载不完整，缺失交易日={missing}；本次不更新因子水位。")
     all_data = [
         fetched_by_date[trade_date]
         for trade_date in trade_dates
@@ -473,6 +488,10 @@ def fetch_stock_pool_recent_daily_fast(
     ]
 
     if not all_data:
+        if require_complete and completed_dates == set(trade_dates):
+            empty = pd.DataFrame()
+            empty.attrs["completed_trade_dates"] = sorted(completed_dates)
+            return empty
         raise RuntimeError("没有获取到任何最近日线数据。")
 
     data = pd.concat(all_data, ignore_index=True)
@@ -540,6 +559,7 @@ def fetch_stock_pool_recent_daily_fast(
     print(f"[Fetch Fast] final shape = {data.shape}")
     print(f"[Fetch Fast] date range = {data['date'].min()} ~ {data['date'].max()}")
 
+    data.attrs["completed_trade_dates"] = sorted(completed_dates)
     return data
 
 

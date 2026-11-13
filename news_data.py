@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 import json
 import os
 import re
@@ -401,6 +403,7 @@ def load_event_cache(stock_pool: dict | None = None) -> pd.DataFrame:
         (NEWS_CACHE_PATH, "news_cache"),
         (ANNOUNCEMENT_CACHE_PATH, "announcement_cache"),
     ]:
+        path = owned_path(path)
         if not os.path.exists(path):
             continue
 
@@ -420,6 +423,7 @@ def load_event_cache(stock_pool: dict | None = None) -> pd.DataFrame:
 
 
 def _merge_and_save_cache(path: str, new_df: pd.DataFrame, source: str) -> pd.DataFrame:
+    path = str(owned_path(path))
     old_df = pd.DataFrame(columns=EVENT_COLUMNS)
 
     if os.path.exists(path):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.user_scope import owned_path
+
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -20,8 +22,12 @@ class WebPaperTradingApplicationService:
         output_dir: str | Path = OUTPUT_DIR,
         db_path: str | Path | None = None,
     ) -> None:
-        self.output_dir = Path(output_dir)
+        self._output_dir = Path(output_dir)
         self.db_path = Path(db_path) if db_path else None
+
+    @property
+    def output_dir(self) -> Path:
+        return owned_path(self._output_dir)
 
     @staticmethod
     def _user_id(value: Any) -> str:

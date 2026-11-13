@@ -205,3 +205,23 @@ def test_write_tool_rejection_ends_run_with_cancel_answer():
     answer, _calls, _refs = summarize_messages(resumed.get("messages") or [])
     # middleware rejection feeds a synthetic ToolMessage; the model closes the loop
     assert answer
+
+
+@pytest.mark.parametrize("tool_name", ["run_strategy_backtest", "analyze_factors", "screen_factor_strategy", "save_factor_strategy"])
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_research_tools_wait_for_user_approval(monkeypatch, tool_name, decision):
+    from application.backtest_service import BacktestService
+    from backtesting import store
+    seen = []
+    monkeypatch.setattr(BacktestService, "run", lambda spec, **kw: seen.append((tool_name, spec)) or {"run_id":"test", "kind":kw.get("kind")})
+    monkeypatch.setattr(store, "save_strategy", lambda ident, spec: seen.append((tool_name, spec)) or {"strategy_id":ident})
+    monkeypatch.setattr(graph_module, "build_research_docs_tools", lambda warnings: [])
+    spec = {"start_date":"2026-01-05", "end_date":"2026-01-05" if tool_name=="screen_factor_strategy" else "2026-02-05", "factors":[{"field":"MA5"}]}
+    model = _tool_loop_model([AIMessage(content="",tool_calls=[{"name":tool_name,"args":{"spec":spec},"id":"research"}]),AIMessage(content="研究操作已处理。")])
+    graph = graph_module.build_agent_graph(model, _resources(), {}, checkpointer=InMemorySaver())
+    config = {"configurable":{"thread_id":tool_name+decision}}
+    result = graph.invoke(_initial_state("研究策略"),config)
+    assert result.get("__interrupt__") and not seen
+    answers = {getattr(intr,"id"):{"type":decision} for intr in result["__interrupt__"]}
+    graph.invoke(Command(resume=answers),config=config)
+    assert len(seen)==(1 if decision=="approve" else 0)
