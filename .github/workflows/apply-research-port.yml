@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       postgres:
@@ -37,7 +37,10 @@ jobs:
         with:
           python-version: '3.12'
       - name: Verify reviewed patch and apply source
+        id: source
         run: |
+          set -euo pipefail
+          mkdir -p validation-results
           git merge-base --is-ancestor 2376deb21b0fb44a5c4b8f3f59ff86999626ad98 HEAD
           python - <<'PY'
           import bz2, hashlib, os
@@ -65,53 +68,100 @@ jobs:
                   assert 'raw_config =' in body
                   lines[node.lineno-1:node.end_lineno] = [fixed]
           path.write_text(''.join(lines), encoding='utf-8')
-          ast.parse(path.read_text(encoding='utf-8'))
-          path = Path('backtesting/store.py')
+          fixture = '''"""Database integration tests share one initialization in a local temporary database only."""
+          import os
+          from pathlib import Path
+          import pytest
+
+          @pytest.fixture(scope="session")
+          def isolated_postgres_schema():
+              if os.environ.get("STOCK_TEST_DATABASE") != "1":
+                  pytest.skip("requires isolated test database")
+              psycopg = pytest.importorskip("psycopg")
+              from database.postgres_config import PostgresSettings
+              settings = PostgresSettings.from_env()
+              if settings.database != "stock_test_isolation" or settings.host not in {"127.0.0.1", "localhost", "::1"}:
+                  raise RuntimeError("Refuse non-local or non-test database")
+              path = Path(__file__).resolve().parents[2] / "database/postgres_migrations/001_baseline.sql"
+              script = "\\n".join(line for line in path.read_text(encoding="utf-8").splitlines() if not line.startswith("\\\\"))
+              with psycopg.connect(**settings.connection_kwargs()) as conn:
+                  conn.execute(script)
+              yield
+          '''
+          path = Path('tests/integration/conftest.py')
+          assert not path.exists(), 'Do not overwrite an existing test fixture'
+          path.write_text(fixture, encoding='utf-8')
+          ast.parse(fixture)
+          for filename, name, auth in [('test_strategy_backtest_postgres.py','schema',False),('test_alpha158_postgres.py','schema',False),('test_account_datasets_postgres.py','initialize_schema',True)]:
+              path = Path('tests/integration') / filename
+              source = path.read_text(encoding='utf-8')
+              lines = source.splitlines(keepends=True)
+              nodes = [n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == name]
+              assert len(nodes) == 1
+              node = nodes[0]
+              replacement = f'def {name}(isolated_postgres_schema):\n'
+              if auth:
+                  replacement += '    from database.auth_schema import ensure_auth_schema\n    ensure_auth_schema()\n'
+              replacement += '    yield\n'
+              lines[node.lineno-1:node.end_lineno] = [replacement]
+              path.write_text(''.join(lines), encoding='utf-8')
+              ast.parse(path.read_text(encoding='utf-8'))
+          path = Path('.github/workflows/strategy-backtest-tests.yml')
           source = path.read_text(encoding='utf-8')
-          source, fixed = re.subn(r'''raise ValueError\((['"])strategy_owner_mismatch\1\)''', "raise KeyError('strategy_not_found')", source)
+          source = source.replace('runs-on: ubuntu-latest', 'runs-on: ubuntu-24.04')
+          source = source.replace('tests/integration/test_strategy_backtest_postgres.py\n', 'tests/integration/test_strategy_backtest_postgres.py tests/integration/test_alpha158_postgres.py tests/integration/test_account_datasets_postgres.py\n')
           path.write_text(source, encoding='utf-8')
-          ast.parse(source)
-          print(f'Strategy preview validated; cross-owner not-found fixes: {fixed}')
+          print('Shared initialization fixed; no business assertions removed')
           PY
-          git add agent_graph/services/strategy_implementation_service.py backtesting/store.py
-          git diff --cached --stat
+          git add agent_graph/services/strategy_implementation_service.py tests/integration .github/workflows/strategy-backtest-tests.yml
+          git diff --cached --check
+          git diff --cached --stat | tee validation-results/changes.txt
       - name: Install offline test dependencies
-        run: python -m pip install pytest pandas numpy pydantic requests pyyaml jsonschema cryptography fastapi httpx 'psycopg[binary]>=3.2,<4' 'langchain>=1,<2' 'langchain-openai>=1,<2' 'langgraph>=1,<2' 'langgraph-checkpoint-postgres>=2,<4' 'neo4j>=6,<7' 'mcp>=2,<3'
+        run: python -m pip install -q pytest pandas numpy pydantic requests pyyaml jsonschema cryptography fastapi httpx 'psycopg[binary]>=3.2,<4' 'langchain>=1,<2' 'langchain-openai>=1,<2' 'langgraph>=1,<2' 'langgraph-checkpoint-postgres>=2,<4' 'neo4j>=6,<7' 'mcp>=2,<3'
       - name: Compile Python
         run: python -m compileall -q backtesting application server core database agent_graph
       - name: Research, Agent approval and existing daily regressions
-        run: >-
-          python -m pytest -q --disable-warnings
-          tests/unit/test_strategy_engine.py tests/unit/test_strategy_research.py
-          tests/unit/test_strategy_backtest_api.py tests/unit/test_strategy_backtest_tools.py
-          tests/unit/test_agent_graph_engine.py tests/unit/test_agent_graph_writes.py
-          tests/unit/test_personal_daily_isolation.py tests/unit/test_account_scoped_credentials.py
-          tests/unit/test_scheduler_trading_calendar.py tests/unit/test_scheduler_job_state.py
-          tests/unit/test_scheduler_job_lock.py tests/unit/test_alpha158_storage.py
+        run: |
+          set -euo pipefail
+          python -m pytest -q --disable-warnings --junitxml=validation-results/unit.xml tests/unit/test_strategy_engine.py tests/unit/test_strategy_research.py tests/unit/test_strategy_backtest_api.py tests/unit/test_strategy_backtest_tools.py tests/unit/test_agent_graph_engine.py tests/unit/test_agent_graph_writes.py tests/unit/test_personal_daily_isolation.py tests/unit/test_account_scoped_credentials.py tests/unit/test_scheduler_trading_calendar.py tests/unit/test_scheduler_job_state.py tests/unit/test_scheduler_job_lock.py tests/unit/test_alpha158_storage.py | tee validation-results/unit.txt
       - name: Real PostgreSQL research, factor retention and account isolation
-        run: >-
-          python -m pytest -q --disable-warnings
-          tests/integration/test_strategy_backtest_postgres.py
-          tests/integration/test_alpha158_postgres.py
-          tests/integration/test_account_datasets_postgres.py
+        run: |
+          set -euo pipefail
+          python -m pytest -q --disable-warnings --junitxml=validation-results/postgres.xml tests/integration/test_strategy_backtest_postgres.py tests/integration/test_alpha158_postgres.py tests/integration/test_account_datasets_postgres.py | tee validation-results/postgres.txt
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Frontend types, tests and production build
         working-directory: frontend
         run: |
+          set -euo pipefail
           npm install --global npm@10.9.2
           npm install --no-audit --no-fund --legacy-peer-deps --package-lock=false
-          npm run typecheck
-          npm test
-          npm run build
+          npm run typecheck 2>&1 | tee ../validation-results/frontend-types.txt
+          npm test 2>&1 | tee ../validation-results/frontend-tests.txt
+          npm run build 2>&1 | tee ../validation-results/frontend-build.txt
       - name: Chromium page interactions using offline API fixtures
         run: |
-          python -m pip install playwright
+          set -euo pipefail
+          python -m pip install -q playwright
           python -m playwright install --with-deps chromium
           (cd frontend && npm run preview > /tmp/backtest-preview.log 2>&1) &
           for n in $(seq 1 30); do curl -fsS http://127.0.0.1:4173/ >/dev/null && break || sleep 1; done
-          BACKTEST_BROWSER_URL=http://127.0.0.1:4173 python -m pytest -q tests/browser/test_strategy_research_browser.py
+          BACKTEST_BROWSER_URL=http://127.0.0.1:4173 python -m pytest -q --junitxml=validation-results/browser.xml tests/browser/test_strategy_research_browser.py | tee validation-results/browser.txt
+      - name: Require executed tests, not skipped acceptance gates
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          rows = []
+          for name in ('unit', 'postgres', 'browser'):
+              suites = list(ET.parse(f'validation-results/{name}.xml').getroot().iter('testsuite'))
+              counts = {k:sum(int(s.get(k,0)) for s in suites) for k in ('tests','failures','errors','skipped')}
+              assert counts['tests'] > 0 and not any(counts[k] for k in ('failures','errors','skipped')), counts
+              rows.append(f'{name}: {counts}')
+          Path('validation-results/summary.txt').write_text('\n'.join(rows), encoding='utf-8')
+          print('\n'.join(rows))
+          PY
       - name: Publish only validated source to chatgpt, never main
         run: |
           git fetch origin chatgpt
@@ -125,6 +175,7 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/REVISION.txt"
           git archive --format=tar.gz -o "$RUNNER_TEMP/source.tar.gz" HEAD
           echo "Published tested revision $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          cat validation-results/summary.txt >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve source for failed-test diagnosis without publishing it
         if: failure()
         run: |
@@ -136,8 +187,9 @@ jobs:
           name: complete-research-validation
           path: |
             browser-results/
+            validation-results/
             /tmp/backtest-preview.log
             ${{ runner.temp }}/REVISION.txt
             ${{ runner.temp }}/source.tar.gz
-          if-no-files-found: ignore
-          retention-days: 3
+          if-no-files-found: error
+          retention-days: 7
