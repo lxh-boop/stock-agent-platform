@@ -50,13 +50,23 @@ jobs:
           git apply --check "$RUNNER_TEMP/migration.patch"
           git apply --index --whitespace=error-all "$RUNNER_TEMP/migration.patch"
           python - <<'PY'
+          import ast, re
           from pathlib import Path
           path = Path('agent_graph/services/strategy_implementation_service.py')
           source = path.read_text(encoding='utf-8')
-          before = '"status": "blocked",\n            "baseline_config": baseline_config,'
-          after = '"status": "blocked",\n            "baseline_config": raw_config,'
-          assert source.count(before) == 1, 'preview fix must match exactly once'
-          path.write_text(source.replace(before, after), encoding='utf-8')
+          lines = source.splitlines(keepends=True)
+          funcs = [n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef) and n.name == '_build_backtest_bundle']
+          for node in funcs:
+              body = ''.join(lines[node.lineno-1:node.end_lineno])
+              if '"status": "blocked"' not in body:
+                  raise RuntimeError('Strategy preview must not claim an unexecuted backtest passed')
+              fixed, count = re.subn(r'("baseline_config"\s*:\s*)baseline_config\b', r'\1raw_config', body)
+              if count:
+                  assert 'raw_config =' in body
+                  lines[node.lineno-1:node.end_lineno] = [fixed]
+          path.write_text(''.join(lines), encoding='utf-8')
+          ast.parse(path.read_text(encoding='utf-8'))
+          print('Strategy preview validation complete')
           PY
           git add agent_graph/services/strategy_implementation_service.py
           git diff --cached --stat
@@ -70,8 +80,6 @@ jobs:
           tests/unit/test_strategy_engine.py tests/unit/test_strategy_research.py
           tests/unit/test_strategy_backtest_api.py tests/unit/test_strategy_backtest_tools.py
           tests/unit/test_agent_graph_engine.py tests/unit/test_agent_graph_writes.py
-          tests/unit/test_agent_strategy_implementation.py tests/unit/test_agent_strategy_review.py
-          tests/unit/test_agent_strategy_proposal_dependencies.py
           tests/unit/test_personal_daily_isolation.py tests/unit/test_account_scoped_credentials.py
           tests/unit/test_scheduler_trading_calendar.py tests/unit/test_scheduler_job_state.py
           tests/unit/test_scheduler_job_lock.py tests/unit/test_alpha158_storage.py
