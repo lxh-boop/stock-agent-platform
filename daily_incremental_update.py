@@ -8,7 +8,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from factor_provider import build_alpha158
+from factor_history import sync_factor_raw_history
+from factor_storage import refresh_alpha158, load_stored_alpha158
 from config import (
     ACTIVE_RANKING_MODEL_METRICS_PATH,
     ENABLE_NEWS_FEATURES,
@@ -96,7 +97,7 @@ def load_cached_raw_data(stock_pool: dict[str, str]) -> pd.DataFrame:
     for path in (LATEST_RAW_DATA_PATH, TRAIN_RAW_DATA_PATH, RAW_DATA_PATH):
         if not os.path.exists(path):
             continue
-        frame = normalize_raw_data(pd.read_csv(path, dtype={"code": str}), stock_pool)
+        frame = normalize_raw_data(pd.read_csv(path, dtype={"code": str}, float_precision="round_trip"), stock_pool)
         if not frame.empty:
             print(f"[Data] use local cache: {path}")
             return frame
@@ -169,26 +170,20 @@ def prepare_latest_feature_data(
     if not old_raw.empty:
         print(f"[Data] cached raw shape = {old_raw.shape}")
         print(f"[Data] cached date range = {old_raw['date'].min()} ~ {old_raw['date'].max()}")
-    recent_raw = fetch_stock_pool_recent_daily_fast(
-        token=token,
-        stock_pool=stock_pool,
-        recent_trade_days=300 if old_raw.empty else FETCH_RECENT_TRADE_DAYS,
-        end_date=end_date,
-        include_adj_factor=True,
-        max_workers=fetch_workers,
+    pro = init_tushare_pro(token)
+    signal_date = str(end_date or build_market_data_window(pro)["expected_signal_date"])
+    raw_data, history_stats = sync_factor_raw_history(
+        pro=pro, token=token, stock_pool=stock_pool, old_raw=old_raw,
+        as_of=signal_date, raw_path=LATEST_RAW_DATA_PATH,
+        fetcher=fetch_stock_pool_recent_daily_fast, normalize=normalize_raw_data,
+        merge=merge_raw_data, fetch_workers=fetch_workers,
     )
-    recent_raw = normalize_raw_data(recent_raw, stock_pool)
-    if recent_raw.empty:
-        raise RuntimeError("Tushare 最近行情为空，无法生成最新排名。")
-    new_data_start_date = recent_raw["date"].min()
-    raw_data = merge_raw_data(old_raw, recent_raw, stock_pool)
-    raw_data.to_csv(LATEST_RAW_DATA_PATH, index=False, encoding="utf-8-sig")
-    print(f"[Data] merged raw shape = {raw_data.shape}")
-    print(f"[Data] merged date range = {raw_data['date'].min()} ~ {raw_data['date'].max()}")
-
-    # Stage 3.7: Alpha158 is a derived in-memory view of the current raw data.
-    # No factor CSV is read or written, and build_alpha158 has no factor cache.
-    feature_data = build_alpha158(raw_data)
+    new_data_start_date = pd.Timestamp(signal_date)
+    alpha_stats = refresh_alpha158(raw_data, as_of=signal_date)
+    alpha_stats["history_refresh"] = history_stats
+    # 全量五年因子留在 PostgreSQL；推理只取近期窗口，避免云主机一次加载整张宽表。
+    feature_data = load_stored_alpha158(recent_trading_days=120, end_date=signal_date,
+                                      stock_codes=list(stock_pool))
     if ENABLE_NEWS_FEATURES and include_news_features:
         news_start_date = max(
             pd.to_datetime(raw_data["date"].min()),
@@ -202,7 +197,8 @@ def prepare_latest_feature_data(
             start_date=news_start_date,
             end_date=raw_data["date"].max(),
         )
-    print(f"[Factor] Alpha158 recomputed in memory, rows={len(feature_data)}")
+    feature_data.attrs["alpha158_storage"] = alpha_stats
+    print(f"[Factor] Alpha158 database refresh: {alpha_stats}")
     if sync_news_db:
         refresh_news_cache_and_sync_db(
             feature_data,
@@ -309,6 +305,7 @@ def active_ranker_daily_update(
         "ranking_basis": "two_member_daily_percentile_rank_fusion",
         "individual_up_probability_available": False,
         "feature_refresh": feature_refresh,
+        "alpha158_storage": feature_data.attrs.get("alpha158_storage", {}),
         "ranking": ranking_report,
         "historical_validation": _historical_validation(ranking_report),
         "disclaimer": DISCLAIMER,

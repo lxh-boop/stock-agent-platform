@@ -1,0 +1,40 @@
+name: Alpha158 rolling storage
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [chatgpt, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  factors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: stock_app
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: stock_test_isolation
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U stock_app -d stock_test_isolation"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      STOCK_POSTGRES_HOST: 127.0.0.1
+      STOCK_POSTGRES_USER: stock_app
+      STOCK_POSTGRES_PASSWORD: test-only-password
+      STOCK_POSTGRES_DB: stock_test_isolation
+      STOCK_TEST_DATABASE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest pandas numpy pydantic requests pyyaml 'psycopg[binary]>=3.2,<4'
+      - run: python -m compileall -q core database factor_storage.py factor_history.py factor_provider.py data_tushare.py daily_incremental_update.py
+      - run: python -m pytest -q --disable-warnings tests/unit/test_alpha158_storage.py tests/integration/test_alpha158_postgres.py

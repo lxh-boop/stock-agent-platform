@@ -128,8 +128,8 @@ def alpha158_from_file(
 ) -> pd.DataFrame:
     """Read authoritative raw data and recompute Alpha158 for this call.
 
-    Derived Alpha158 values are never persisted and never reused through an
-    in-process factor cache.
+    This explicit offline/training API remains a pure computation. Live daily
+    values are persisted by factor_storage and read through latest_alpha158.
     """
     raw = load_raw_data(
         path,
@@ -145,12 +145,9 @@ def latest_alpha158(
     *,
     recent_trading_days: int = DEFAULT_RECENT_TRADING_DAYS,
 ) -> pd.DataFrame:
-    # Latest cache is produced by the daily CSV/Tushare merge path and must
-    # retain pandas' native float64 CSV-read semantics observed in production.
-    return alpha158_from_file(
-        LATEST_RAW_DATA_PATH,
-        output_trading_days=recent_trading_days,
-    )
+    # 正式推理读取数据库，不静默退回全历史重算；未初始化时提示先运行个人日更。
+    from factor_storage import load_stored_alpha158
+    return load_stored_alpha158(recent_trading_days=recent_trading_days)
 
 
 def training_raw_path() -> Path:
