@@ -21,11 +21,20 @@ RUN apt-get update \
 
 FROM runtime-base AS api-deps
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
+# Keep the CPU PyTorch layer when only application requirements change.
+# Cache downloads on the builder without copying them into the runtime image.
+RUN --mount=type=cache,id=stock-api-pip,target=/root/.cache/pip,sharing=locked \
+    unset PIP_NO_CACHE_DIR \
+    && python -m pip install --upgrade pip --index-url "$PIP_INDEX_URL" \
+    && python -m pip install torch --index-url "$TORCH_INDEX_URL"
+
 COPY requirements-compose-api.txt ./
-RUN python -m pip install --upgrade pip \
-    && python -m pip install torch --index-url ${TORCH_INDEX_URL} \
-    && python -m pip install -r requirements-compose-api.txt
+RUN --mount=type=cache,id=stock-api-pip,target=/root/.cache/pip,sharing=locked \
+    unset PIP_NO_CACHE_DIR \
+    && python -m pip install -r requirements-compose-api.txt --index-url "$PIP_INDEX_URL"
 
 FROM runtime-base AS api
 
