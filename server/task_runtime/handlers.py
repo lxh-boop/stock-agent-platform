@@ -124,6 +124,14 @@ def execute_task(
         emit("stage", {"progress": 0.95, "message": "Agent 已完成工具执行，正在整理结果"})
         return result
 
+    if task_type == "agent.resume":
+        from application.agent_approval_service import execute_approval_task
+        emit("stage", {"progress": 0.08, "message": "正在校验已确认的 Agent 操作"})
+        result = execute_approval_task(approval_id=kwargs['approval_id'],
+            user_id=kwargs['user_id'], session_id=kwargs['session_id'], cancelled=is_cancelled)
+        emit("stage", {"progress": 0.95, "message": "审批恢复完成，正在保存结果"})
+        return result
+
     if task_type == "dashboard.rolling_update":
         from application.dashboard_service import dashboard_service
 

@@ -30,6 +30,7 @@ from server.api.routers.web_dashboard import router as web_dashboard_router
 from server.api.routers.web_stocks import router as web_stocks_router
 from server.api.routers.web_models import router as web_models_router
 from server.api.routers.web_backtests import router as web_backtests_router
+from server.api.routers.web_strategies import router as web_strategies_router
 from server.api.routers.web_news import router as web_news_router
 from server.api.routers.web_settings import router as web_settings_router
 from server.api.routers.web_monitor import router as web_monitor_router
@@ -136,6 +137,7 @@ def create_app() -> FastAPI:
     app.include_router(web_stocks_router, dependencies=authenticated)
     app.include_router(web_models_router, dependencies=authenticated)
     app.include_router(web_backtests_router, dependencies=authenticated)
+    app.include_router(web_strategies_router, dependencies=authenticated)
     app.include_router(web_news_router, dependencies=authenticated)
     app.include_router(web_settings_router, dependencies=authenticated)
     app.include_router(web_monitor_router, dependencies=authenticated)

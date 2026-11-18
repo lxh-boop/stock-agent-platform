@@ -1,10 +1,10 @@
 """LangGraph PostgreSQL checkpointer assembly.
 
 The checkpointer exists for exactly one reason: persisting interrupt/approval
-state so pending-actions resume works across page reloads (thread_id =
-session_id). Tables live in the runtime schema via ``search_path``. There is
-no long-term memory store — conversation history reuse was removed with the
-legacy runtime.
+state so pending-actions resume works across page reloads. The thread ID binds
+the authenticated owner, session and run. Tables live in the runtime schema via
+``search_path``. Explicit research notes use a separate personal repository;
+conversation-history summarization from the legacy runtime is not restored.
 """
 
 from __future__ import annotations

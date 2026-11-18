@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from backtesting.contracts import BacktestRequest, AnalysisRequest, ScreenRequest, StrategyRequest, DeleteRequest
 from backtesting import store
 from application.backtest_service import BacktestService
+from application.strategy_service import StrategyService
+from server.api.schemas.strategies import StrategyDelete
 from core.user_scope import user_scope
 from server.api.contracts import OperationResponse
 from server.api.routers.web_common import web_ok
@@ -37,17 +39,18 @@ def catalog(user: AuthUser = Depends(require_user)):
 
 @router.get('/strategies', response_model=OperationResponse)
 def strategies(user: AuthUser = Depends(require_user), limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0)):
-    return call(user, lambda: store.list_strategies(limit, offset))
+    return call(user, lambda: StrategyService.list(limit, offset))
 
 
 @router.put('/strategies', response_model=OperationResponse)
 def save_strategy(request: StrategyRequest, user: AuthUser = Depends(require_user)):
-    return call(user, lambda: store.save_strategy(str(request.strategy_id), request.spec.model_dump(mode='json')))
+    return call(user, lambda: StrategyService.save(str(request.strategy_id), request.spec.model_dump(mode='json'),
+        request_id=str(request.request_id), expected_version=request.expected_version))
 
 
 @router.delete('/strategies/{strategy_id}', response_model=OperationResponse)
-def remove_strategy(strategy_id: UUID, request: DeleteRequest, user: AuthUser = Depends(require_user)):
-    return call(user, lambda: store.delete_strategy(str(strategy_id)) or {'deleted': True})
+def remove_strategy(strategy_id: UUID, request: StrategyDelete, user: AuthUser = Depends(require_user)):
+    return call(user, lambda: StrategyService.delete(str(strategy_id), request_id=str(request.request_id), expected_version=request.expected_version))
 
 
 @router.get('', response_model=OperationResponse)

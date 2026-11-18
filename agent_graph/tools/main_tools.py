@@ -276,6 +276,10 @@ def build_read_tools(registry: Any, context: dict[str, Any]) -> list[StructuredT
         tools.append(risk_tool)
     from agent_graph.tools.backtest_tools import build_backtest_tools
     tools.extend(build_backtest_tools(context))
+    from agent_graph.tools.research_data_tools import build_research_data_tools
+    from agent_graph.tools.research_notes_tools import build_research_notes_tools
+    tools.extend(build_research_data_tools(context))
+    tools.extend(build_research_notes_tools(context))
     return tools
 
 

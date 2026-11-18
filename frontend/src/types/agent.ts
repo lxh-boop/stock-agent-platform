@@ -72,6 +72,11 @@ export interface AgentRunDetail {
 
 export interface AgentPendingAction {
   proposal_id: string
+  source?: 'langgraph' | string
+  plan_id?: string
+  proposal_version?: number
+  payload_hash?: string
+  conversation_id?: string
   run_id: string
   intent: string
   operation_type: string
@@ -85,6 +90,10 @@ export interface AgentPendingAction {
   warnings: unknown
   validation_results: unknown
   confirmation_phrase: string
+  decision?: 'approved' | 'rejected' | ''
+  task_id?: string
+  can_retry?: boolean
+  error?: string
 }
 
 export interface AgentPendingActionPage {

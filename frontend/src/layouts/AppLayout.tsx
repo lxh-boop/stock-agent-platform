@@ -9,18 +9,18 @@ import { useAuthStore } from '../stores/authStore'
 import { useTaskStore } from '../stores/taskStore'
 
 const { Header, Content } = Layout
-const routeKey = (pathname: string) => pathname.startsWith('/stocks') ? '/stocks' : pathname
+const routeKey = (pathname: string) => pathname.startsWith('/stocks') ? '/stocks'
+  : ['/backtests', '/paper-account'].includes(pathname) ? '/strategies' : pathname
 const navigationItems: MenuProps['items'] = [
   { key: '/dashboard', label: '首页 / 预测排名' },
   { key: '/stocks', label: '个股详情' },
   { key: '/factors', label: '因子库' },
-  { key: 'model-group', label: '模型与回测', children: [
+  { key: 'model-group', label: '模型', children: [
     { key: '/models/metrics', label: '模型指标' },
     { key: '/models/search', label: '模型搜索结果' },
-    { key: '/backtests', label: '策略研究' },
   ] },
   { key: '/news', label: '新闻事件' },
-  { key: '/paper-trading', label: 'AI 模拟盘' },
+  { key: '/strategies', label: '我的策略' },
   { key: '/agent', label: 'AI Agent' },
   { key: '/settings', label: '系统设置' },
   { key: '/monitor', label: '系统监控' },

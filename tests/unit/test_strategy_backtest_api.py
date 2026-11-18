@@ -132,15 +132,22 @@ def test_research_endpoints_inject_user_scope(client,monkeypatch,path,kind):
 
 
 def test_strategy_save_delete_and_report_delete_require_confirmation(client,monkeypatch):
+    from application.strategy_service import StrategyService
     calls=[]
-    monkeypatch.setattr(store,'save_strategy',lambda id,spec:calls.append((current_owner(),id)) or {'strategy_id':id})
-    monkeypatch.setattr(store,'delete_strategy',lambda id:calls.append((current_owner(),id)))
+    monkeypatch.setattr(StrategyService,'save',lambda id,spec,**kwargs:calls.append((current_owner(),id)) or {'strategy_id':id})
+    monkeypatch.setattr(StrategyService,'delete',lambda id,**kwargs:calls.append((current_owner(),id)) or {'deleted': True})
     monkeypatch.setattr(store,'delete_report',lambda id:calls.append((current_owner(),id)))
     ident=str(uuid4())
-    assert client.put('/api/v1/web/backtests/strategies',json={'spec':params(),'strategy_id':ident,'confirmed':True}).status_code==200
-    for path in ('/strategies/'+ident,'/'+ident):
-        assert client.request('DELETE','/api/v1/web/backtests'+path,json={'confirmed':False}).status_code==422
-        assert client.request('DELETE','/api/v1/web/backtests'+path,json={'confirmed':True}).status_code==200
+    body={'spec':params(),'strategy_id':ident,'confirmed':True}
+    assert client.put('/api/v1/web/backtests/strategies',json=body).status_code==422
+    assert client.put('/api/v1/web/backtests/strategies',json={**body,'request_id':str(uuid4()),'expected_version':1}).status_code==200
+    strategy_path='/api/v1/web/backtests/strategies/'+ident
+    assert client.request('DELETE',strategy_path,json={'confirmed':True}).status_code==422
+    reviewed={'confirmed':True,'request_id':str(uuid4()),'expected_version':1}
+    assert client.request('DELETE',strategy_path,json={**reviewed,'confirmed':False}).status_code==422
+    assert client.request('DELETE',strategy_path,json=reviewed).status_code==200
+    assert client.request('DELETE','/api/v1/web/backtests/'+ident,json={'confirmed':False}).status_code==422
+    assert client.request('DELETE','/api/v1/web/backtests/'+ident,json={'confirmed':True}).status_code==200
     assert calls==[('alice',ident)]*3
 
 

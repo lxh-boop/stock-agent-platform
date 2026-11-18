@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from langgraph.types import Command
 
@@ -23,19 +23,38 @@ from agent_graph.llm import build_chat_model
 from agent_graph.memory import open_checkpointer
 from agent_graph.tools.runtime import AgentResources
 from agent_graph.trace_adapter import GraphRunTracer
+from agent_graph.approval_store import ApprovalStore, interrupt_signature, thread_id_for_run
 
 _ROUTING_LAYER = "langgraph_single_agent"
 _FORMAL_ENTRY = "agent_graph.service.run_langgraph_agent_request"
-_PLAN_ID_PREFIX = "lg_approve_"
+
+def _interrupt_records(items: Any) -> list[dict[str, Any]]:
+    records = {}
+    for item in items or ():
+        ident = str(getattr(item, "id", "") or "")
+        value = getattr(item, "value", None)
+        if not ident or not isinstance(value, dict):
+            raise ValueError("invalid_approval_interrupt")
+        records[ident] = {"id": ident, "value": value}
+    return [records[ident] for ident in sorted(records)]
 
 
-def plan_id_for_run(run_id: str) -> str:
-    return f"{_PLAN_ID_PREFIX}{run_id}"
-
-
-def run_id_from_plan_id(plan_id: str) -> str:
-    prefix = _PLAN_ID_PREFIX
-    return str(plan_id)[len(prefix):] if str(plan_id).startswith(prefix) else ""
+def _approval_actions(interrupts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    actions = []
+    for item in interrupts:
+        value = item["value"]
+        requests = value.get("action_requests")
+        if not isinstance(requests, list):
+            requests = [value] if value.get("name") or value.get("tool_name") else []
+        for request in requests:
+            actions.append({
+                "name": str(request.get("name") or request.get("tool_name") or ""),
+                "args": dict(request.get("args") or {}),
+                "description": str(request.get("description") or request.get("summary") or ""),
+            })
+    if not actions:
+        raise ValueError("approval_actions_required")
+    return actions
 
 
 def _language(query: str, reply_language: str | None) -> str:
@@ -118,6 +137,8 @@ def _invoke_with_persistence(graph, chat_model, resources, run_meta, initial_sta
         if checkpointer is not None:
             effective = build_agent_graph(chat_model, resources, run_meta, checkpointer=checkpointer)
         final_state = dict(effective.invoke(initial_state, config=config) or {})
+        if final_state.get("__interrupt__") and checkpointer is None:
+            raise RuntimeError("approval_checkpoint_unavailable")
         if persistence_warnings:
             final_state.setdefault("warnings", [])
             final_state["warnings"] = list(final_state["warnings"]) + persistence_warnings
@@ -194,7 +215,8 @@ def run_langgraph_agent_request(
             "messages": build_initial_messages({"query": raw_query, "reply_language": language}),
         }
         config = {
-            "configurable": {"thread_id": session_id, "user_id": user_id, "run_id": run_id},
+            "configurable": {"thread_id": thread_id_for_run(user_id, session_id, run_id),
+                             "user_id": user_id, "run_id": run_id},
             "recursion_limit": 96,
         }
         tracer.planning()
@@ -233,11 +255,20 @@ def resume_langgraph_agent(
     output_dir: str | Path = "outputs",
     db_path: str | Path | None = None,
     llm_settings: LLMRuntimeSettings | None = None,
+    approval_record: dict[str, Any] | None = None,
+    before_invoke: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     """Resume a run paused at a write-approval interrupt (pending-actions flow)."""
 
     run_started = time.perf_counter()
     session_id = str(session_id or f"session_{user_id}")
+    approval = dict(approval_record or {})
+    if (decision not in {"approved", "rejected"} or approval.get("decision") != decision
+            or approval.get("user_id") != user_id or approval.get("session_id") != session_id
+            or approval.get("run_id") != run_id
+            or approval.get("thread_id") != thread_id_for_run(user_id, session_id, run_id)
+            or before_invoke is None):
+        raise PermissionError("approval_resume_binding_mismatch")
     language = "zh"
     run_meta: dict[str, Any] = {}
     resources: AgentResources | None = None
@@ -259,22 +290,24 @@ def resume_langgraph_agent(
                 raise RuntimeError("checkpointer_unavailable_for_resume")
             graph = build_agent_graph(chat_model, resources, run_meta, checkpointer=checkpointer)
             config = {
-                "configurable": {"thread_id": session_id, "user_id": user_id, "run_id": tracer.run_id},
+                "configurable": {"thread_id": approval["thread_id"], "user_id": user_id, "run_id": run_id},
                 "recursion_limit": 96,
             }
             snapshot = graph.get_state(config)
+            values = dict(snapshot.values or {})
+            if any(values.get(key) != expected for key, expected in
+                   (("user_id", user_id), ("session_id", session_id), ("run_id", run_id))):
+                raise PermissionError("approval_checkpoint_scope_mismatch")
+            interrupts = _interrupt_records(
+                [pending for task in snapshot.tasks or () for pending in getattr(task, "interrupts", ()) or ()]
+            )
+            if not interrupts or interrupt_signature(interrupts) != approval.get("payload_hash"):
+                raise ValueError("approval_checkpoint_changed")
             answers: dict[str, dict[str, str]] = {}
-            for task in snapshot.tasks or ():
-                for pending in getattr(task, "interrupts", ()) or ():
-                    if decision == "approved":
-                        answers[pending.id] = {"type": "approve"}
-                    else:
-                        answers[pending.id] = {
-                            "type": "reject",
-                            "message": reason or "用户拒绝了该操作",
-                        }
-            if not answers:
-                raise RuntimeError("no_pending_interrupt_on_thread")
+            for pending in interrupts:
+                answers[pending["id"]] = ({"type": "approve"} if decision == "approved" else
+                    {"type": "reject", "message": reason or "用户拒绝了该操作"})
+            before_invoke()
             final_state = dict(graph.invoke(Command(resume=answers), config=config) or {})
         return _compose_response(
             final_state=final_state,
@@ -286,12 +319,6 @@ def resume_langgraph_agent(
             run_started=run_started,
             run_meta=run_meta,
             tracer=tracer,
-        )
-    except Exception as exc:  # noqa: BLE001
-        tracer.finalize(success=False, answer="", warnings=[], errors=[str(exc)], started_at=run_started)
-        return _failure_response(
-            query="", user_id=str(user_id or "default"), session_id=session_id, language=language,
-            run_id=tracer.run_id, message=f"恢复运行失败: {exc}"[:300], error_type="agent_resume_failure",
         )
     finally:
         if resources is not None:
@@ -334,18 +361,17 @@ def _compose_response(
         pending = None
         plan_id = ""
     else:
-        pending = {}
-        for item in final_state.get("__interrupt__") or ():
-            value = getattr(item, "value", None)
-            if isinstance(value, dict):
-                if value.get("type") == "tool_approval" or value.get("name"):
-                    pending = {
-                        "tool_name": str(value.get("name") or ""),
-                        "summary": str(value.get("description") or value.get("name") or "请确认该操作"),
-                        "args": dict(value.get("args") or {}),
-                        "gate": "middleware",
-                    }
-                    break
+        interrupts = _interrupt_records(final_state.get("__interrupt__"))
+        if not interrupts:
+            raise ValueError("persisted_approval_interrupt_required")
+        actions = _approval_actions(interrupts)
+        approval = ApprovalStore().save_pending(
+            user_id=user_id, session_id=session_id, run_id=run_id,
+            thread_id=thread_id_for_run(user_id, session_id, run_id), interrupts=interrupts,
+        )
+        pending = {"tool_name": actions[0]["name"], "actions": actions,
+                   "summary": "；".join(item["description"] or item["name"] for item in actions),
+                   "gate": "middleware", "approval_id": approval["approval_id"]}
         tracer.approval_requested(pending)
         tracer.waiting()
         status = "waiting_for_approval"
@@ -354,7 +380,7 @@ def _compose_response(
             + str(pending.get("summary") or pending.get("tool_name") or "请确认该操作")
         )
         requires_confirmation = True
-        plan_id = plan_id_for_run(run_id)
+        plan_id = approval["approval_id"]
         success = False
 
     duration_ms = round((time.perf_counter() - run_started) * 1000)
@@ -411,6 +437,4 @@ def _compose_response(
 __all__ = [
     "run_langgraph_agent_request",
     "resume_langgraph_agent",
-    "plan_id_for_run",
-    "run_id_from_plan_id",
 ]

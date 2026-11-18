@@ -31,7 +31,10 @@ REPORT = {'run_id':IDENT,'kind':'backtest','created_at':'2026-02-06T00:00:00Z','
 def browser_page(request):
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        launch = {'headless': True}
+        if os.environ.get('CHROMIUM_EXECUTABLE'):
+            launch.update(executable_path=os.environ['CHROMIUM_EXECUTABLE'], chromium_sandbox=True)
+        browser = pw.chromium.launch(**launch)
         context = browser.new_context(viewport={'width':1440,'height':1100}, locale='zh-CN')
         page = context.new_page()
         calls, errors, strategies = [], [], []
@@ -53,12 +56,21 @@ def browser_page(request):
                 'max_stocks':1000,'max_positions':50,'message':'','coverage':{
                     'start_date':'2026-01-05','end_date':'2026-02-05','stock_count':10,'feature_version':'test'}}
             elif path=='/api/v1/tasks':data=[]
-            elif path==ROOT+'/strategies':
+            elif path=='/api/v1/web/strategies':data={'records':strategies,'total':len(strategies),'stats':{}}
+            elif path.startswith('/api/v1/web/strategies/'):
+                ident=path.rsplit('/',1)[-1]
                 if method=='PUT':
-                    strategies[:]=[{'strategy_id':body['strategy_id'],'spec':body['spec'],'updated_at':'2026-02-06'}]
-                    data=strategies[0]
-                else:data={'records':strategies,'total':len(strategies)}
-            elif path.startswith(ROOT+'/strategies/') and method=='DELETE':strategies.clear();data={'deleted':True}
+                    prior=next((s for s in strategies if s['strategy_id']==ident),None)
+                    if prior:assert body['expected_version']==prior['version']
+                    value={'strategy_id':ident,'spec':body['spec'],'updated_at':'2026-02-06',
+                           'version':prior['version']+1 if prior else 1,'status':'draft','active_task_id':None}
+                    strategies[:]=[s for s in strategies if s['strategy_id']!=ident]+[value]
+                    data=value
+                elif method=='DELETE':
+                    value=next(s for s in strategies if s['strategy_id']==ident)
+                    assert body['expected_version']==value['version']
+                    strategies.clear();data={'deleted':True}
+                else:data=next(s for s in strategies if s['strategy_id']==ident)
             elif path in {ROOT,ROOT+'/analyses',ROOT+'/screen'} and method=='POST':
                 data={'task_id':'browser-task','task_type':'backtest.run','owner_id':'browser-alice',
                     'status':'failed','progress':0,'message':'测试夹具：只检查提交参数','error':{'message':'fixture'},

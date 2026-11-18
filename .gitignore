@@ -84,3 +84,6 @@ frontend/node_modules/
 deploy/migration/
 deploy/server.env
 runtime_data/
+
+# Browser verification artifacts
+browser-results/

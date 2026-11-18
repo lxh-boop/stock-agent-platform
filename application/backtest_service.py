@@ -1,4 +1,4 @@
-"""回测唯一应用入口；页面走 Task Worker，Agent 在现有 Agent Worker 内调用相同入口。"""
+"""回测唯一应用入口；页面与 Agent 均提交同一后台研究任务。"""
 from __future__ import annotations
 
 import hashlib
@@ -51,7 +51,7 @@ class BacktestService:
         return {k: v for k, v in report.items() if k not in ROW_KINDS}
 
     @staticmethod
-    def submit(spec: dict, *, request_id: str, kind: str = 'backtest') -> dict:
+    def submit(spec: dict, *, request_id: str, kind: str = 'backtest', session_id: str = '') -> dict:
         """同用户、同请求UUID重复提交返回同一任务；不能把UUID用于不同参数。"""
         from database.connection import get_connection
         from server.api.tasks import task_manager
@@ -80,7 +80,7 @@ class BacktestService:
             active = tasks.list(owner_id=owner, task_type='backtest.run', active_only=True, limit=1)
             if active:
                 raise ValueError('本人已有回测正在运行，请先完成或取消它')
-            return task_manager.submit(task_type='backtest.run', owner_id=owner,
+            return task_manager.submit(task_type='backtest.run', owner_id=owner, session_id=session_id,
                 kwargs={'spec': parsed, 'run_id': ident, 'kind': kind},
                 metadata={'request_id': ident, 'spec_hash': hashed, 'scope': 'account', 'kind': kind},
                 timeout_seconds=3600, max_retries=0)

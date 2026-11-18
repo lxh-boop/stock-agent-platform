@@ -16,6 +16,7 @@ import { SystemMonitorPage } from '../pages/monitor/SystemMonitorPage'
 import { PaperTradingPage } from '../pages/paper/PaperTradingPage'
 import { AgentPage } from '../pages/agent/AgentPage'
 import { FactorLibraryPage } from '../pages/factors/FactorLibraryPage'
+import { StrategiesPage } from '../pages/strategies/StrategiesPage'
 import { useAuthStore } from '../stores/authStore'
 
 function RequireAuth() {
@@ -50,7 +51,9 @@ export function AppRoutes() {
       <Route path="/backtests" element={<BacktestPage />} />
       <Route path="/news" element={<NewsPage />} />
       <Route path="/settings" element={<SettingsPage />} />
-      <Route path="/paper-trading" element={<PaperTradingPage />} />
+      <Route path="/strategies" element={<StrategiesPage />} />
+      <Route path="/paper-trading" element={<Navigate to="/strategies" replace />} />
+      <Route path="/paper-account" element={<PaperTradingPage />} />
       <Route path="/agent" element={<AgentPage />} />
       <Route path="/monitor" element={<SystemMonitorPage />} />
       <Route path="/platform" element={<HealthPage />} />

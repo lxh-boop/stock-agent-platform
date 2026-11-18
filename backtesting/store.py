@@ -135,11 +135,15 @@ def _reports(conn):
 def save_report(run_id: str, report: dict) -> None:
     from psycopg import sql
     from psycopg.types.json import Jsonb
+    from backtesting import strategy_store
     with transaction() as conn:
+        strategy_store.ensure(conn)
         table = _reports(conn)
         conn.execute(sql.SQL('''INSERT INTO {} (run_id, report) VALUES (%s,%s)
             ON CONFLICT (run_id) DO NOTHING''').format(table),
             (UUID(run_id), Jsonb(report, dumps=lambda x: json.dumps(x, ensure_ascii=False, allow_nan=False))))
+        stored = conn.execute(sql.SQL('SELECT report FROM {} WHERE run_id=%s').format(table), (UUID(run_id),)).fetchone()
+        strategy_store.complete_report(conn, run_id, stored['report'])
 
 
 def get_report(run_id: str, *, summary: bool = False) -> dict:
@@ -192,48 +196,34 @@ def report_rows(run_id: str, kind: str, limit: int = 50, offset: int = 0, factor
 
 def delete_report(run_id: str) -> None:
     from psycopg import sql
+    from backtesting import strategy_store
     with transaction() as conn:
+        strategy_store.ensure(conn)
         table = _reports(conn)
         if conn.execute(sql.SQL('DELETE FROM {} WHERE run_id=%s').format(table), (UUID(run_id),)).rowcount == 0:
             raise KeyError('回测不存在或不属于当前用户')
+        strategy_store.detach_report(conn, run_id)
 
 
 def _strategies(conn):
-    from psycopg import sql
-    _, schema = _identity()
-    conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', ('strategies:' + schema,))
-    table = sql.Identifier(schema, 'backtest_strategy')
-    conn.execute(sql.SQL('''CREATE TABLE IF NOT EXISTS {} (strategy_id UUID PRIMARY KEY,
-        spec JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)''').format(table))
-    return table
+    from backtesting.strategy_store import ensure
+    return ensure(conn)
 
 
 def save_strategy(strategy_id: str, spec: dict) -> dict:
-    from psycopg import sql
-    from psycopg.types.json import Jsonb
-    normalized = BacktestSpec.model_validate(spec).model_dump(mode='json')
-    with transaction() as conn:
-        table = _strategies(conn)
-        conn.execute(sql.SQL('''INSERT INTO {} (strategy_id,spec) VALUES (%s,%s) ON CONFLICT(strategy_id)
-            DO UPDATE SET spec=EXCLUDED.spec,updated_at=CURRENT_TIMESTAMP''').format(table), (UUID(strategy_id), Jsonb(normalized)))
-    return {'strategy_id': strategy_id, 'spec': normalized}
+    from backtesting.strategy_store import get, save
+    save(strategy_id, spec)
+    return get(strategy_id)
 
 
 def list_strategies(limit: int = 30, offset: int = 0) -> dict:
-    from psycopg import sql
-    with transaction() as conn:
-        table = _strategies(conn)
-        rows = conn.execute(sql.SQL('SELECT * FROM {} ORDER BY updated_at DESC LIMIT %s OFFSET %s').format(table), (limit, offset)).fetchall()
-        count = conn.execute(sql.SQL('SELECT COUNT(*) AS n FROM {}').format(table)).fetchone()['n']
-    return {'records': [{**r, 'strategy_id': str(r['strategy_id']), 'updated_at': r['updated_at'].isoformat()} for r in rows], 'total': count}
+    from backtesting.strategy_store import listing
+    return listing(limit, offset)
 
 
 def delete_strategy(strategy_id: str) -> None:
-    from psycopg import sql
-    with transaction() as conn:
-        table = _strategies(conn)
-        if conn.execute(sql.SQL('DELETE FROM {} WHERE strategy_id=%s').format(table), (UUID(strategy_id),)).rowcount == 0:
-            raise KeyError('策略不存在或不属于当前用户')
+    from backtesting.strategy_store import delete
+    delete(strategy_id)
 
 
 @contextmanager

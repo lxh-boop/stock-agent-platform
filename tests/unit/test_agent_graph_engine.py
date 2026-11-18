@@ -39,7 +39,8 @@ def _tool_loop_model(messages: list[AIMessage]) -> GenericFakeChatModel:
 
 def _resources(registry=None, provider=None) -> AgentResources:
     return AgentResources(
-        store=None, provider=provider, impact_service=None, tool_registry=registry, context={ "user_id": "tester"}
+        store=None, provider=provider, impact_service=None, tool_registry=registry,
+        context={"user_id": "tester", "session_id": "sess_test", "run_id": "run_test"}
     )
 
 
@@ -211,10 +212,10 @@ def test_write_tool_rejection_ends_run_with_cancel_answer():
 @pytest.mark.parametrize("decision", ["approve", "reject"])
 def test_research_tools_wait_for_user_approval(monkeypatch, tool_name, decision):
     from application.backtest_service import BacktestService
-    from backtesting import store
+    from application.strategy_service import StrategyService
     seen = []
-    monkeypatch.setattr(BacktestService, "run", lambda spec, **kw: seen.append((tool_name, spec)) or {"run_id":"test", "kind":kw.get("kind")})
-    monkeypatch.setattr(store, "save_strategy", lambda ident, spec: seen.append((tool_name, spec)) or {"strategy_id":ident})
+    monkeypatch.setattr(BacktestService, "submit", lambda spec, **kw: seen.append((tool_name, spec)) or {"task_id":"test", "task_type":"backtest.run", "owner_id":"tester", "status":"queued"})
+    monkeypatch.setattr(StrategyService, "save", lambda ident, spec, **kw: seen.append((tool_name, spec)) or {"strategy_id":ident})
     monkeypatch.setattr(graph_module, "build_research_docs_tools", lambda warnings: [])
     spec = {"start_date":"2026-01-05", "end_date":"2026-01-05" if tool_name=="screen_factor_strategy" else "2026-02-05", "factors":[{"field":"MA5"}]}
     model = _tool_loop_model([AIMessage(content="",tool_calls=[{"name":tool_name,"args":{"spec":spec},"id":"research"}]),AIMessage(content="研究操作已处理。")])
@@ -225,3 +226,30 @@ def test_research_tools_wait_for_user_approval(monkeypatch, tool_name, decision)
     answers = {getattr(intr,"id"):{"type":decision} for intr in result["__interrupt__"]}
     graph.invoke(Command(resume=answers),config=config)
     assert len(seen)==(1 if decision=="approve" else 0)
+
+
+@pytest.mark.parametrize('tool_name,args', [
+    ('save_strategy_from_report', {'run_id':'11111111-1111-4111-8111-111111111111'}),
+    ('rerun_factor_strategy', {'strategy_id':'11111111-1111-4111-8111-111111111111','expected_version':2}),
+    ('delete_factor_strategy', {'strategy_id':'11111111-1111-4111-8111-111111111111','expected_version':2}),
+    ('save_memory', {'op':'add','slug':'research-cost','title':'研究费率','content':'回测费率假设万分之三',
+        'request_id':'11111111-1111-4111-8111-111111111111','explicit_user_request':True}),
+])
+@pytest.mark.parametrize('decision',['approve','reject'])
+def test_new_strategy_and_note_tools_use_real_interrupt_gate(monkeypatch,tool_name,args,decision):
+    from application.strategy_service import StrategyService
+    from application.research_notes_service import ResearchNotesService
+    seen=[]
+    monkeypatch.setattr(StrategyService,'from_report',lambda *a,**k: seen.append(tool_name) or {'strategy_id':a[0]})
+    monkeypatch.setattr(StrategyService,'rerun',lambda *a,**k: seen.append(tool_name) or {'task_id':'t','owner_id':'tester','task_type':'backtest.run'})
+    monkeypatch.setattr(StrategyService,'delete',lambda *a,**k: seen.append(tool_name) or {'deleted':True})
+    monkeypatch.setattr(ResearchNotesService,'save',lambda *a,**k: seen.append(tool_name) or {'saved':True})
+    monkeypatch.setattr(graph_module,'build_research_docs_tools',lambda warnings:[])
+    model=_tool_loop_model([AIMessage(content='',tool_calls=[{'name':tool_name,'args':args,'id':'gated-new'}]),AIMessage(content='已处理研究请求。')])
+    graph=graph_module.build_agent_graph(model,_resources(),{},checkpointer=InMemorySaver())
+    config={'configurable':{'thread_id':'new:'+tool_name+decision}}
+    result=graph.invoke(_initial_state('研究策略'),config)
+    assert result.get('__interrupt__') and not seen
+    answers={getattr(item,'id'):{'type':decision} for item in result['__interrupt__']}
+    graph.invoke(Command(resume=answers),config=config)
+    assert len(seen)==(1 if decision=='approve' else 0)

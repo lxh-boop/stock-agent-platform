@@ -34,6 +34,5 @@ export interface BacktestDetail extends BacktestSummary {
   data_hash: string; data_snapshot: Record<string, unknown>; diagnostics: Record<string, number>
   assumptions: string[]; disclaimer: string; factor_metrics?: Record<string, Record<string, unknown>>
 }
-export interface SavedStrategy { strategy_id: string; updated_at: string; spec: BacktestSpec }
 export type BacktestRowKind = 'equity' | 'trades' | 'positions' | 'skipped_orders' | 'signals' | 'periods' | 'ic_series' | 'segments' | 'long_short' | 'ic_decay' | 'correlation' | 'selections'
 export interface BacktestRows { records: Record<string, unknown>[]; total: number; offset: number; limit: number }

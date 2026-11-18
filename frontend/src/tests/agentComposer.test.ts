@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { isValidElement, type ReactNode } from 'react'
-import { ChatComposer } from '../components/agent/ChatComposer'
+import { ChatComposer, type StrategyDraft } from '../components/agent/ChatComposer'
 
-const hooks = vi.hoisted(() => ({ values: [] as unknown[], refs: [] as { current: unknown }[], stateIndex: 0, refIndex: 0 }))
+const hooks = vi.hoisted(() => ({ values: [] as unknown[], refs: [] as { current: unknown }[], effects: [] as (() => unknown)[], stateIndex: 0, refIndex: 0 }))
 vi.mock('react', async (original) => ({
   ...await original<typeof import('react')>(),
   useState: (initial: unknown) => {
@@ -15,6 +15,7 @@ vi.mock('react', async (original) => ({
     hooks.refs[index] ??= { current: initial }
     return hooks.refs[index]
   },
+  useEffect: (effect: () => unknown) => { hooks.effects.push(effect) },
 }))
 vi.mock('antd', () => ({ Button: 'button', Input: { TextArea: 'textarea' }, Space: 'div', Typography: { Text: 'span' } }))
 
@@ -28,10 +29,12 @@ function find(node: ReactNode, testId: string): Props {
   }
   throw new Error(`Missing ${testId}`)
 }
-function render(onSubmit: (value: string) => Promise<void>, disabled = false) {
+function render(onSubmit: (value: string) => Promise<void>, disabled = false, strategyDraft?: StrategyDraft) {
   hooks.stateIndex = 0; hooks.refIndex = 0
-  const tree = ChatComposer({ disabled, loading: false, onSubmit })
-  return { input: find(tree, 'agent-composer-input'), button: find(tree, 'agent-send-button') }
+  hooks.effects = []
+  const tree = ChatComposer({ disabled, loading: false, onSubmit, strategyDraft })
+  hooks.effects.forEach(effect => effect())
+  return { tree, input: find(tree, 'agent-composer-input'), button: find(tree, 'agent-send-button') }
 }
 
 beforeEach(() => { hooks.values = []; hooks.refs = [] })
@@ -65,5 +68,30 @@ describe('Agent composer submission recovery', () => {
     expect(render(submit).button.loading).toBe(true)
     finish()
     await vi.waitFor(() => expect(render(submit).button.loading).toBe(false))
+  })
+
+  it('loads each strategy draft once without automatically sending or replacing later edits', () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    const draft = { text: '请研究 MA5 策略', prefillId: 'draft-1' }
+    render(submit, false, draft)
+    let view = render(submit, false, draft)
+    expect(view.input.value).toBe(draft.text)
+    expect(submit).not.toHaveBeenCalled()
+    ;(view.input.onChange as (event: {target: {value: string}}) => void)({target:{value:'修改后的策略需求'}})
+    view = render(submit, false, draft)
+    expect(view.input.value).toBe('修改后的策略需求')
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('preserves an existing input and waits for a choice when a strategy draft arrives', () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    let view = render(submit)
+    ;(view.input.onChange as (event: {target: {value: string}}) => void)({target:{value:'尚未发送的原问题'}})
+    const draft = {text:'另一个策略',prefillId:'draft-conflict'}
+    render(submit, false, draft)
+    view = render(submit, false, draft)
+    expect(view.input.value).toBe('尚未发送的原问题')
+    expect(find(view.tree,'strategy-draft-conflict')).toBeTruthy()
+    expect(submit).not.toHaveBeenCalled()
   })
 })

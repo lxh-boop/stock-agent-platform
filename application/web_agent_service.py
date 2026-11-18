@@ -485,7 +485,7 @@ class WebAgentApplicationService:
             raise PermissionError("task_owner_mismatch")
         if str(task.get("session_id") or "") != str(conversation_id):
             raise PermissionError("task_conversation_mismatch")
-        if str(task.get("task_type") or "") != "agent.run":
+        if str(task.get("task_type") or "") not in {"agent.run", "agent.resume"}:
             raise ValueError("not_an_agent_task")
         status = str(task.get("status") or "")
         if status not in {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}:
@@ -507,6 +507,9 @@ class WebAgentApplicationService:
             "run_id": run_id,
             "warnings": _safe_value(result.get("warnings") or [], max_chars=300),
             "intent": str(result.get("intent") or ""),
+            "plan_id": str((result.get('result') or {}).get('plan_id') or ''),
+            "requires_confirmation": bool((result.get('result') or {}).get('requires_confirmation')),
+            "pending_approval": _safe_value(((result.get('result') or {}).get('data') or {}).get('pending_approval'), max_chars=2000),
         }
         row = self.agent.upsert_message(
             {
@@ -627,6 +630,7 @@ class WebAgentApplicationService:
             },
         }
 
+    @staticmethod
     def _confirmation_phrase(plan_id: str) -> str:
         suffix = str(plan_id or "")[-6:].upper()
         return f"CONFIRM-{suffix}" if suffix else "CONFIRM"
@@ -675,6 +679,29 @@ class WebAgentApplicationService:
                     "confirmation_phrase": self._confirmation_phrase(proposal_id),
                 }
             )
+        from application.agent_approval_service import list_approval_actions
+        from agent_graph.service import _approval_actions
+        for approval in list_approval_actions(user_id=user_id, session_id=conversation_id):
+            actions = _approval_actions(approval['interrupts'])
+            ident = approval['approval_id']
+            names = [item['name'] for item in actions]
+            records.append({
+                'source': 'langgraph', 'proposal_id': ident, 'plan_id': ident,
+                'proposal_version': 1, 'payload_hash': approval['payload_hash'],
+                'conversation_id': approval['session_id'], 'run_id': approval['run_id'],
+                'intent': 'agent_tools', 'operation_type': ' / '.join(names),
+                'confirmation_status': approval['decision'] or 'pending',
+                'execution_status': approval['state'], 'decision': approval['decision'],
+                'created_at': approval['created_at'], 'expires_at': approval['expires_at'],
+                'before_state_summary': {'status': '等待批准后执行', 'run_id': approval['run_id']},
+                'proposed_changes': _safe_value(actions, max_chars=20000),
+                'after_state_preview': '按以上参数恢复本次 Agent 操作，研究计算在后台任务中运行。',
+                'warnings': ['批准仅对本次参数有效；后续新操作会单独请求批准。'],
+                'validation_results': {'payload_hash_bound': True, 'checkpoint_scope_bound': True},
+                'confirmation_phrase': self._confirmation_phrase(ident),
+                'task_id': approval.get('task_id') or '', 'can_retry': approval['can_retry'],
+                'error': approval.get('error') or '',
+            })
         records.sort(key=lambda item: item.get("created_at") or "", reverse=True)
         return {"records": records, "total": len(records)}
 
@@ -745,10 +772,10 @@ class WebAgentApplicationService:
         request_id: str = "",
         idempotency_key: str = "",
     ) -> dict[str, Any]:
-        """Complete a LangGraph engine run paused at a write-approval interrupt."""
+        """Queue a scoped approval continuation; never run model calls in HTTP."""
 
-        from agent_graph.service import resume_langgraph_agent, run_id_from_plan_id
-        from application.user_credentials_service import get_user_llm_settings
+        from application.agent_approval_service import submit_approval_action
+        from server.api.tasks import _public_task
 
         normalized = str(action or "").lower()
         if normalized == "confirm":
@@ -759,19 +786,14 @@ class WebAgentApplicationService:
             decision = "rejected"
         else:
             raise ValueError("invalid_control_action")
-        result = resume_langgraph_agent(
-            session_id=str(conversation_id),
-            user_id=user_id,
-            run_id=run_id_from_plan_id(plan_id),
-            decision=decision,
-            llm_settings=get_user_llm_settings(user_id),
-            output_dir=self.output_dir,
-            db_path=self.db_path,
+        task = submit_approval_action(
+            approval_id=plan_id, user_id=user_id, session_id=conversation_id,
+            decision=decision, request_id=request_id, idempotency_key=idempotency_key,
         )
         return {
             "request_id": request_id,
             "idempotency_key": idempotency_key,
-            "result": _safe_value(result, max_chars=600),
+            "task": _public_task(task),
         }
 
     def strategy_proposal(self, user_id: str, conversation_id: str) -> dict[str, Any]:

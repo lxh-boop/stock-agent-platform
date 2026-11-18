@@ -272,6 +272,8 @@ class ScreenRequest(StrictModel):
 class StrategyRequest(StrictModel):
     spec: BacktestSpec
     strategy_id: UUID
+    request_id: UUID
+    expected_version: int | None = Field(default=None, ge=1, strict=True)
     confirmed: Literal[True]
 
 

@@ -2,7 +2,7 @@ import { httpClient } from './httpClient'
 import { unwrapEnvelope } from './envelope'
 import { getWeb } from './webApi'
 import type { OperationResponse } from '../types/api'
-import type { TaskSubmitRequest } from '../types/task'
+import type { TaskRecord, TaskSubmitRequest } from '../types/task'
 import type {
   AgentMessage,
   AgentMessagePage,
@@ -14,6 +14,13 @@ import type {
 } from '../types/agent'
 
 const BASE = '/api/v1/web/agent'
+
+export interface AgentActionResponse {
+  request_id: string
+  idempotency_key: string
+  task?: TaskRecord
+  result?: Record<string, unknown>
+}
 
 export function agentRunRequest(userId: string, conversationId: string, question: string, messageId: string): TaskSubmitRequest {
   return {
@@ -96,7 +103,7 @@ export const agentApi = {
     requestId: string,
     idempotencyKey: string,
   ) =>
-    send<Record<string, unknown>>('post', `${BASE}/pending-actions/${encodeURIComponent(planId)}/confirm`, {
+    send<AgentActionResponse>('post', `${BASE}/pending-actions/${encodeURIComponent(planId)}/confirm`, {
       user_id: userId,
       conversation_id: conversationId,
       confirmation_text: confirmationText,
@@ -110,7 +117,7 @@ export const agentApi = {
     requestId: string,
     idempotencyKey: string,
   ) =>
-    send<Record<string, unknown>>('post', `${BASE}/pending-actions/${encodeURIComponent(planId)}/reject`, {
+    send<AgentActionResponse>('post', `${BASE}/pending-actions/${encodeURIComponent(planId)}/reject`, {
       user_id: userId,
       conversation_id: conversationId,
       confirmation_text: '',

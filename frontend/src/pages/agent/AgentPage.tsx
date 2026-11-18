@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Empty, Row, Space, Tabs, Tag, Typography, message } from 'antd'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { agentApi, agentRunRequest } from '../../api/agentApi'
 import { errorMessage } from '../../api/errors'
 import { acknowledgeTask, cancelTask, getTask, listTasks, submitTask } from '../../api/taskApi'
 import { AgentRunPanel } from '../../components/agent/AgentRunPanel'
 import { AgentTaskProgress } from '../../components/agent/AgentTaskProgress'
-import { ChatComposer } from '../../components/agent/ChatComposer'
+import { ChatComposer, type StrategyDraft } from '../../components/agent/ChatComposer'
+import { AgentResearchTasks } from '../../components/agent/AgentResearchTasks'
 import { ChatMessageList } from '../../components/agent/ChatMessageList'
 import { ConversationList } from '../../components/agent/ConversationList'
 import { PendingActionPanel } from '../../components/agent/PendingActionPanel'
@@ -18,6 +20,7 @@ import { useAgentTaskEvents } from '../../hooks/useAgentTaskEvents'
 import { isUnavailableAgentTask, useAgentTaskLookup } from '../../hooks/useAgentTaskLookup'
 import { useCurrentUserId } from '../../hooks/useCurrentUserId'
 import { useAgentTaskStore } from '../../stores/agentTaskStore'
+import { useAuthStore } from '../../stores/authStore'
 import { TERMINAL_TASK_STATUSES } from '../../types/task'
 
 function randomId(prefix: string): string {
@@ -34,8 +37,13 @@ export function AgentPage() {
   useAgentTaskEvents()
   const queryClient = useQueryClient()
   const userId = useCurrentUserId()
+  const location = useLocation(), navigate = useNavigate()
+  const [strategyDraft, setStrategyDraft] = useState<StrategyDraft | null>(null)
+  const [controlTab, setControlTab] = useState('run')
 
   const [conversationId, setConversationId] = useState('')
+  const conversationRef = useRef(conversationId)
+  conversationRef.current = conversationId
   const [messageLimit, setMessageLimit] = useState(30)
   const [selectedRunId, setSelectedRunId] = useState('')
   const autoCreateRef = useRef(false)
@@ -46,7 +54,20 @@ export function AgentPage() {
     setSelectedRunId('')
     setMessageLimit(30)
     autoCreateRef.current = false
+    setStrategyDraft(null)
   }, [userId])
+
+  useEffect(() => {
+    const state = location.state as { strategyDraft?: StrategyDraft } | null
+    const draft = state?.strategyDraft
+    if (!draft) return
+    if (typeof draft.text === 'string' && draft.text.trim() && draft.text.length <= 20_000 && typeof draft.prefillId === 'string') {
+      setStrategyDraft(draft)
+    }
+    const { strategyDraft: consumed, ...rest } = state!
+    void consumed
+    navigate(location.pathname + location.search, { replace: true, state: rest })
+  }, [location.pathname, location.search, location.state, navigate])
 
   const sessions = useQuery({
     queryKey: ['web', 'agent', 'sessions', userId],
@@ -58,6 +79,7 @@ export function AgentPage() {
   const createSession = useMutation({
     mutationFn: () => agentApi.createSession(userId),
     onSuccess: async (session) => {
+      if (useAuthStore.getState().user?.user_id !== userId) return
       setConversationId(session.conversation_id)
       await queryClient.invalidateQueries({ queryKey: ['web', 'agent', 'sessions', userId] })
     },
@@ -144,28 +166,28 @@ export function AgentPage() {
 
   const recovery = useQuery({
     queryKey: ['agent-task-recovery', userId, conversationId],
-    queryFn: () => listTasks({
-      owner_id: userId,
-      session_id: conversationId,
-      task_type: 'agent.run',
-      unacknowledged_only: true,
-      limit: 5,
-    }),
+    queryFn: async () => (await Promise.all(['agent.run', 'agent.resume'].map(task_type => listTasks({
+      owner_id: userId, session_id: conversationId, task_type,
+      unacknowledged_only: true, limit: 5,
+    })))).flat().sort((a, b) => b.created_at.localeCompare(a.created_at)),
     enabled: Boolean(conversationId) && !storedTaskId,
     refetchInterval: 4_000,
   })
   useEffect(() => {
     const latest = recovery.data?.[0]
-    if (latest && !storedTaskId) {
+    if (latest && latest.owner_id === userId && latest.session_id === conversationId && !storedTaskId) {
       setRecovery(latest.task_id, conversationId)
       setTask(latest)
     }
-  }, [conversationId, recovery.data, setRecovery, setTask, storedTaskId])
+  }, [conversationId, recovery.data, setRecovery, setTask, storedTaskId, userId])
 
   const cancel = useMutation({
     mutationFn: (taskId: string) => cancelTask(taskId),
-    onSuccess: setTask,
-    onError: (error) => message.error(errorMessage(error)),
+    onSuccess: task => {
+      if (useAuthStore.getState().user?.user_id === userId && task.owner_id === userId
+        && useAgentTaskStore.getState().taskId === task.task_id) setTask(task)
+    },
+    onError: (error) => { if (useAuthStore.getState().user?.user_id === userId) message.error(errorMessage(error)) },
   })
 
   const submit = useMutation({
@@ -177,6 +199,7 @@ export function AgentPage() {
       return task
     },
     onSuccess: async (task) => {
+      if (useAuthStore.getState().user?.user_id !== userId || task.owner_id !== userId || task.session_id !== conversationId) return
       setRecovery(task.task_id, conversationId)
       setTask(task)
       await Promise.all([
@@ -189,7 +212,7 @@ export function AgentPage() {
 
   useEffect(() => {
     const task = agentTask
-    if (!task || task.session_id !== conversationId || !TERMINAL_TASK_STATUSES.has(task.status)) return
+    if (!task || task.owner_id !== userId || task.session_id !== conversationId || !TERMINAL_TASK_STATUSES.has(task.status)) return
     if (finalizingRef.current === task.task_id) return
     finalizingRef.current = task.task_id
 
@@ -199,6 +222,7 @@ export function AgentPage() {
         let lastError: unknown = null
         for (const delayMs of FINALIZE_RETRY_DELAYS_MS) {
           if (delayMs > 0) await sleep(delayMs)
+          if (useAuthStore.getState().user?.user_id !== userId) return
           try {
             assistantMessage = await agentApi.finalizeTask(userId, conversationId, task.task_id)
             break
@@ -208,18 +232,20 @@ export function AgentPage() {
         }
         if (!assistantMessage) throw lastError ?? new Error('finalize_task_failed')
 
-        if (assistantMessage.run_id) setSelectedRunId(assistantMessage.run_id)
+        if (useAuthStore.getState().user?.user_id !== userId) return
+        if (assistantMessage.run_id && conversationRef.current === conversationId) setSelectedRunId(assistantMessage.run_id)
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['web', 'agent', 'messages', userId, conversationId] }),
           queryClient.invalidateQueries({ queryKey: ['web', 'agent', 'sessions', userId] }),
           queryClient.invalidateQueries({ queryKey: ['web', 'agent', 'pending', userId, conversationId] }),
           queryClient.invalidateQueries({ queryKey: ['web', 'agent', 'strategy-proposal', userId, conversationId] }),
+          queryClient.invalidateQueries({ queryKey: ['agent-research', userId, conversationId] }),
         ])
         await acknowledgeTask(task.task_id)
-        clearTask()
+        if (useAuthStore.getState().user?.user_id === userId && useAgentTaskStore.getState().taskId === task.task_id) clearTask()
       } catch (error) {
-        finalizingRef.current = ''
-        message.error(`Agent 结果保存失败，已自动重试：${errorMessage(error)}`)
+        if (finalizingRef.current === task.task_id) finalizingRef.current = ''
+        if (useAuthStore.getState().user?.user_id === userId) message.error(`Agent 结果保存失败，已自动重试：${errorMessage(error)}`)
       }
     })()
   }, [agentTask, clearTask, conversationId, queryClient, userId])
@@ -245,7 +271,7 @@ export function AgentPage() {
   return <Space direction="vertical" size="large" style={{ width: '100%' }} data-testid="agent-page">
     <PageHeader
       title="AI Agent"
-      description="会话、任务、SSE 与审批均通过 FastAPI；不连接真实交易。"
+      description="查询本人数据、研究因子和策略，查看后台任务与待确认操作。"
     />
     {anotherConversationTask ? <Typography.Text type="secondary">
       会话 {storedTaskConversation.slice(-10)} 的任务正在运行；切回该会话可查看进度，本会话可继续提问。
@@ -293,17 +319,24 @@ export function AgentPage() {
             data-task-active={String(taskActive)}
           >
             <ChatComposer
+              key={userId}
+              strategyDraft={strategyDraft}
               disabled={!conversationId || taskActive}
               loading={submit.isPending}
               onSubmit={(value) => submit.mutateAsync(value).then(() => undefined)}
             />
           </div>
+          {(pending.data?.total ?? 0) > 0 && <Button type="link" onClick={() => setControlTab('pending')}>有 {pending.data?.total} 项操作需要确认，请在下方待确认操作中处理</Button>}
         </Card>
       </Col>
     </Row>
 
+    <AgentResearchTasks key={`${userId}:${conversationId}`} userId={userId} conversationId={conversationId} />
+
     <Card title="Agent 运行与控制中心">
       <Tabs
+        activeKey={controlTab}
+        onChange={setControlTab}
         items={[
           {
             key: 'run',
@@ -313,11 +346,17 @@ export function AgentPage() {
           {
             key: 'pending',
             label: `待确认操作（${pending.data?.total ?? 0}）`,
-            children: <PendingActionPanel
+            children: <>{pending.error && <Alert type="error" message={errorMessage(pending.error)} action={<Button onClick={() => void pending.refetch()}>重试读取</Button>} />}<PendingActionPanel
               userId={userId}
               conversationId={conversationId}
               actions={pending.data?.records ?? []}
-            />,
+              onTask={task => {
+                if (useAuthStore.getState().user?.user_id !== userId || task.session_id !== conversationId) return
+                setRecovery(task.task_id, conversationId)
+                setTask(task)
+                setControlTab('run')
+              }}
+            /></>,
           },
           {
             key: 'proposal',

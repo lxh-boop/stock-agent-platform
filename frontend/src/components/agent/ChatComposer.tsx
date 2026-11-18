@@ -1,9 +1,11 @@
 import { Button, Input, Space, Typography } from 'antd'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+
+export interface StrategyDraft { text: string; prefillId: string }
 
 const QUICK_QUESTIONS = [
-  '查看当前模拟盘账户和持仓',
-  '查看当前预测排名前十的股票',
+  '查看我的策略和最近回测',
+  '查看本人可用因子和数据日期范围',
   '分析贵州茅台',
   '查看每日自动更新和调度状态',
 ]
@@ -12,15 +14,26 @@ export function ChatComposer({
   disabled,
   loading,
   onSubmit,
+  strategyDraft,
 }: {
   disabled: boolean
   loading: boolean
   onSubmit: (value: string) => Promise<void> | void
+  strategyDraft?: StrategyDraft | null
 }) {
   const [value, setValue] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const submittingRef = useRef(false)
+  const consumedDraft = useRef('')
+  const [pendingDraft, setPendingDraft] = useState<StrategyDraft | null>(null)
   const busy = loading || submitting
+
+  useEffect(() => {
+    if (!strategyDraft || consumedDraft.current === strategyDraft.prefillId) return
+    consumedDraft.current = strategyDraft.prefillId
+    if (value.trim()) setPendingDraft(strategyDraft)
+    else setValue(strategyDraft.text)
+  }, [strategyDraft, value])
 
   const submit = async (question = value) => {
     const normalized = question.trim()
@@ -40,6 +53,11 @@ export function ChatComposer({
   }
 
   return <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    {pendingDraft && <Space wrap data-testid="strategy-draft-conflict">
+      <Typography.Text>策略草稿已准备好，当前输入已保留。</Typography.Text>
+      <Button disabled={busy} onClick={() => { setValue(pendingDraft.text); setPendingDraft(null) }}>使用策略草稿替换输入</Button>
+      <Button onClick={() => setPendingDraft(null)}>忽略草稿</Button>
+    </Space>}
     <Space wrap>
       <Typography.Text type="secondary">快捷提问：</Typography.Text>
       {QUICK_QUESTIONS.map((item) => <Button
@@ -54,7 +72,7 @@ export function ChatComposer({
       onChange={(event) => setValue(event.target.value)}
       autoSize={{ minRows: 3, maxRows: 8 }}
       maxLength={20_000}
-      placeholder="请输入问题，例如：分析 600519，或查看当前模拟盘持仓"
+      placeholder="请输入问题，例如：研究 MA5 因子策略，或查看最近回测报告"
       data-testid="agent-composer-input"
       disabled={disabled}
       onPressEnter={(event) => {

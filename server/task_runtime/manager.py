@@ -23,6 +23,7 @@ ALLOWED_TASK_TYPES = {
     "diagnostic.sleep",
     "diagnostic.flaky",
     "agent.run",
+    "agent.resume",
     "dashboard.rolling_update",
     "backtest.run",
     "paper-trading.update",

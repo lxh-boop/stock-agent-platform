@@ -147,6 +147,8 @@ def _failure(exc: Exception) -> OperationResponse:
 
 @router.post("", response_model=OperationResponse)
 def submit_task(request: TaskSubmitRequest, user: AuthUser = Depends(require_user)) -> OperationResponse:
+    if request.task_type == "agent.resume":
+        raise HTTPException(status_code=403, detail="agent_resume_requires_approval")
     args = list(decode_transport(request.args) or [])
     kwargs = dict(decode_transport(request.kwargs) or {})
     owner_id = user.user_id

@@ -37,6 +37,10 @@ GATED_WRITE_TOOLS = (
     "analyze_factors",
     "screen_factor_strategy",
     "save_factor_strategy",
+    "save_strategy_from_report",
+    "rerun_factor_strategy",
+    "delete_factor_strategy",
+    "save_memory",
     "database_write_portfolio_graph_context",
     "database_write_evidence_graph_context",
 )

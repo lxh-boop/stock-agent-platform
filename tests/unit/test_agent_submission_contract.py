@@ -98,3 +98,12 @@ def test_accepted_request_binds_to_agent_service_query(agent_request, task_clien
     assert result == service.run.return_value
     service_factory.assert_called_once_with(None)
     service.run.assert_called_once_with(**submitted["kwargs"], llm_settings=None)
+
+
+def test_agent_resume_cannot_bypass_approval_endpoint(agent_request, task_client):
+    client, submit, settings = task_client
+    agent_request['task_type'] = 'agent.resume'
+    response = client.post('/api/v1/tasks', json=agent_request)
+    assert response.status_code == 403
+    submit.assert_not_called()
+    settings.assert_not_called()
