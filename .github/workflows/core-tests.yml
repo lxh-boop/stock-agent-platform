@@ -86,3 +86,6 @@ jobs:
 
       - name: 构建生产前端
         run: npm run build
+
+      - name: 验证独立前端镜像构建
+        run: docker build --progress=plain --tag stock-frontend-ci:${{ github.sha }} .

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, create_autospec
 
@@ -14,9 +15,11 @@ from server.api.security import AuthUser, require_user
 
 
 @pytest.fixture
-def agent_request(fixtures_dir):
+def agent_request():
     # Also compared with the actual Axios request by the frontend regression test.
-    return json.loads((fixtures_dir / "agent_task_request.json").read_text(encoding="utf-8"))
+    # Keep the shared contract inside the standalone frontend Docker context.
+    fixture = Path(__file__).resolve().parents[2] / "frontend/src/tests/fixtures/agent_task_request.json"
+    return json.loads(fixture.read_text(encoding="utf-8"))
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { AxiosError, type AxiosResponse } from 'axios'
-import fixture from '../../../tests/fixtures/agent_task_request.json'
+import fixture from './fixtures/agent_task_request.json'
 import { agentApi, agentRunRequest } from '../api/agentApi'
 import { submitTask } from '../api/taskApi'
 import { httpClient } from '../api/httpClient'
