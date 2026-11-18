@@ -85,41 +85,25 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSyst
   .paper-section-controls { margin-left: 0; }
 }
 
-.app-content-scroll--agent { display: flex; flex-direction: column; overflow: hidden; scrollbar-gutter: auto; }
-.app-content-scroll--agent > .app-header { flex: 0 0 auto; }
-.app-content-scroll--agent > .app-header--collapsed { display: none; }
-.app-content-scroll--agent > .app-content { flex: 1 1 auto; min-height: 0; max-width: none; display: flex; padding: 12px 16px 6px; }
-.app-shell--agent > .app-nav-reveal { position: static; transform: none; align-self: center; flex: 0 0 auto; min-height: 26px; padding: 2px 12px; margin-top: 4px; font-size: 12px; }
-.agent-page { width: 100%; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
-.agent-workspace { flex: 1 1 auto; min-height: 0; display: flex; gap: 12px; align-items: stretch; }
-.agent-sidebar { flex: 0 0 220px; min-height: 0; }
+.agent-workspace { align-items: stretch; }
 .agent-conversation-card,
-.agent-chat-card { height: 100%; min-height: 0; overflow: hidden; }
-.agent-chat-card { flex: 1 1 auto; min-width: 0; }
+.agent-chat-card { height: min(720px, calc(100vh - 260px)); min-height: 520px; overflow: hidden; }
 .agent-conversation-card .ant-card-body,
 .agent-chat-card .ant-card-body { height: 100%; min-height: 0; }
 .agent-conversation-list { height: 100%; display: flex; flex-direction: column; min-height: 0; }
-.agent-conversation-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid #e2e8f0; }
+.agent-conversation-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #e2e8f0; }
 .agent-conversation-list .ant-list { min-height: 0; overflow-y: auto; }
-.agent-conversation-item { padding: 10px 12px !important; cursor: pointer; transition: background .15s ease; }
+.agent-conversation-item { padding: 12px 14px !important; cursor: pointer; transition: background .15s ease; }
 .agent-conversation-item:hover { background: #f8fafc; }
 .agent-conversation-item--active { background: #e0f2fe; }
-.agent-conversation-item .ant-list-item-meta { min-width: 0; }
-.agent-conversation-item .ant-list-item-action { margin-inline-start: 4px; }
-.agent-conversation-item .ant-list-item-action > li { padding: 0 2px; }
-.agent-conversation-time, .agent-message-time { font-size: 12px; white-space: nowrap; }
-.agent-chat-card .ant-card-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; }
-.agent-chat-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
-.agent-chat-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.agent-chat-heading > .ant-typography { min-width: 0; }
-.agent-chat-heading > .ant-btn, .agent-message-count, .agent-chat-tools { flex-shrink: 0; }
-.agent-chat-messages { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-anchor: none; overscroll-behavior: contain; padding: 4px 8px 4px 0; scrollbar-gutter: stable; }
-.agent-chat-messages--empty { display: flex; align-items: center; justify-content: center; }
-.agent-load-messages { flex: 0 0 auto; align-self: center; }
+.agent-conversation-time,
+.agent-conversation-id { font-size: 12px; }
+.agent-chat-card .ant-card-body { display: flex; flex-direction: column; gap: 16px; }
+.agent-chat-messages { flex: 1 1 auto; min-height: 260px; overflow-y: auto; padding: 4px 8px 4px 0; scroll-behavior: smooth; }
 .agent-chat-row { display: flex; margin-bottom: 14px; }
 .agent-chat-row--user { justify-content: flex-end; }
 .agent-chat-row--assistant { justify-content: flex-start; }
-.agent-chat-bubble { width: min(94%, 1120px); min-width: 0; border-radius: 12px; padding: 12px 14px; background: #f8fafc; border: 1px solid #e2e8f0; }
+.agent-chat-bubble { width: min(88%, 900px); border-radius: 14px; padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; }
 .agent-chat-row--user .agent-chat-bubble { background: #eff6ff; border-color: #bfdbfe; }
 .agent-message-content { white-space: pre-wrap; margin-bottom: 0 !important; overflow-wrap: anywhere; }
 .markdown-content { min-width: 0; color: #1f2937; line-height: 1.72; overflow-wrap: anywhere; }
@@ -146,29 +130,13 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSyst
 .markdown-content th,
 .markdown-content td { padding: 8px 10px; border: 1px solid #cbd5e1; text-align: left; }
 .markdown-content th { background: #e2e8f0; color: #0f172a; }
-.agent-composer { flex: 0 0 auto; border-top: 1px solid #e2e8f0; padding-top: 8px; }
-.agent-composer-inner { display: flex; flex-direction: column; gap: 6px; }
-.agent-composer-hint { font-size: 12px; }
+.agent-composer { flex: 0 0 auto; border-top: 1px solid #e2e8f0; padding-top: 14px; }
 .agent-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.agent-task-summary { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.agent-task-summary > .ant-typography { min-width: 0; flex: 1; font-size: 12px; }
-.agent-disclaimer { flex: 0 0 auto; font-size: 11px; line-height: 16px; color: #64748b; text-align: center; }
-.agent-other-task { flex: 0 0 auto; font-size: 12px; }
 .agent-task-panel { flex: 0 0 auto; display: flex; flex-direction: column; gap: 10px; border-top: 1px solid #e2e8f0; padding-top: 12px; }
 .agent-json-block { max-height: 420px; overflow: auto; margin: 0; padding: 12px; border-radius: 8px; background: #0f172a; color: #dbeafe; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-@media (max-width: 720px) {
-  .app-content-scroll--agent > .app-content { padding: 6px 6px 4px; }
-  .agent-chat-card .ant-card-body { padding: 8px; gap: 6px; }
-  .agent-chat-toolbar { flex-wrap: wrap; }
-  .agent-chat-heading { flex: 1 1 100%; }
-  .agent-chat-tools { margin-left: auto; }
-  .agent-chat-bubble { width: 100%; padding: 10px; }
-  .agent-composer-hint { display: none; }
-  .agent-control-drawer .ant-drawer-body { padding: 12px; }
-}
-@media (max-height: 500px) {
-  .agent-chat-card .ant-card-body { gap: 4px; padding-top: 6px; padding-bottom: 6px; }
-  .agent-composer textarea { max-height: 64px !important; overflow-y: auto !important; }
-  .agent-disclaimer { font-size: 10px; line-height: 12px; }
+@media (max-width: 992px) {
+  .agent-conversation-card { height: 320px; min-height: 320px; margin-bottom: 16px; }
+  .agent-chat-card { height: auto; min-height: 620px; }
+  .agent-chat-messages { min-height: 360px; max-height: 640px; }
 }

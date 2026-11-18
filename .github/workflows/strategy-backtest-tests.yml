@@ -75,12 +75,7 @@ jobs:
       - name: Chromium interactions with offline API fixtures
         run: |
           python -m pip install playwright
-          python -m playwright install chromium
-          # Hosted runners often already have the browser's system libraries.
-          # Install missing libraries only when the real launch probe fails.
-          if ! python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); browser = p.chromium.launch(); browser.close(); p.stop()'; then
-            python -m playwright install-deps chromium
-          fi
+          python -m playwright install --with-deps chromium
           (cd frontend && npm run preview > /tmp/backtest-preview.log 2>&1) &
           for n in $(seq 1 30); do curl -fsS http://127.0.0.1:4173/ >/dev/null && break || sleep 1; done
           BACKTEST_BROWSER_URL=http://127.0.0.1:4173 python -m pytest -q tests/browser/test_strategy_research_browser.py tests/browser/test_strategy_workspace_browser.py tests/browser/test_agent_research_browser.py tests/browser/test_factor_library_browser.py

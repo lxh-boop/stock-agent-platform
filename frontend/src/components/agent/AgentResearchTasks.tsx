@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Card, Empty, Modal, Space, Typography, message } from 'antd'
+import { Button, Card, Modal, Space, Typography, message } from 'antd'
 import { Link } from 'react-router-dom'
 import { cancelTask, listTasks } from '../../api/taskApi'
 import { strategiesApi } from '../../api/strategiesApi'
@@ -47,7 +47,7 @@ export function AgentResearchTasks({ userId, conversationId }: { userId: string;
     onError: e => { if (useAuthStore.getState().user?.user_id === userId) message.error(errorMessage(e)) },
   })
   if (tasks.error) return <Typography.Text type="danger">研究任务读取失败：{errorMessage(tasks.error)}</Typography.Text>
-  if (!records.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前会话暂无研究任务，可以让 AI Agent 研究因子或运行策略回测。" />
+  if (!records.length) return null
   return <Card title="本会话研究任务" size="small" data-testid="agent-research-tasks">
     <Space direction="vertical" style={{ width: '100%' }}>
       {records.map(task => {

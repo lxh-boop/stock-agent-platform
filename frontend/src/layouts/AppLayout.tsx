@@ -40,13 +40,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const revealRef = useRef<HTMLButtonElement>(null)
   const scrollAnchor = useRef(0)
   const previousScrollTop = useRef(0)
-  const previousMessageScrollTop = useRef(0)
-  const messageScrollAnchor = useRef(0)
   const restoreHeaderFocus = useRef(false)
   const restoreRevealFocus = useRef(false)
   const navigate = useNavigate()
   const location = useLocation()
-  const isAgentPage = location.pathname === '/agent'
   const health = useApiHealth()
   const taskDrawerOpen = useAppStore((state) => state.taskDrawerOpen)
   const setTaskDrawerOpen = useAppStore((state) => state.setTaskDrawerOpen)
@@ -73,8 +70,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
     setOpenSubmenus([])
     scrollAnchor.current = 0
     previousScrollTop.current = 0
-    previousMessageScrollTop.current = 0
-    messageScrollAnchor.current = 0
     contentRef.current?.scrollTo({ top: 0 })
   }, [location.pathname])
 
@@ -105,18 +100,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const expandHeader = () => {
     scrollAnchor.current = contentRef.current?.scrollTop ?? 0
     previousScrollTop.current = scrollAnchor.current
-    previousMessageScrollTop.current = contentRef.current?.querySelector('.agent-chat-messages')?.scrollTop ?? 0
-    messageScrollAnchor.current = previousMessageScrollTop.current
     restoreHeaderFocus.current = true
     setHeaderCollapsed(false)
-  }
-
-  const collapseHeader = () => {
-    restoreRevealFocus.current = !!headerRef.current?.contains(document.activeElement)
-    setHeaderCollapsed(true)
-    setNavigationOpen(false)
-    setUserMenuOpen(false)
-    setOpenSubmenus([])
   }
 
   const navigateToPage: MenuProps['onClick'] = ({ key }) => {
@@ -130,7 +115,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <Layout className={`app-shell${isAgentPage ? ' app-shell--agent' : ''}`}>
+    <Layout className="app-shell">
       {headerCollapsed && (
         <button
           ref={revealRef}
@@ -143,15 +128,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           展开导航 <span aria-hidden="true">⌄</span>
         </button>
       )}
-      <Content ref={contentRef} className={`app-content-scroll${isAgentPage ? ' app-content-scroll--agent' : ''}`} data-testid="app-content-scroll" onScroll={isAgentPage ? undefined : handleContentScroll}
-        onScrollCapture={isAgentPage ? (event) => {
-          const target = event.target as HTMLElement
-          if (!target.classList.contains('agent-chat-messages')) return
-          const top = target.scrollTop
-          if (top < previousMessageScrollTop.current) messageScrollAnchor.current = top
-          previousMessageScrollTop.current = top
-          if (!headerCollapsed && top - messageScrollAnchor.current >= 24) collapseHeader()
-        } : undefined}>
+      <Content ref={contentRef} className="app-content-scroll" data-testid="app-content-scroll" onScroll={handleContentScroll}>
         <Header
           ref={headerRef}
           id="app-navigation-header"
@@ -176,7 +153,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
               </Button>
             </Dropdown>
             <div className="app-header-actions">
-              {isAgentPage && <Button size="small" onClick={collapseHeader}>收起导航</Button>}
               <div className="app-service-status">
                 <ApiStatus health={health.data} />
               </div>

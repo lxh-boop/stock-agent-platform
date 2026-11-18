@@ -17,7 +17,7 @@ vi.mock('react', async (original) => ({
   },
   useEffect: (effect: () => unknown) => { hooks.effects.push(effect) },
 }))
-vi.mock('antd', () => ({ Button: 'button', Dropdown: 'div', Input: { TextArea: 'textarea' }, Space: 'div', Typography: { Text: 'span' } }))
+vi.mock('antd', () => ({ Button: 'button', Input: { TextArea: 'textarea' }, Space: 'div', Typography: { Text: 'span' } }))
 
 type Props = Record<string, unknown> & { children?: ReactNode }
 function find(node: ReactNode, testId: string): Props {

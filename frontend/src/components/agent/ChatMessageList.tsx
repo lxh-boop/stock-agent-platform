@@ -1,8 +1,6 @@
 import { Button, Empty, Space, Tag, Typography } from 'antd'
 import type { AgentMessage } from '../../types/agent'
 import { MarkdownContent } from '../common/MarkdownContent'
-import { formatAgentTime } from '../../utils/agentTime'
-import { formatTaskTime } from '../../utils/taskTime'
 
 export function ChatMessageList({
   messages,
@@ -13,11 +11,14 @@ export function ChatMessageList({
   selectedRunId: string
   onSelectRun: (runId: string) => void
 }) {
-  return <div className={`agent-chat-messages${messages.length ? '' : ' agent-chat-messages--empty'}`} data-testid="agent-message-list">
-    {!messages.length && <Empty
+  if (!messages.length) {
+    return <Empty
       image={Empty.PRESENTED_IMAGE_SIMPLE}
       description="当前会话还没有消息，可以直接输入问题。"
-    />}
+    />
+  }
+
+  return <div className="agent-chat-messages" data-testid="agent-message-list">
     {messages.map((item) => {
       const assistant = item.role === 'assistant'
       return <div
@@ -28,7 +29,7 @@ export function ChatMessageList({
           <Space direction="vertical" size={8} style={{ width: '100%' }}>
             <Space wrap>
               <Tag color={assistant ? 'blue' : 'green'}>{assistant ? 'AI Agent' : '用户'}</Tag>
-              <Typography.Text type="secondary" className="agent-message-time" title={formatTaskTime(item.created_at)}>{formatAgentTime(item.created_at)}</Typography.Text>
+              <Typography.Text type="secondary">{item.created_at}</Typography.Text>
               {item.run_id ? <Button
                 size="small"
                 type={selectedRunId === item.run_id ? 'primary' : 'default'}
