@@ -27,6 +27,23 @@ class BM25Retriever:
         self.avgdl = 0.0
         self._jieba = self._load_jieba()
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        # Persist the tokenizer choice, not the imported module or its runtime locks.
+        state["_jieba_enabled"] = state.pop("_jieba", None) is not None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        restored = state.copy()
+        # Older successful pickles used the regex fallback (_jieba=None).
+        # Keep that query tokenizer consistent with their stored document tokens.
+        jieba_enabled = bool(restored.pop("_jieba_enabled", False))
+        restored.pop("_jieba", None)
+        self.__dict__.update(restored)
+        self._jieba = self._load_jieba() if jieba_enabled else None
+        if jieba_enabled and self._jieba is None:
+            raise RuntimeError("BM25 索引需要 jieba 分词器，当前不可用；请恢复该依赖或重新构建索引。")
+
     def _load_jieba(self):
         try:
             import jieba
