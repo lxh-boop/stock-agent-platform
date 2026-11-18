@@ -46,6 +46,7 @@ jobs:
           tests/unit/test_agent_graph_writes.py
           tests/unit/test_account_scoped_credentials.py
           tests/unit/test_ranker_feature_catchup.py
+          tests/unit/test_ranker_feature_contract.py
           tests/unit/test_scheduler_failure_details.py
 
   frontend-quality:

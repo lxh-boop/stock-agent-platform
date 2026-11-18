@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from data_tushare import get_token, init_tushare_pro, resolve_daily_data_end_date, to_ts_code
+from core.tushare_feature_contract import RANKER_INDEX_CODES
 
 
 DEFAULT_PREDICTION_HISTORY = (
@@ -28,14 +29,7 @@ DEFAULT_PREDICTION_HISTORY = (
     / "target_full_recent_v1_kronos_mini_t1_predictions.csv"
 )
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "model_precision" / "tushare"
-DEFAULT_INDEX_CODES = (
-    "000001.SH",
-    "399001.SZ",
-    "399006.SZ",
-    "000300.SH",
-    "000905.SH",
-    "000906.SH",
-)
+DEFAULT_INDEX_CODES = RANKER_INDEX_CODES
 
 DAILY_BASIC_FIELDS = (
     "ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,"

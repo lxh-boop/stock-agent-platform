@@ -12,17 +12,11 @@ import pandas as pd
 from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout as RequestsTimeout
 
 from config import ACTIVE_RANKING_FEATURE_DIR
+from core.tushare_feature_contract import RANKER_INDEX_CODES
 from data_tushare import init_tushare_pro, to_ts_code
 
 
-INDEX_CODES = (
-    "000001.SH",
-    "399001.SZ",
-    "399006.SZ",
-    "000300.SH",
-    "000905.SH",
-    "000852.SH",
-)
+INDEX_CODES = RANKER_INDEX_CODES
 DAILY_BASIC_FIELDS = (
     "ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,"
     "pe,pe_ttm,pb,ps,ps_ttm,dv_ratio,dv_ttm,total_share,float_share,"
