@@ -38,7 +38,7 @@ from ranking_runtime import (
     ACTIVE_MODEL_VERSION,
     generate_active_ranking,
 )
-from ranking_runtime.tushare_features import refresh_ranker_features_for_date
+from ranking_runtime.tushare_features import refresh_ranker_features_for_date, summarize_feature_refresh_failure
 from universe import get_stock_pool
 
 
@@ -274,9 +274,7 @@ def active_ranker_daily_update(
         stock_codes=set(stock_pool),
     )
     if not feature_refresh.get("ready"):
-        raise RuntimeError(
-            f"主动排名所需 Tushare 特征未就绪：{feature_refresh}"
-        )
+        raise RuntimeError(summarize_feature_refresh_failure(feature_refresh))
     ranking, ranking_report = generate_active_ranking(
         signal_date=signal_date,
         prediction_date=prediction_date,

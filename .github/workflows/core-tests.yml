@@ -45,6 +45,8 @@ jobs:
           tests/unit/test_agent_graph_engine.py
           tests/unit/test_agent_graph_writes.py
           tests/unit/test_account_scoped_credentials.py
+          tests/unit/test_ranker_feature_catchup.py
+          tests/unit/test_scheduler_failure_details.py
 
   frontend-quality:
     name: 前端类型、单测与生产构建

@@ -3,11 +3,13 @@ from __future__ import annotations
 from core.user_scope import owned_path
 
 import os
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout as RequestsTimeout
 
 from config import ACTIVE_RANKING_FEATURE_DIR
 from data_tushare import init_tushare_pro, to_ts_code
@@ -34,6 +36,36 @@ MONEYFLOW_FIELDS = (
 )
 MARGIN_FIELDS = "trade_date,ts_code,rzye,rqye,rzmre,rqyl,rzche,rqchl,rqmcl,rzrqye"
 INDEX_FIELDS = "ts_code,trade_date,close,open,high,low,pre_close,change,pct_chg,vol,amount"
+INDEX_REQUEST_DAYS = 250
+
+
+def _request_error_category(error: Exception) -> str:
+    """Only fixed categories leave this module; provider messages may contain secrets."""
+    text = str(error).lower()
+    if any(marker in text for marker in ("token不对", "token无效", "invalid token", "token is invalid")):
+        return "invalid_token"
+    if any(marker in text for marker in ("每天", "每日", "每小时", "daily limit", "quota")):
+        return "quota_exceeded"
+    if any(marker in text for marker in ("每分钟", "频率", "频次", "rate limit", "too many requests", "429")):
+        return "rate_limited"
+    if any(marker in text for marker in ("权限", "积分", "permission", "forbidden")):
+        return "permission_denied"
+    if isinstance(error, (TimeoutError, ConnectionError, RequestsTimeout, RequestsConnectionError)) or any(
+        marker in text for marker in ("timeout", "timed out", "connection", "连接", "temporar", "稍后", "502", "503", "504")
+    ):
+        return "temporarily_unavailable"
+    return "request_failed"
+
+
+def _request_index_range(pro: Any, *, code: str, start: str, end: str) -> Any:
+    for attempt in range(3):
+        try:
+            return pro.index_daily(ts_code=code, start_date=start, end_date=end, fields=INDEX_FIELDS)
+        except Exception as error:
+            category = _request_error_category(error)
+            if attempt == 2 or category not in {"rate_limited", "temporarily_unavailable"}:
+                raise
+            time.sleep(60 if category == "rate_limited" else 2 ** attempt)
 
 
 def _atomic_csv(frame: pd.DataFrame, path: Path) -> None:
@@ -134,7 +166,8 @@ def _fetch_missing_dates(
                 )
         except Exception as exc:
             errors.append(
-                {"trade_date": trade_date, "error_type": type(exc).__name__}
+                {"trade_date": trade_date, "error_type": type(exc).__name__,
+                 "error_category": _request_error_category(exc)}
             )
     combined = (
         pd.concat(frames, ignore_index=True, sort=False)
@@ -156,6 +189,60 @@ def _fetch_missing_dates(
         report["ready"] = False
 
 
+def _fetch_missing_index_dates(*, pro: Any, path: Path, trade_dates: list[str], report: dict[str, Any]) -> None:
+    """Fetch each index by bounded date range, retaining successful ranges for retries."""
+    cached = _read(path)
+    pairs = set() if cached.empty else set(zip(cached["ts_code"].astype(str), cached["trade_date"].astype(str)))
+    missing_dates = [day for day in trade_dates if any((code, day) not in pairs for code in INDEX_CODES)]
+    errors: list[dict[str, str]] = []
+    written = 0
+    for code in INDEX_CODES:
+        for offset in range(0, len(trade_dates), INDEX_REQUEST_DAYS):
+            window = trade_dates[offset:offset + INDEX_REQUEST_DAYS]
+            missing = [day for day in window if (code, day) not in pairs]
+            if not missing:
+                continue
+            try:
+                response = _request_index_range(pro, code=code, start=missing[0], end=missing[-1])
+                frame = pd.DataFrame() if response is None else pd.DataFrame(response)
+                if frame.empty:
+                    continue
+                frame["trade_date"] = frame["trade_date"].astype(str).str[:8]
+                frame["ts_code"] = frame["ts_code"].astype(str)
+                frame = frame.loc[frame["ts_code"].eq(code) & frame["trade_date"].isin(missing)]
+            except Exception as error:
+                errors.append({"ts_code": code, "start_date": missing[0], "end_date": missing[-1],
+                               "error_type": type(error).__name__, "error_category": _request_error_category(error)})
+                continue
+            if not frame.empty:
+                # Commit each successful range before requesting another; a later failure cannot discard it.
+                written += _upsert(path, frame, ["ts_code", "trade_date"])
+                pairs.update(zip(frame["ts_code"], frame["trade_date"]))
+    unresolved = [day for day in trade_dates if any((code, day) not in pairs for code in INDEX_CODES)]
+    report["endpoints"]["index_daily"] = {
+        "cached": not missing_dates, "required": True, "rows": written,
+        "requested_dates": len(missing_dates), "resolved_dates": len(missing_dates) - len(unresolved),
+        "unresolved_dates": unresolved, "errors": errors,
+    }
+    if unresolved:
+        report["ready"] = False
+
+
+def summarize_feature_refresh_failure(report: dict[str, Any]) -> str:
+    labels = {"invalid_token": "Token 无效", "permission_denied": "接口权限不足",
+              "quota_exceeded": "调用额度已用尽", "rate_limited": "接口限频",
+              "temporarily_unavailable": "网络或服务暂时不可用", "request_failed": "接口请求失败"}
+    details = []
+    for name, endpoint in report.get("endpoints", {}).items():
+        missing = endpoint.get("unresolved_dates") or []
+        if not endpoint.get("required") or not missing:
+            continue
+        reason = "、".join(sorted({labels.get(item.get("error_category"), "接口请求失败")
+                                  for item in endpoint.get("errors", [])}))
+        details.append(f"{name} 缺少 {len(missing)} 个交易日（{min(missing)}～{max(missing)}）；{reason or '接口返回数据不完整'}")
+    return "主动排名所需 Tushare 特征未就绪：" + "；".join(details or ["请检查必需数据源的覆盖范围"])
+
+
 def _open_dates_for_catchup(pro: Any, directory: Path, signal_date: str) -> list[str]:
     compact = str(signal_date).replace("-", "")[:8]
     signal = pd.to_datetime(compact, format="%Y%m%d", errors="raise")
@@ -165,8 +252,8 @@ def _open_dates_for_catchup(pro: Any, directory: Path, signal_date: str) -> list
         dates = _cached_dates(path)
         if dates:
             latest_dates.append(pd.Timestamp(max(dates)))
-    # 新用户没有别人的历史缓存；先补齐当前模型最长 250 日特征所需历史。
-    recent_start = signal - timedelta(days=450 if not latest_dates else 90)
+    # 每次检查模型最长 250 日特征的历史覆盖，避免重试时遗漏其他接口较早的缺口。
+    recent_start = signal - timedelta(days=450)
     catchup_start = min(latest_dates) + timedelta(days=1) if latest_dates else signal
     start = min(recent_start, catchup_start)
     calendar = pro.trade_cal(
@@ -246,29 +333,11 @@ def refresh_ranker_features_through(
         keys=["ts_code", "trade_date"],
         required=True,
     )
-    def fetch_indexes(date: str) -> pd.DataFrame:
-        frames = [
-            frame
-            for frame in (
-                pro.index_daily(
-                    ts_code=code,
-                    trade_date=date,
-                    fields=INDEX_FIELDS,
-                )
-                for code in INDEX_CODES
-            )
-            if frame is not None and not frame.empty
-        ]
-        return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
-
-    _fetch_missing_dates(
+    _fetch_missing_index_dates(
+        pro=pro,
         report=report,
-        name="index_daily",
         path=directory / "index_daily.csv",
         trade_dates=trade_dates,
-        fetch=fetch_indexes,
-        keys=["ts_code", "trade_date"],
-        required=True,
     )
     _fetch_missing_dates(
         report=report,
@@ -299,4 +368,4 @@ def refresh_ranker_features_for_date(**kwargs) -> dict[str, Any]:
     return refresh_ranker_features_through(**kwargs)
 
 
-__all__ = ["refresh_ranker_features_for_date", "refresh_ranker_features_through"]
+__all__ = ["refresh_ranker_features_for_date", "refresh_ranker_features_through", "summarize_feature_refresh_failure"]

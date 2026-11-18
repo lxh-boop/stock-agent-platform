@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,12 +52,39 @@ def _process_failure_details(path: Path) -> str:
     try:
         with path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
-            handle.seek(max(0, handle.tell() - 8192))
-            lines = handle.read().decode("utf-8", errors="replace").splitlines()
-        details = "\n".join(line for line in lines[-12:] if line.strip())
-        return _safe_scheduler_error(details)
+            start = max(0, handle.tell() - 65536)
+            handle.seek(max(0, start - 1))
+            tail = handle.read(65537)
+            if start:
+                previous, tail = tail[:1], tail[1:]
+                if previous != b"\n":
+                    tail = tail.partition(b"\n")[2]  # Never expose a partial line/credential.
+        lines = tail.decode("utf-8", errors="replace").splitlines()
     except OSError:
         return "未能读取子进程错误日志"
+
+    # Extract the exception before sanitizing: the sanitizer deliberately removes
+    # traceback blocks, which otherwise also hides errors following warnings.
+    traceback_start = next((index for index in range(len(lines) - 1, -1, -1)
+                            if lines[index].startswith("Traceback (most recent call last):")), None)
+    candidates = lines[traceback_start + 1:] if traceback_start is not None else reversed(lines)
+    exception = re.compile(r"(?P<kind>(?:[A-Za-z_]\w*\.)*[A-Z_]\w*)(?::.*)?$")
+    for line in candidates:
+        match = exception.fullmatch(line)
+        if match:
+            kind = match.group("kind").rsplit(".", 1)[-1]
+            if (traceback_start is not None or not kind.endswith("Warning")) and kind not in {"DETAIL", "HINT", "CONTEXT", "LINE", "INFO", "WARNING", "ERROR"}:
+                return _safe_scheduler_error(line)
+
+    # Native libraries can fail without a Python traceback. Keep their bounded
+    # messages, but do not mistake warning/source lines for the actual failure.
+    if traceback_start is None:
+        messages = [line for line in lines if line and not line[0].isspace()
+                    and not re.search(r"\b\w*Warning:", line)
+                    and not line.startswith(("Traceback", "During handling", "The above exception", "|", "+"))]
+        if messages:
+            return _safe_scheduler_error("\n".join(messages[-12:]))
+    return "未找到完整的子进程异常摘要，请检查服务器任务日志。"
 
 
 def run_market_update_from_local_config(
