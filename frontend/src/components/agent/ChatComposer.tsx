@@ -1,5 +1,5 @@
 import { Button, Input, Space, Typography } from 'antd'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 const QUICK_QUESTIONS = [
   '查看当前模拟盘账户和持仓',
@@ -18,12 +18,25 @@ export function ChatComposer({
   onSubmit: (value: string) => Promise<void> | void
 }) {
   const [value, setValue] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
+  const busy = loading || submitting
 
   const submit = async (question = value) => {
     const normalized = question.trim()
-    if (!normalized || disabled || loading) return
-    await onSubmit(normalized)
-    setValue('')
+    if (!normalized || disabled || loading || submittingRef.current) return
+    submittingRef.current = true
+    setSubmitting(true)
+    try {
+      await onSubmit(normalized)
+      setValue((current) => current === question ? '' : current)
+    } catch {
+      // The parent shows the API error. Retain the draft and consume the
+      // rejection so both the button and Enter remain usable for a retry.
+    } finally {
+      submittingRef.current = false
+      setSubmitting(false)
+    }
   }
 
   return <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -32,7 +45,7 @@ export function ChatComposer({
       {QUICK_QUESTIONS.map((item) => <Button
         key={item}
         size="small"
-        disabled={disabled || loading}
+        disabled={disabled || busy}
         onClick={() => void submit(item)}
       >{item}</Button>)}
     </Space>
@@ -55,7 +68,7 @@ export function ChatComposer({
       <Typography.Text type="secondary">Enter 发送，Shift + Enter 换行</Typography.Text>
       <Button
         type="primary"
-        loading={loading}
+        loading={busy}
         disabled={disabled || !value.trim()}
         onClick={() => void submit()}
       data-testid="agent-send-button"

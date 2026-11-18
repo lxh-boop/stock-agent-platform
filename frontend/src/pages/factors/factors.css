@@ -1,0 +1,7 @@
+.factor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.factor-expression { margin: 0; padding: 12px; border-radius: 8px; background: #f8fafc; color: #334155; white-space: pre-wrap; overflow-wrap: anywhere; font-family: Consolas, "SFMono-Regular", monospace; font-size: 13px; line-height: 1.6; }
+.factor-expression-input { font-family: Consolas, "SFMono-Regular", monospace; }
+.factor-template-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.factor-template { display: flex; flex-direction: column; gap: 8px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; min-width: 0; }
+.factor-name { height: auto; white-space: normal; text-align: left; padding-inline: 0; }
+.factor-row-selected > td { background: #f1f5f9 !important; }

@@ -1,0 +1,20 @@
+{
+  "task_type": "agent.run",
+  "args": [],
+  "kwargs": {
+    "query": "查看当前模拟盘持仓",
+    "user_id": "alice",
+    "top_k": 10,
+    "session_id": "conversation-offline"
+  },
+  "owner_id": "alice",
+  "session_id": "conversation-offline",
+  "metadata": {
+    "surface": "react-agent",
+    "conversation_id": "conversation-offline",
+    "user_message_id": "message-offline",
+    "query_preview": "查看当前模拟盘持仓"
+  },
+  "timeout_seconds": 99900,
+  "max_retries": 0
+}

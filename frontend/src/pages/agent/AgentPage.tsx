@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Empty, Row, Space, Tabs, Tag, Typography, message } from 'antd'
-import { agentApi } from '../../api/agentApi'
+import { agentApi, agentRunRequest } from '../../api/agentApi'
+import { errorMessage } from '../../api/errors'
 import { acknowledgeTask, cancelTask, getTask, listTasks, submitTask } from '../../api/taskApi'
 import { AgentRunPanel } from '../../components/agent/AgentRunPanel'
 import { AgentTaskProgress } from '../../components/agent/AgentTaskProgress'
@@ -14,6 +15,7 @@ import { EmptyState } from '../../components/common/EmptyState'
 import { PageHeader } from '../../components/common/PageHeader'
 import { PageLoading } from '../../components/common/PageLoading'
 import { useAgentTaskEvents } from '../../hooks/useAgentTaskEvents'
+import { isUnavailableAgentTask, useAgentTaskLookup } from '../../hooks/useAgentTaskLookup'
 import { useCurrentUserId } from '../../hooks/useCurrentUserId'
 import { useAgentTaskStore } from '../../stores/agentTaskStore'
 import { TERMINAL_TASK_STATUSES } from '../../types/task'
@@ -59,7 +61,7 @@ export function AgentPage() {
       setConversationId(session.conversation_id)
       await queryClient.invalidateQueries({ queryKey: ['web', 'agent', 'sessions', userId] })
     },
-    onError: (error) => message.error(String(error)),
+    onError: (error) => message.error(errorMessage(error)),
   })
 
   useEffect(() => {
@@ -79,7 +81,7 @@ export function AgentPage() {
   const renameSession = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => agentApi.renameSession(userId, id, title),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['web', 'agent', 'sessions', userId] }),
-    onError: (error) => message.error(String(error)),
+    onError: (error) => message.error(errorMessage(error)),
   })
   const deleteSession = useMutation({
     mutationFn: (id: string) => agentApi.deleteSession(userId, id),
@@ -87,7 +89,7 @@ export function AgentPage() {
       if (conversationId === deletedId) setConversationId('')
       await queryClient.invalidateQueries({ queryKey: ['web', 'agent', 'sessions', userId] })
     },
-    onError: (error) => message.error(String(error)),
+    onError: (error) => message.error(errorMessage(error)),
   })
 
   const messages = useQuery({
@@ -119,26 +121,16 @@ export function AgentPage() {
   const activeTaskId = storedTaskConversation === conversationId ? storedTaskId : ''
 
   const taskQuery = useQuery({
-    queryKey: ['agent-task', activeTaskId],
+    queryKey: ['agent-task', userId, activeTaskId],
     queryFn: () => getTask(activeTaskId),
     enabled: Boolean(activeTaskId),
+    retry: (count, error) => !isUnavailableAgentTask(error) && count < 2,
     refetchInterval: (query) => {
       const status = query.state.data?.status
       return status && TERMINAL_TASK_STATUSES.has(status) ? false : 1_500
     },
   })
-  useEffect(() => {
-    if (taskQuery.data) setTask(taskQuery.data)
-  }, [setTask, taskQuery.data])
-
-  // Self-heal: the persisted task row is gone server-side, so it can never
-  // reach a terminal status and would keep the composer disabled forever.
-  useEffect(() => {
-    const error = taskQuery.error
-    if (!error || !activeTaskId) return
-    const text = error instanceof Error ? `${error.message} ${(error as { code?: string }).code ?? ''}` : String(error)
-    if (/unknown task/i.test(text)) clearTask()
-  }, [activeTaskId, clearTask, taskQuery.error])
+  useAgentTaskLookup(activeTaskId, conversationId, userId, taskQuery.data, taskQuery.error)
 
   // Self-heal: a persisted task whose conversation no longer exists cannot be
   // finalized or selected again, so it would lock every conversation's composer.
@@ -173,7 +165,7 @@ export function AgentPage() {
   const cancel = useMutation({
     mutationFn: (taskId: string) => cancelTask(taskId),
     onSuccess: setTask,
-    onError: (error) => message.error(String(error)),
+    onError: (error) => message.error(errorMessage(error)),
   })
 
   const submit = useMutation({
@@ -181,25 +173,7 @@ export function AgentPage() {
       if (!conversationId) throw new Error('请先创建会话')
       const messageId = randomId('msg_react')
       await agentApi.createMessage(userId, conversationId, question, messageId)
-      const task = await submitTask({
-        task_type: 'agent.run',
-        args: [question],
-        kwargs: {
-          user_id: userId,
-          top_k: 10,
-          session_id: conversationId,
-        },
-        owner_id: userId,
-        session_id: conversationId,
-        metadata: {
-          surface: 'react-agent',
-          conversation_id: conversationId,
-          user_message_id: messageId,
-          query_preview: question.slice(0, 160),
-        },
-        timeout_seconds: 99900,
-        max_retries: 0,
-      })
+      const task = await submitTask(agentRunRequest(userId, conversationId, question, messageId))
       return task
     },
     onSuccess: async (task) => {
@@ -210,7 +184,7 @@ export function AgentPage() {
         queryClient.invalidateQueries({ queryKey: ['web', 'agent', 'sessions', userId] }),
       ])
     },
-    onError: (error) => message.error(String(error)),
+    onError: (error) => message.error(errorMessage(error)),
   })
 
   useEffect(() => {
@@ -245,7 +219,7 @@ export function AgentPage() {
         clearTask()
       } catch (error) {
         finalizingRef.current = ''
-        message.error(`Agent 结果保存失败，已自动重试：${String(error)}`)
+        message.error(`Agent 结果保存失败，已自动重试：${errorMessage(error)}`)
       }
     })()
   }, [agentTask, clearTask, conversationId, queryClient, userId])
@@ -265,7 +239,7 @@ export function AgentPage() {
 
   if (sessions.isLoading) return <PageLoading />
   if (sessions.error) {
-    return <EmptyState title="AI Agent 会话加载失败" description={String(sessions.error)} />
+    return <EmptyState title="AI Agent 会话加载失败" description={errorMessage(sessions.error)} />
   }
 
   return <Space direction="vertical" size="large" style={{ width: '100%' }} data-testid="agent-page">

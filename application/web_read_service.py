@@ -518,7 +518,7 @@ class WebReadApplicationService:
             except Exception as exc:
                 return {"status": "unavailable", "error": type(exc).__name__}
 
-        return {"agent_runtime": safe(build_agent_runtime_health_summary)}
+        return {"agent_runtime": safe(build_agent_runtime_health_summary, user_id=user_id)}
 
     def monitor_history(self, *, user_id: str = "default", limit: int = 30) -> list[dict[str, Any]]:
         from application.system_monitor_service import list_system_monitor_history

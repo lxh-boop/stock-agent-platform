@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.user_scope import current_owner
 from database.schemas import json_dumps, json_loads
 from database.postgres_store import PostgresStore
 
@@ -57,15 +58,15 @@ class SystemMonitorRepository:
         return self._decode_snapshot(self.store.get("system_monitor_snapshots", {"snapshot_id": snapshot_id}))
 
     def list_snapshots(self, user_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
+        user_id = current_owner() or user_id
         filters = {"user_id": user_id} if user_id else None
         rows = self.store.list(
             "system_monitor_snapshots",
             filters=filters,
             order_by="updated_at",
+            descending=True,
+            limit=limit,
         )
-        if limit is not None:
-            rows = rows[-int(limit):]
-        rows = list(reversed(rows))
         return [self._decode_snapshot(row) or {} for row in rows]
 
     def upsert_alert(self, record: dict[str, Any]) -> dict[str, Any]:
@@ -77,6 +78,7 @@ class SystemMonitorRepository:
         user_id: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        user_id = current_owner() or user_id
         filters = {}
         if snapshot_id:
             filters["snapshot_id"] = snapshot_id
@@ -86,7 +88,7 @@ class SystemMonitorRepository:
             "system_monitor_alerts",
             filters=filters or None,
             order_by="updated_at",
+            descending=True,
+            limit=limit,
         )
-        if limit is not None:
-            rows = rows[-int(limit):]
-        return list(reversed(rows))
+        return rows

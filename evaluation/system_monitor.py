@@ -24,8 +24,7 @@ from factor_provider import latest_alpha158
 from database.connection import get_connection
 from database.repositories import SystemMonitorRepository
 from database.schemas import json_loads
-from agent_graph.runtime.health import collect_runtime_health_summary
-from portfolio.storage import PortfolioStorage
+from core.user_scope import current_owner, owned_path, user_scope
 from rag.dense_retriever import DEFAULT_DENSE_MODEL, DENSE_INDEX_SCHEMA_VERSION
 
 
@@ -66,14 +65,14 @@ def _safe_float(value: Any, default: float | None = None) -> float | None:
 
 
 def _read_csv(path: str | Path) -> pd.DataFrame:
-    file_path = Path(path)
+    file_path = owned_path(path)
     if not file_path.exists() or file_path.stat().st_size == 0:
         return pd.DataFrame()
     return pd.read_csv(file_path, dtype={"code": str, "stock_code": str}, encoding="utf-8-sig")
 
 
 def _file_version(path: str | Path) -> str:
-    file_path = Path(path)
+    file_path = owned_path(path)
     if not file_path.exists():
         return "missing"
     stat = file_path.stat()
@@ -85,10 +84,10 @@ def _table_exists(db_path: str | Path | None, table: str) -> bool:
     del db_path
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=%s",
+            "SELECT to_regclass(%s) IS NOT NULL AS present",
             (table,),
         ).fetchone()
-    return row is not None
+    return bool(row and row["present"])
 
 
 def _query_all(db_path: str | Path | None, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -226,7 +225,7 @@ def collect_model_metrics(output_dir: str | Path = OUTPUT_DIR) -> tuple[dict[str
     backtest_trades = _read_csv(BACKTEST_TRADES_PATH)
     metrics: dict[str, Any] = {}
     try:
-        metrics_path = Path(BACKTEST_METRICS_PATH)
+        metrics_path = owned_path(BACKTEST_METRICS_PATH)
         if metrics_path.exists():
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -284,20 +283,20 @@ def _read_dense_index_status(paths: list[Path]) -> tuple[dict[str, Any], str]:
             "embedding_model_name": DEFAULT_DENSE_MODEL,
             "embedding_dimension": 0,
             "dense_index_schema_version": DENSE_INDEX_SCHEMA_VERSION,
-            "dense_load_error": f"{type(exc).__name__}: {exc}",
+            "dense_load_error": type(exc).__name__,
         }, ""
     return {
         "dense_available": bool(payload.get("available")),
         "embedding_model_name": payload.get("embedding_model_name") or payload.get("model_name") or DEFAULT_DENSE_MODEL,
         "embedding_dimension": int(payload.get("embedding_dimension") or 0),
         "dense_index_schema_version": int(payload.get("schema_version") or DENSE_INDEX_SCHEMA_VERSION),
-        "dense_load_error": str(payload.get("load_error") or ""),
+        "dense_load_error": "dense model unavailable" if payload.get("load_error") else "",
     }, str(payload.get("index_version") or "")
 
 
 def collect_rag_metrics(db_path: str | Path, output_dir: str | Path = OUTPUT_DIR) -> tuple[dict[str, Any], list[str], str]:
     missing: list[str] = []
-    output_root = Path(output_dir)
+    output_root = owned_path(output_dir)
     inferred_data_root = output_root.parent / "data"
     retrieval_rows = _query_all(db_path, "SELECT * FROM rag_retrieval_log ORDER BY created_at") if _table_exists(db_path, "rag_retrieval_log") else []
     query_count = len(retrieval_rows)
@@ -360,14 +359,58 @@ def _duration_seconds(start: Any, end: Any) -> float | None:
     return max(0.0, (end_dt - start_dt).total_seconds())
 
 
-def collect_agent_metrics(db_path: str | Path) -> tuple[dict[str, Any], list[str], str]:
+def _agent_records(db_path: str | Path | None, user_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    # These tables are shared across accounts, unlike the personal news tables.
+    owner = current_owner() or user_id
+    runs = _query_all(
+        db_path,
+        "SELECT run_id, status, started_at, finished_at, metadata_json FROM agent_runs WHERE user_id=%s ORDER BY created_at",
+        (owner,),
+    ) if _table_exists(db_path, "agent_runs") else []
+    calls = _query_all(
+        db_path,
+        "SELECT status, error_type, error_message, retry_count FROM agent_tool_calls WHERE user_id=%s ORDER BY started_at",
+        (owner,),
+    ) if _table_exists(db_path, "agent_tool_calls") else []
+    return runs, calls
+
+
+def _runtime_health(runs: list[dict[str, Any]], calls: list[dict[str, Any]]) -> dict[str, Any]:
+    successful = {"completed", "success", "succeeded", "ok"}
+    failed = {"failed", "error", "timed_out"}
+    statuses = [str(row.get("status") or "").lower() for row in runs]
+    durations = [_duration_seconds(row.get("started_at"), row.get("finished_at")) for row in runs]
+    durations = [value for value in durations if value is not None]
+    tool_failures = sum(str(row.get("status") or "").lower() not in successful for row in calls)
+    failures = sum(status in failed for status in statuses)
+    return {
+        "status": "no_data" if not runs else "warning" if failures or tool_failures else "ok",
+        "source": "recorded_runs",
+        "run_count": len(runs),
+        "failed_run_count": failures,
+        "success_rate": _ratio(sum(status in successful for status in statuses), len(runs)),
+        "p50_latency": float(pd.Series(durations).quantile(0.5)) if durations else None,
+        "p95_latency": float(pd.Series(durations).quantile(0.95)) if durations else None,
+        "tool_failure_rate": _ratio(tool_failures, len(calls)),
+        "retry_count": sum(int(row.get("retry_count") or 0) for row in calls),
+        "timeout_count": sum("timeout" in str(row.get("error_type") or "").lower() for row in calls),
+        "resumable_run_count": sum(status == "waiting_for_approval" for status in statuses),
+    }
+
+
+def collect_runtime_health_summary(db_path: str | Path | None = None, *, user_id: str = "default") -> dict[str, Any]:
+    """Summarize recorded execution outcomes without importing the old runtime."""
+    return _runtime_health(*_agent_records(db_path, user_id))
+
+
+def collect_agent_metrics(db_path: str | Path, user_id: str = "default") -> tuple[dict[str, Any], list[str], str]:
     missing: list[str] = []
     if not _table_exists(db_path, "agent_runs"):
-        return {"agent_run_count": 0, "runtime_health": collect_runtime_health_summary(db_path)}, ["agent_runs"], ""
-    runs = _query_all(db_path, "SELECT * FROM agent_runs ORDER BY created_at")
-    tool_calls = _query_all(db_path, "SELECT * FROM agent_tool_calls ORDER BY started_at") if _table_exists(db_path, "agent_tool_calls") else []
-    sources = _query_all(db_path, "SELECT * FROM agent_sources ORDER BY retrieved_at") if _table_exists(db_path, "agent_sources") else []
-    steps = _query_all(db_path, "SELECT * FROM agent_steps ORDER BY started_at") if _table_exists(db_path, "agent_steps") else []
+        return {"agent_run_count": 0, "runtime_health": _runtime_health([], [])}, ["agent_runs"], ""
+    owner = current_owner() or user_id
+    runs, tool_calls = _agent_records(db_path, owner)
+    sources = _query_all(db_path, "SELECT run_id FROM agent_sources WHERE user_id=%s ORDER BY retrieved_at", (owner,)) if _table_exists(db_path, "agent_sources") else []
+    steps = _query_all(db_path, "SELECT s.run_id FROM agent_steps s JOIN agent_runs r ON r.run_id=s.run_id WHERE r.user_id=%s ORDER BY s.started_at", (owner,)) if _table_exists(db_path, "agent_steps") else []
     run_count = len(runs)
     status_values = [str(row.get("status") or "").lower() for row in runs]
     success_count = sum(1 for status in status_values if status in {"completed", "success", "succeeded"})
@@ -389,9 +432,7 @@ def collect_agent_metrics(db_path: str | Path) -> tuple[dict[str, Any], list[str
     tool_failure_count = sum(1 for row in tool_calls if str(row.get("status") or "").lower() not in {"completed", "success", "succeeded", "ok"})
     parameter_missing = sum(1 for row in tool_calls if "missing" in str(row.get("error_message") or "").lower() or "parameter" in str(row.get("error_message") or "").lower())
     latest_run_id = str(runs[-1].get("run_id") or "") if runs else ""
-    runtime_health = collect_runtime_health_summary(db_path)
-    circuit_states = runtime_health.get("circuit_states") if isinstance(runtime_health, dict) else {}
-    circuit_open_count = int((circuit_states or {}).get("open") or 0)
+    runtime_health = _runtime_health(runs, tool_calls)
     return {
         "agent_run_count": run_count,
         "success_rate": _ratio(success_count, run_count),
@@ -412,7 +453,7 @@ def collect_agent_metrics(db_path: str | Path) -> tuple[dict[str, Any], list[str
         "runtime_tool_failure_rate": runtime_health.get("tool_failure_rate"),
         "runtime_retry_count": runtime_health.get("retry_count"),
         "runtime_timeout_count": runtime_health.get("timeout_count"),
-        "runtime_circuit_open_count": circuit_open_count,
+        "runtime_circuit_open_count": None,
         "runtime_over_budget_count": runtime_health.get("over_budget_count"),
         "runtime_resumable_run_count": runtime_health.get("resumable_run_count"),
         "runtime_health": runtime_health,
@@ -424,23 +465,7 @@ def _load_current_position_rows(
     user_id: str,
     output_dir: str | Path,
 ) -> tuple[list[dict[str, Any]], str]:
-    storage_dir = Path(output_dir) / "portfolio" / user_id
-    storage = PortfolioStorage(db_path=db_path, output_dir=storage_dir)
-    local_positions_exist = storage.positions_latest_path.exists() or storage.positions_path.exists()
-    if local_positions_exist:
-        rows = []
-        for position in storage.load_positions(None):
-            rows.append(
-                {
-                    "stock_code": str(getattr(position, "stock_code", "") or ""),
-                    "stock_name": str(getattr(position, "stock_name", "") or ""),
-                    "market_value": getattr(position, "market_value", 0.0),
-                    "position_ratio": getattr(position, "position_ratio", 0.0),
-                    "industry": str(getattr(position, "industry", "") or ""),
-                    "updated_at": str(getattr(position, "updated_at", "") or ""),
-                }
-            )
-        return rows, "latest_position_file"
+    del output_dir  # PostgreSQL remains authoritative even when a CSV export exists.
     rows = (
         _query_all(db_path, "SELECT * FROM portfolio_position WHERE user_id=%s ORDER BY updated_at", (user_id,))
         if _table_exists(db_path, "portfolio_position")
@@ -470,8 +495,9 @@ def collect_portfolio_metrics(
     portfolio_return = _safe_float(last_nav.get("time_weighted_return") or last_nav.get("cumulative_return"))
     benchmark_return = None
     try:
-        if Path(BACKTEST_METRICS_PATH).exists():
-            metrics = json.loads(Path(BACKTEST_METRICS_PATH).read_text(encoding="utf-8"))
+        metrics_path = owned_path(BACKTEST_METRICS_PATH)
+        if metrics_path.exists():
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
             benchmark_return = _safe_float(metrics.get("benchmark_return"))
             information_ratio = _safe_float(metrics.get("information_ratio"))
         else:
@@ -594,15 +620,27 @@ def build_system_monitor_snapshot(
     output_dir: str | Path = OUTPUT_DIR,
     thresholds_path: str | Path = DEFAULT_THRESHOLDS_PATH,
 ) -> MonitorCollectionResult:
+    owner = current_owner() or user_id
+    with user_scope(owner):
+        return _build_system_monitor_snapshot(
+            user_id=owner, trade_date=trade_date, output_dir=output_dir,
+            thresholds_path=thresholds_path,
+        )
+
+
+def _build_system_monitor_snapshot(
+    *, user_id: str, trade_date: str | None, output_dir: str | Path,
+    thresholds_path: str | Path,
+) -> MonitorCollectionResult:
     db = None
-    output_root = Path(output_dir)
+    output_root = owned_path(output_dir)
     ranking = _read_csv(output_root / "ranking_latest.csv")
     resolved_trade_date = _resolve_trade_date(trade_date, ranking)
     missing: list[str] = []
     data_metrics, data_missing = collect_data_metrics(db, output_root)
     model_metrics, model_missing = collect_model_metrics(output_root)
     rag_metrics, rag_missing, rag_index_version = collect_rag_metrics(db, output_root)
-    agent_metrics, agent_missing, run_id = collect_agent_metrics(db)
+    agent_metrics, agent_missing, run_id = collect_agent_metrics(db, user_id)
     portfolio_metrics, portfolio_missing, portfolio_snapshot_id = collect_portfolio_metrics(db, user_id, output_root)
     missing.extend(f"data:{item}" for item in data_missing)
     missing.extend(f"model:{item}" for item in model_missing)

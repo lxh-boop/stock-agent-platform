@@ -2,6 +2,7 @@ import { httpClient } from './httpClient'
 import { unwrapEnvelope } from './envelope'
 import { getWeb } from './webApi'
 import type { OperationResponse } from '../types/api'
+import type { TaskSubmitRequest } from '../types/task'
 import type {
   AgentMessage,
   AgentMessagePage,
@@ -13,6 +14,22 @@ import type {
 } from '../types/agent'
 
 const BASE = '/api/v1/web/agent'
+
+export function agentRunRequest(userId: string, conversationId: string, question: string, messageId: string): TaskSubmitRequest {
+  return {
+    task_type: 'agent.run',
+    args: [],
+    kwargs: { query: question, user_id: userId, top_k: 10, session_id: conversationId },
+    owner_id: userId,
+    session_id: conversationId,
+    metadata: {
+      surface: 'react-agent', conversation_id: conversationId,
+      user_message_id: messageId, query_preview: question.slice(0, 160),
+    },
+    timeout_seconds: 99900,
+    max_retries: 0,
+  }
+}
 
 async function send<T>(
   method: 'post' | 'patch' | 'delete',

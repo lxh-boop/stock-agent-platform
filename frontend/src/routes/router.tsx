@@ -15,6 +15,7 @@ import { SettingsPage } from '../pages/dashboard/SettingsPage'
 import { SystemMonitorPage } from '../pages/monitor/SystemMonitorPage'
 import { PaperTradingPage } from '../pages/paper/PaperTradingPage'
 import { AgentPage } from '../pages/agent/AgentPage'
+import { FactorLibraryPage } from '../pages/factors/FactorLibraryPage'
 import { useAuthStore } from '../stores/authStore'
 
 function RequireAuth() {
@@ -43,6 +44,7 @@ export function AppRoutes() {
       <Route path="/dashboard" element={<RankingPage />} />
       <Route path="/stocks" element={<StockDetailPage />} />
       <Route path="/stocks/:stockCode" element={<StockDetailPage />} />
+      <Route path="/factors" element={<FactorLibraryPage />} />
       <Route path="/models/metrics" element={<ModelMetricsPage />} />
       <Route path="/models/search" element={<ModelSearchPage />} />
       <Route path="/backtests" element={<BacktestPage />} />
