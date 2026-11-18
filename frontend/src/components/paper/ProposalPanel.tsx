@@ -49,7 +49,7 @@ export function ProposalPanel({ userId, proposals }: { userId: string; proposals
     onSuccess: async () => { message.success('预案已拒绝'); await refresh() },
     onError: (error) => message.error(String(error)),
   })
-  if (!proposals.length) return <PaperSectionCard sectionKey="proposals" title="待确认预案"><Alert type="info" showIcon message="当前没有资金或回填待确认预案" /></PaperSectionCard>
+  if (!proposals.length) return <PaperSectionCard sectionKey="proposals" title="待确认预案"><Typography.Text type="secondary">当前没有资金或回填待确认预案</Typography.Text></PaperSectionCard>
   return <PaperSectionCard sectionKey="proposals" title="待确认预案" extra={<Tag color="warning">服务端权威状态</Tag>}>
     <Collapse items={proposals.map((proposal) => {
       const typed = (confirmations[proposal.plan_id] ?? '').trim().toUpperCase()

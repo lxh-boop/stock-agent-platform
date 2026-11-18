@@ -85,7 +85,7 @@ export function BacktestPage() {
   return <Space direction="vertical" size="large" style={{width:'100%'}}>
     <PageHeader title="策略研究" description="个人Alpha158 → 策略回测 / 因子分析 / 每日选股。页面与Agent使用同一服务。" />
     <Alert type="warning" showIcon message="研究模拟，不是实盘撮合" description="支持次日执行、动态权重、仓位函数与指数择时。固定涨跌幅和公司行动均为近似；不模拟冲击、退市清算，不冒充历史指数成分。缺数据报错，不生成演示收益。" />
-    {catalog.error?<Alert type="error" message={backtestError(catalog.error)} />:!catalog.data?.coverage?<Alert type="info" message={catalog.data?.message??'正在读取个人因子库…'} />:<Typography.Text>可用数据：{catalog.data.coverage.start_date} ～ {catalog.data.coverage.end_date}，{catalog.data.coverage.stock_count} 只股票。</Typography.Text>}
+    {catalog.error?<Alert type="error" message={backtestError(catalog.error)} />:!catalog.data?.coverage?<Typography.Text type="secondary">{catalog.data?.message??'正在读取个人因子库…'}</Typography.Text>:<Typography.Text>可用数据：{catalog.data.coverage.start_date} ～ {catalog.data.coverage.end_date}，{catalog.data.coverage.stock_count} 只股票。</Typography.Text>}
     <Card title={strategyId?'编辑个人策略':'新建研究'} extra={<Button onClick={openJson}>导入 / 查看 JSON 参数</Button>}>
       <Tabs activeKey={kind} onChange={value=>setKind(value as StudyKind)} items={(Object.keys(studyLabels) as StudyKind[]).map(key=>({key,label:studyLabels[key]}))} />
       <ResearchForm form={form} kind={kind} catalog={catalog.data} />

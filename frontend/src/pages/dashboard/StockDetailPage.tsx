@@ -12,7 +12,6 @@ import { StockSelector } from '../../components/dashboard/StockSelector'
 import { EmptyState } from '../../components/common/EmptyState'
 import { PageHeader } from '../../components/common/PageHeader'
 import { PageLoading } from '../../components/common/PageLoading'
-import { ReadOnlyNotice } from '../../components/common/ReadOnlyNotice'
 import { formatValue } from '../../components/common/ValueText'
 
 export function StockDetailPage() {
@@ -26,7 +25,7 @@ export function StockDetailPage() {
   const [evidenceQuery,setEvidenceQuery]=useState(''); const evidence=useQuery({queryKey:['web','stock',code,'evidence',evidenceQuery],queryFn:()=>stockApi.evidence(code,evidenceQuery,12),enabled:Boolean(code && evidenceQuery)})
   if (rankings.isLoading || (code && detail.isLoading)) return <PageLoading/>
   if (!code) return <EmptyState title="暂无股票" description="排名数据中没有可选择的股票。"/>
-  return <Space direction="vertical" size="large" style={{width:'100%'}}><PageHeader title="个股详情" description="读取排名、行情、证据和已有解释缓存，不生成新解释。"/><ReadOnlyNotice/><StockSelector records={rankings.data?.records??[]} value={code} onChange={(next)=>navigate(`/stocks/${next}`)}/>
+  return <Space direction="vertical" size="large" style={{width:'100%'}}><PageHeader title="个股详情" description="读取排名、行情、证据和已有解释缓存，不生成新解释。"/><StockSelector records={rankings.data?.records??[]} value={code} onChange={(next)=>navigate(`/stocks/${next}`)}/>
   <Row gutter={[16,16]}><Col xs={24} lg={8}><Card><Statistic title="股票" value={`${detail.data?.stock_code ?? code} ${detail.data?.name ?? ''}`}/><Statistic title="本地事件数" value={detail.data?.event_count ?? 0}/></Card></Col><Col xs={24} lg={16}><Card title="当前快照"><Descriptions size="small" column={{xs:1,sm:2,md:3}}>{Object.entries({...detail.data?.ranking,...detail.data?.market}).slice(0,18).map(([k,v])=><Descriptions.Item key={k} label={k}>{formatValue(v)}</Descriptions.Item>)}</Descriptions></Card></Col></Row>
   <StockPriceChart records={history.data?.records??[]}/><EvidenceSearchPanel loading={evidence.isFetching} onSearch={setEvidenceQuery}/>{evidenceQuery&&<EventFactorTable records={evidence.data?.records??[]}/>}<ExplanationPanel explanation={explanation.data}/></Space>
 }

@@ -29,12 +29,6 @@ export function HealthPage() {
           <Descriptions.Item label="deployment_mode">{health.data.deployment_mode}</Descriptions.Item>
         </Descriptions>
       </Card>
-      <Alert
-        type="info"
-        showIcon
-        message="生产运行边界"
-        description="浏览器只访问公开 API，不读取数据库、模型文件或服务器路径；长任务继续由 Task Runtime 执行并通过 SSE 恢复。"
-      />
     </Space>
   )
 }

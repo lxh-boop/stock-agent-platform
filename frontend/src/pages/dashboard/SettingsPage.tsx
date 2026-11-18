@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Button,
   Card,
   Checkbox,
@@ -161,13 +160,6 @@ export function SettingsPage() {
         title="系统设置"
         description="配置本地模型、远程大模型 API 和 Tushare；敏感值只在保存请求中提交，不会由服务端回显。"
       />
-      <Alert
-        type="info"
-        showIcon
-        message="配置生效范围"
-        description="保存后，下一次 Agent、新闻或行情任务会重新读取配置。正在运行的任务继续使用启动时的配置快照。"
-      />
-      <Alert type="info" showIcon message="个人数据与任务" description="数据源、Token、更新计划和日更结果仅属于当前账号；所有普通用户都可以使用。" />
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>

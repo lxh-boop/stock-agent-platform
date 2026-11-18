@@ -273,18 +273,9 @@ export function AgentPage() {
       title="AI Agent"
       description="会话、任务、SSE 与审批均通过 FastAPI；不连接真实交易。"
     />
-    <Alert
-      type="info"
-      showIcon
-      message={`当前用户：${userId} · 当前会话：${conversationId ? conversationId.slice(-10) : '-'}`}
-      description="浏览器只保存会话标识、task_id 和 last_event_id，不保存回答结果、持仓、密钥或确认令牌。"
-    />
-    {anotherConversationTask ? <Alert
-      type="info"
-      showIcon
-      message="另一个会话的任务正在运行，不影响本会话提问"
-      description={`任务所属会话：${storedTaskConversation.slice(-10)}。不同会话可以并发回答；切回该会话可查看其任务进度。`}
-    /> : null}
+    {anotherConversationTask ? <Typography.Text type="secondary">
+      会话 {storedTaskConversation.slice(-10)} 的任务正在运行；切回该会话可查看进度，本会话可继续提问。
+    </Typography.Text> : null}
 
     <Row gutter={16} className="agent-workspace">
       <Col xs={24} lg={6}>

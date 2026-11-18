@@ -1,4 +1,4 @@
-import { Alert, Button, List, Space, Typography } from 'antd'
+import { Button, List, Space, Typography } from 'antd'
 import type { TaskEvent, TaskRecord } from '../../types/task'
 import { TERMINAL_TASK_STATUSES } from '../../types/task'
 import { TaskProgress } from '../tasks/TaskProgress'
@@ -17,14 +17,8 @@ export function AgentTaskProgress({
   if (!task) return null
   const terminal = TERMINAL_TASK_STATUSES.has(task.status)
   return <div className="agent-task-panel" data-testid="agent-task-panel">
-    <Alert
-      type={task.status === 'failed' || task.status === 'timed_out' || task.status === 'interrupted' ? 'error' : terminal ? 'success' : 'info'}
-      showIcon
-      message={`Agent 任务 · ${task.status}`}
-      description={task.message || task.task_id}
-      action={!terminal ? <Button danger loading={cancelling} onClick={onCancel}>取消任务</Button> : undefined}
-    />
     <TaskProgress task={task} />
+    {!terminal ? <Button danger loading={cancelling} onClick={onCancel} style={{ alignSelf: 'flex-start' }}>取消任务</Button> : null}
     <List
       size="small"
       header={<Typography.Text strong>最近 SSE 事件</Typography.Text>}

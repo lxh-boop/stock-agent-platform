@@ -34,7 +34,7 @@ export function RuntimePage() {
       </Card>
       <Card title="SSE 诊断任务" data-testid="task-card">
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {task ? <TaskProgress task={task} /> : <Alert type="info" message="尚未提交任务" showIcon />}
+          {task ? <TaskProgress task={task} /> : <Typography.Text type="secondary">尚未提交任务</Typography.Text>}
           <Space wrap>
             <Button type="primary" loading={submit.isPending} onClick={() => submit.mutate()} data-testid="run-diagnostic-task">
               运行 SSE 连接测试

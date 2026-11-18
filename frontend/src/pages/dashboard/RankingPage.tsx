@@ -8,7 +8,6 @@ import { RankingTable } from '../../components/dashboard/RankingTable'
 import { EmptyState } from '../../components/common/EmptyState'
 import { PageHeader } from '../../components/common/PageHeader'
 import { PageLoading } from '../../components/common/PageLoading'
-import { ReadOnlyNotice } from '../../components/common/ReadOnlyNotice'
 
 export function RankingPage() {
   const navigate = useNavigate()
@@ -24,7 +23,6 @@ export function RankingPage() {
   const percentage = (value?: number) => Number(((value ?? 0) * 100).toFixed(2))
   return <Space direction="vertical" size="large" style={{width:'100%'}}>
     <PageHeader title="首页 / 预测排名" description="展示主动截面排序模型的下一交易日 Top15；排名由两个已注册模型的当日截面百分位秩等权融合得到。排序分不是个股上涨概率。" />
-    <ReadOnlyNotice />
     {summary.data && <ModelStatusCards summary={summary.data}/>}
     <Card title={`最新预测排名 · ${rankings.data?.total ?? 0} 条`}><RankingTable records={records} onSelect={(code)=>navigate(`/stocks/${code}`)}/></Card>
     <Card title="独立留出集验证">

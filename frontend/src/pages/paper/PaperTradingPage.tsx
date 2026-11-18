@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert, Space, Tag, Typography } from 'antd'
+import { Alert, Space } from 'antd'
 import { paperTradingApi } from '../../api/paperTradingApi'
 import { queryKeys } from '../../api/queryKeys'
 import { PageHeader } from '../../components/common/PageHeader'
@@ -16,11 +16,9 @@ import { ProposalPanel } from '../../components/paper/ProposalPanel'
 import { UserProfileForm } from '../../components/paper/UserProfileForm'
 import { PaperSectionControls, PaperSectionProvider } from '../../components/paper/PaperSectionCard'
 import { useCurrentUserId } from '../../hooks/useCurrentUserId'
-import { useAuthStore } from '../../stores/authStore'
 
 export function PaperTradingPage() {
   const userId = useCurrentUserId()
-  const user = useAuthStore((state) => state.user)
 
   const snapshot = useQuery({
     queryKey: queryKeys.paperTrading(userId),
@@ -53,12 +51,6 @@ export function PaperTradingPage() {
           <PageHeader title="AI 模拟盘" description="模拟盘状态、受保护写操作和长任务统一通过 FastAPI；不连接真实交易。" />
           <PaperSectionControls />
         </div>
-        <Alert
-          type="info"
-          showIcon
-          message={<Space wrap>当前模拟盘用户：<Typography.Text strong>{userId}</Typography.Text>{user?.role === 'admin' ? <Tag color="gold">管理员</Tag> : null}</Space>}
-          description="模拟盘身份即登录账号，由服务端会话强制校验；如需查看其他用户的数据，请使用对应账号登录。"
-        />
       <Alert
         type="warning"
         showIcon
