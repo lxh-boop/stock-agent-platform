@@ -1,4 +1,4 @@
-import { Button, Input, Space, Typography } from 'antd'
+import { Button, Dropdown, Input, Space, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 
 export interface StrategyDraft { text: string; prefillId: string }
@@ -52,25 +52,16 @@ export function ChatComposer({
     }
   }
 
-  return <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+  return <div className="agent-composer-inner">
     {pendingDraft && <Space wrap data-testid="strategy-draft-conflict">
       <Typography.Text>策略草稿已准备好，当前输入已保留。</Typography.Text>
       <Button disabled={busy} onClick={() => { setValue(pendingDraft.text); setPendingDraft(null) }}>使用策略草稿替换输入</Button>
       <Button onClick={() => setPendingDraft(null)}>忽略草稿</Button>
     </Space>}
-    <Space wrap>
-      <Typography.Text type="secondary">快捷提问：</Typography.Text>
-      {QUICK_QUESTIONS.map((item) => <Button
-        key={item}
-        size="small"
-        disabled={disabled || busy}
-        onClick={() => void submit(item)}
-      >{item}</Button>)}
-    </Space>
     <Input.TextArea
       value={value}
       onChange={(event) => setValue(event.target.value)}
-      autoSize={{ minRows: 3, maxRows: 8 }}
+      autoSize={{ minRows: 2, maxRows: 5 }}
       maxLength={20_000}
       placeholder="请输入问题，例如：研究 MA5 因子策略，或查看最近回测报告"
       data-testid="agent-composer-input"
@@ -83,14 +74,24 @@ export function ChatComposer({
       }}
     />
     <div className="agent-composer-actions">
-      <Typography.Text type="secondary">Enter 发送，Shift + Enter 换行</Typography.Text>
+      <Space size={8}>
+        <Dropdown
+          trigger={['click']}
+          placement="topLeft"
+          disabled={disabled || busy}
+          menu={{ items: QUICK_QUESTIONS.map((item) => ({ key: item, label: item })), onClick: ({ key }) => void submit(key) }}
+        >
+          <Button size="small" disabled={disabled || busy} data-testid="agent-quick-questions">快捷提问</Button>
+        </Dropdown>
+        <Typography.Text type="secondary" className="agent-composer-hint">Enter 发送 · Shift + Enter 换行</Typography.Text>
+      </Space>
       <Button
         type="primary"
         loading={busy}
         disabled={disabled || !value.trim()}
         onClick={() => void submit()}
-      data-testid="agent-send-button"
+        data-testid="agent-send-button"
       >发送</Button>
     </div>
-  </Space>
+  </div>
 }

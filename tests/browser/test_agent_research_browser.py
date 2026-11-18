@@ -1,4 +1,4 @@
-"""Built React in Chromium: approval recovery, research SSE and save retries."""
+"""Built React in Chromium: chat space, approval recovery and research retries."""
 import json
 import os
 from pathlib import Path
@@ -46,7 +46,8 @@ def agent_browser(request):
             if path == '/api/v1/health': data={'status':'ok','version':'test','deployment_mode':'test'}
             elif path == '/api/v1/web/agent/sessions':
                 data={'records':[{'conversation_id':SESSION,'user_id':USER,'title':'策略研究测试','status':'active',
-                    'language':'zh','created_at':'2026-11-18','updated_at':'2026-11-18','last_message_at':'','last_run_id':''}],'total':1}
+                    'language':'zh','created_at':'2026-11-18','updated_at':'2026-11-18',
+                    'last_message_at':'2026-11-18T08:00:00.163027+00:00','last_run_id':''}],'total':1}
             elif path.endswith('/messages'):
                 data={'records':state['messages'],'total':len(state['messages'])}
             elif path.endswith('/strategy-proposal'): data={'available':False,'proposal':None,'versions':[]}
@@ -127,12 +128,18 @@ def agent_browser(request):
 
 
 def decide(page, confirm=True):
-    page.get_by_role('tab',name=re.compile('待确认操作')).click()
+    page.get_by_role('button',name=re.compile('^待确认')).click()
     panel=page.get_by_role('tabpanel').filter(has=page.get_by_text(APPROVAL,exact=False))
     panel.get_by_role('button',name=re.compile('^确.?认$' if confirm else '^拒.?绝$')).click()
-    dialog=page.get_by_role('dialog')
+    dialog=page.locator('.ant-modal:visible')
     if confirm: dialog.get_by_placeholder('CONFIRM-AAAAAA').fill('CONFIRM-AAAAAA')
     dialog.get_by_role('button',name=re.compile('^确认执行$' if confirm else '^拒.?绝$')).click()
+
+
+def open_research(page):
+    page.get_by_test_id('agent-controls-button').click()
+    page.get_by_role('tab',name='研究任务',exact=True).click()
+    return page.get_by_test_id('agent-research-tasks')
 
 
 def test_agent_approval_research_sse_and_idempotent_save_retry(agent_browser):
@@ -140,14 +147,14 @@ def test_agent_approval_research_sse_and_idempotent_save_retry(agent_browser):
     page,state=agent_browser
     assert not any(path.endswith('/confirm') for _,path,_ in state['calls'])
     decide(page)
-    research=page.get_by_test_id('agent-research-tasks')
+    research=open_research(page)
     expect(research.get_by_role('link',name='查看研究报告')).to_have_attribute('href',f'/strategies?report={RUN}')
     expect(page.get_by_test_id('agent-composer-input')).to_be_enabled()
     state['save_fail']=True
     research.get_by_role('button',name='保存策略',exact=True).click()
-    page.get_by_role('dialog').get_by_role('button',name=re.compile('确.?定')).click()
+    page.locator('.ant-modal:visible').get_by_role('button',name=re.compile('确.?定')).click()
     expect(page.get_by_text('请重试保存',exact=True)).to_be_visible()
-    page.get_by_role('dialog').get_by_role('button',name=re.compile('确.?定')).click()
+    page.locator('.ant-modal:visible').get_by_role('button',name=re.compile('确.?定')).click()
     expect(page.get_by_text('已从完成报告保存策略',exact=True)).to_be_visible()
     saves=[body for _,path,body in state['calls'] if path=='/api/v1/web/strategies/from-report']
     assert len(saves)==2 and saves[0]['request_id']==saves[1]['request_id']
@@ -172,7 +179,7 @@ def test_agent_resume_recovery_after_refresh_does_not_resubmit_approval(agent_br
     expect(page.get_by_test_id('agent-composer-input')).to_be_disabled()
     state['release']=True
     page.reload()
-    expect(page.get_by_test_id('agent-research-tasks').get_by_role('link',name='查看研究报告')).to_be_visible()
+    expect(open_research(page).get_by_role('link',name='查看研究报告')).to_be_visible()
     assert len([1 for _,path,_ in state['calls'] if path.endswith('/confirm')])==1
     assert state['resumed']
 
@@ -183,11 +190,83 @@ def test_agent_confirmation_error_preserves_input_and_same_request(agent_browser
     state['confirm_fail']=True
     decide(page)
     expect(page.get_by_text('请重试审批',exact=True)).to_be_visible()
-    dialog=page.get_by_role('dialog')
+    dialog=page.locator('.ant-modal:visible')
     expect(dialog.get_by_placeholder('CONFIRM-AAAAAA')).to_have_value('CONFIRM-AAAAAA')
     dialog.get_by_role('button',name=re.compile('确认执行')).click()
-    expect(page.get_by_test_id('agent-research-tasks').get_by_role('link',name='查看研究报告')).to_be_visible()
+    expect(open_research(page).get_by_role('link',name='查看研究报告')).to_be_visible()
     controls=[body for _,path,body in state['calls'] if path.endswith('/confirm')]
     assert len(controls)==2 and controls[0]['request_id']==controls[1]['request_id']
     assert controls[0]['idempotency_key']==controls[1]['idempotency_key']
+
+
+@pytest.mark.parametrize('width,height',[(1440,900),(839,600),(390,844),(839,386)])
+def test_agent_chat_fills_window_and_keeps_composer_visible(agent_browser,width,height):
+    from playwright.sync_api import expect
+    page,state=agent_browser
+    state['resumed']=True
+    state['messages']=[{
+        'message_id':f'long-message-{index}','conversation_id':SESSION,'user_id':USER,
+        'role':'assistant' if index%2 else 'user','run_id':'','language':'zh',
+        'created_at':f'2026-11-18T08:{index:02d}:00.163027+00:00',
+        'content':('请分析最近的因子表现。' if not index%2 else
+                   '### 因子研究结果\n\n'+('\n\n'.join(f'第 {line+1} 项：本次分析基于已保存的市场数据，展示收益、风险与数据日期范围。'*3 for line in range(6))))
+    } for index in range(12)]
+    page.set_viewport_size({'width':width,'height':height})
+    page.reload()
+    messages=page.get_by_test_id('agent-message-list')
+    expect(messages.get_by_text('因子研究结果',exact=True)).to_have_count(6)
+    composer=page.get_by_test_id('agent-composer-input')
+    send=page.get_by_test_id('agent-send-button')
+
+    def bounds(locator):
+        return locator.evaluate('(el) => { const r=el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right} }')
+
+    initial=bounds(messages)
+    assert initial['height'] >= int(height*(.20 if height<500 else .40)),initial
+    assert bounds(send)['bottom'] <= height, bounds(send)
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    assert page.get_by_test_id('app-content-scroll').evaluate('(el) => el.scrollHeight <= el.clientHeight + 1')
+
+    toggle=page.get_by_test_id('agent-conversations-toggle')
+    if width>=992:
+        toggle.click()
+        expect(toggle).to_have_attribute('aria-expanded','false')
+        assert bounds(messages)['width'] > initial['width']+150
+        toggle.click()
+        expect(toggle).to_have_attribute('aria-expanded','true')
+    else:
+        expect(page.get_by_test_id('agent-conversation-list')).not_to_be_visible()
+        toggle.click()
+        conversation_drawer=page.get_by_test_id('agent-conversation-drawer')
+        expect(conversation_drawer).to_be_visible()
+        conversation_drawer.get_by_test_id('agent-conversation-item').click()
+        expect(conversation_drawer).not_to_be_visible()
+        assert bounds(messages)['width'] >= width*.8
+
+    messages.hover()
+    page.mouse.wheel(0,450)
+    reveal=page.get_by_role('button',name=re.compile('展开导航'))
+    expect(reveal).to_be_visible()
+    expect(page.locator('#app-navigation-header')).to_have_attribute('aria-hidden','true')
+    # Collapsing navigation must return its height to the conversation.
+    page.wait_for_function('before => document.querySelector(".agent-chat-messages").getBoundingClientRect().height > before + 40',arg=initial['height'])
+    compact=bounds(messages)
+    composer.fill('\n'.join(f'补充研究约束 {index}' for index in range(12)))
+    expect(send).to_be_enabled()
+    assert bounds(send)['bottom'] <= height, bounds(send)
+    assert bounds(composer)['bottom'] <= bounds(send)['bottom']
+    assert bounds(messages)['height'] >= (140 if height<500 else 160)
+    state['layout']={'viewport':{'width':width,'height':height},'initial_messages':initial,
+                     'collapsed_navigation_messages':compact,'long_draft_messages':bounds(messages),'send':bounds(send)}
+    reveal.click()
+    expect(page.locator('#app-navigation-header')).to_have_attribute('aria-hidden','false')
+    assert bounds(send)['bottom'] <= height, bounds(send)
+    expect(composer).to_have_value('\n'.join(f'补充研究约束 {index}' for index in range(12)))
+    previous_scroll=messages.evaluate('(el) => el.scrollTop')
+    messages.hover()
+    page.mouse.wheel(0,-100)
+    page.wait_for_function('before => document.querySelector(".agent-chat-messages").scrollTop < before',arg=previous_scroll)
+    expect(page.locator('#app-navigation-header')).to_have_attribute('aria-hidden','false')
+    page.mouse.wheel(0,180)
+    expect(reveal).to_be_visible()
 

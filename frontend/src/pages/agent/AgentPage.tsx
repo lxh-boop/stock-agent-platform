@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Col, Empty, Row, Space, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Drawer, Grid, Space, Tabs, Tag, Typography, message } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { agentApi, agentRunRequest } from '../../api/agentApi'
 import { errorMessage } from '../../api/errors'
@@ -14,7 +14,6 @@ import { ConversationList } from '../../components/agent/ConversationList'
 import { PendingActionPanel } from '../../components/agent/PendingActionPanel'
 import { StrategyProposalPanel } from '../../components/agent/StrategyProposalPanel'
 import { EmptyState } from '../../components/common/EmptyState'
-import { PageHeader } from '../../components/common/PageHeader'
 import { PageLoading } from '../../components/common/PageLoading'
 import { useAgentTaskEvents } from '../../hooks/useAgentTaskEvents'
 import { isUnavailableAgentTask, useAgentTaskLookup } from '../../hooks/useAgentTaskLookup'
@@ -40,6 +39,12 @@ export function AgentPage() {
   const location = useLocation(), navigate = useNavigate()
   const [strategyDraft, setStrategyDraft] = useState<StrategyDraft | null>(null)
   const [controlTab, setControlTab] = useState('run')
+  const [controlsOpen, setControlsOpen] = useState(false)
+  const [conversationsOpen, setConversationsOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const screens = Grid.useBreakpoint()
+  const showSidebar = screens.lg && !sidebarCollapsed
+  const openControls = (tab: string) => { setControlTab(tab); setControlsOpen(true) }
 
   const [conversationId, setConversationId] = useState('')
   const conversationRef = useRef(conversationId)
@@ -268,52 +273,61 @@ export function AgentPage() {
     return <EmptyState title="AI Agent 会话加载失败" description={errorMessage(sessions.error)} />
   }
 
-  return <Space direction="vertical" size="large" style={{ width: '100%' }} data-testid="agent-page">
-    <PageHeader
-      title="AI Agent"
-      description="查询本人数据、研究因子和策略，查看后台任务与待确认操作。"
-    />
-    {anotherConversationTask ? <Typography.Text type="secondary">
+  const conversationList = <ConversationList
+    sessions={sessions.data?.records ?? []}
+    activeId={conversationId}
+    loading={sessions.isLoading}
+    onSelect={(id) => {
+      setConversationId(id)
+      setSelectedRunId('')
+      setMessageLimit(30)
+      setConversationsOpen(false)
+    }}
+    onCreate={() => { createSession.mutate(); setConversationsOpen(false) }}
+    onRename={(id, title) => renameSession.mutate({ id, title })}
+    onDelete={(id) => deleteSession.mutate(id)}
+  />
+
+  return <div className="agent-page" data-testid="agent-page">
+    {anotherConversationTask ? <Typography.Text type="secondary" className="agent-other-task">
       会话 {storedTaskConversation.slice(-10)} 的任务正在运行；切回该会话可查看进度，本会话可继续提问。
     </Typography.Text> : null}
 
-    <Row gutter={16} className="agent-workspace">
-      <Col xs={24} lg={6}>
+    <div className="agent-workspace">
+      {showSidebar && <aside className="agent-sidebar" aria-label="会话列表">
         <Card className="agent-conversation-card" styles={{ body: { padding: 0 } }}>
-          <ConversationList
-            sessions={sessions.data?.records ?? []}
-            activeId={conversationId}
-            loading={sessions.isLoading}
-            onSelect={(id) => {
-              setConversationId(id)
-              setSelectedRunId('')
-              setMessageLimit(30)
-            }}
-            onCreate={() => createSession.mutate()}
-            onRename={(id, title) => renameSession.mutate({ id, title })}
-            onDelete={(id) => deleteSession.mutate(id)}
-          />
+          {conversationList}
         </Card>
-      </Col>
-      <Col xs={24} lg={18}>
+      </aside>}
         <Card
           className="agent-chat-card"
-          title={<Space><Typography.Text strong>{currentSession?.title || 'AI Agent 对话'}</Typography.Text><Tag>{messages.data?.total ?? 0} 条消息</Tag></Space>}
-          extra={(messages.data?.records.length ?? 0) >= messageLimit
-            ? <Button size="small" onClick={() => setMessageLimit((value) => Math.min(100, value + 20))}>加载更早消息</Button>
-            : null}
         >
+          <div className="agent-chat-toolbar">
+            <div className="agent-chat-heading">
+              <Button size="small" data-testid="agent-conversations-toggle" aria-label={showSidebar ? '收起会话列表' : '展开会话列表'} aria-expanded={Boolean(showSidebar || conversationsOpen)}
+                onClick={() => screens.lg ? setSidebarCollapsed(value => !value) : setConversationsOpen(true)}>
+                {showSidebar ? '收起会话' : '会话'}
+              </Button>
+              <Typography.Text strong ellipsis title={currentSession?.title || 'AI Agent 对话'}>{currentSession?.title || 'AI Agent 对话'}</Typography.Text>
+              <Tag className="agent-message-count">{messages.data?.total ?? 0} 条消息</Tag>
+            </div>
+            <Space size={6} className="agent-chat-tools">
+              {((pending.data?.total ?? 0) > 0 || pending.error) && <Button size="small" type="primary" onClick={() => openControls('pending')}>待确认 · {pending.data?.total ?? '?'}</Button>}
+              <Button size="small" data-testid="agent-controls-button" onClick={() => openControls('research')}>任务与详情</Button>
+            </Space>
+          </div>
+          {(messages.data?.records.length ?? 0) >= messageLimit && messageLimit < 100 && <Button className="agent-load-messages" size="small" type="text" onClick={() => setMessageLimit(value => Math.min(100, value + 20))}>加载更早消息</Button>}
+          {messages.error && <Alert type="error" message={errorMessage(messages.error)} action={<Button size="small" onClick={() => void messages.refetch()}>重试</Button>} />}
           <ChatMessageList
             messages={messages.data?.records ?? []}
             selectedRunId={selectedRunId}
-            onSelectRun={setSelectedRunId}
+            onSelectRun={id => { setSelectedRunId(id); openControls('run') }}
           />
-          <AgentTaskProgress
-            task={agentTask?.session_id === conversationId ? agentTask : null}
-            events={events}
-            cancelling={cancel.isPending}
-            onCancel={() => agentTask && cancel.mutate(agentTask.task_id)}
-          />
+          {taskActive && <div className="agent-task-summary" role="status">
+            <Typography.Text ellipsis>{agentTask?.message || '正在处理，请稍候…'}</Typography.Text>
+            <Button size="small" type="link" onClick={() => openControls('run')}>查看进度</Button>
+            <Button size="small" danger loading={cancel.isPending} disabled={!agentTask} onClick={() => agentTask && cancel.mutate(agentTask.task_id)}>取消</Button>
+          </div>}
           <div
             className="agent-composer"
             data-task-active={String(taskActive)}
@@ -326,14 +340,13 @@ export function AgentPage() {
               onSubmit={(value) => submit.mutateAsync(value).then(() => undefined)}
             />
           </div>
-          {(pending.data?.total ?? 0) > 0 && <Button type="link" onClick={() => setControlTab('pending')}>有 {pending.data?.total} 项操作需要确认，请在下方待确认操作中处理</Button>}
         </Card>
-      </Col>
-    </Row>
-
-    <AgentResearchTasks key={`${userId}:${conversationId}`} userId={userId} conversationId={conversationId} />
-
-    <Card title="Agent 运行与控制中心">
+    </div>
+    <div className="agent-disclaimer" title="本项目仅用于机器学习、金融数据分析和项目展示，不构成投资建议，不用于实盘交易。">本项目仅用于机器学习、金融数据分析和项目展示，不构成投资建议，不用于实盘交易。</div>
+    <Drawer title="会话" open={conversationsOpen && !screens.lg} onClose={() => setConversationsOpen(false)} placement="left" size={300} styles={{ body: { padding: 0 } }} data-testid="agent-conversation-drawer">
+      {!screens.lg && conversationList}
+    </Drawer>
+    <Drawer title="任务与详情" open={controlsOpen} onClose={() => setControlsOpen(false)} size={760} forceRender className="agent-control-drawer" data-testid="agent-control-drawer">
       <Tabs
         activeKey={controlTab}
         onChange={setControlTab}
@@ -341,7 +354,18 @@ export function AgentPage() {
           {
             key: 'run',
             label: '运行详情',
-            children: <AgentRunPanel userId={userId} runId={selectedRunId} />,
+            children: <><AgentTaskProgress
+              task={agentTask?.session_id === conversationId ? agentTask : null}
+              events={events}
+              cancelling={cancel.isPending}
+              onCancel={() => agentTask && cancel.mutate(agentTask.task_id)}
+            /><AgentRunPanel userId={userId} runId={selectedRunId} /></>,
+          },
+          {
+            key: 'research',
+            label: '研究任务',
+            forceRender: true,
+            children: <AgentResearchTasks key={`${userId}:${conversationId}`} userId={userId} conversationId={conversationId} />,
           },
           {
             key: 'pending',
@@ -354,7 +378,7 @@ export function AgentPage() {
                 if (useAuthStore.getState().user?.user_id !== userId || task.session_id !== conversationId) return
                 setRecovery(task.task_id, conversationId)
                 setTask(task)
-                setControlTab('run')
+                setControlsOpen(false)
               }}
             /></>,
           },
@@ -365,13 +389,6 @@ export function AgentPage() {
           },
         ]}
       />
-    </Card>
-
-    <Alert
-      type="warning"
-      showIcon
-      message="本项目仅用于机器学习、金融数据分析和项目展示"
-      description="不构成投资建议，不用于实盘交易。Agent 生成的模拟盘写操作仍需二次确认并由服务端 WriteGateway 重新校验。"
-    />
-  </Space>
+    </Drawer>
+  </div>
 }
