@@ -19,9 +19,15 @@ export const useTaskStore = create<TaskState>()(
       lastSequence: 0,
       events: [],
       task: null,
-      setTask: (task) => set({ activeTaskId: task?.task_id ?? '', task }),
+      setTask: (task) => set((state) => {
+        const activeTaskId = task?.task_id ?? ''
+        return activeTaskId === state.activeTaskId
+          ? { activeTaskId, task }
+          : { activeTaskId, task, events: [], lastSequence: 0 }
+      }),
       appendEvent: (event) =>
         set((state) => {
+          if (event.task_id !== state.activeTaskId) return state
           if (state.events.some((item) => item.sequence === event.sequence)) return state
           return {
             events: [...state.events, event].slice(-200),

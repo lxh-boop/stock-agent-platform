@@ -21,6 +21,7 @@ import {
 import { createWriteMeta } from '../../api/writeOperationApi'
 import { ApiContractError } from '../../api/errors'
 import { settingsApi } from '../../api/settingsApi'
+import { useCurrentUserId } from '../../hooks/useCurrentUserId'
 import { SchedulerStatusPanel } from '../../components/dashboard/SchedulerStatusPanel'
 import { EmptyState } from '../../components/common/EmptyState'
 import { PageHeader } from '../../components/common/PageHeader'
@@ -83,9 +84,10 @@ function configuredText(custom: boolean, fallback: boolean, configured: boolean)
 }
 
 export function SettingsPage() {
+  const ownerId = useCurrentUserId()
   const queryClient = useQueryClient()
   const [form] = Form.useForm<SettingsFormValues>()
-  const query = useQuery({ queryKey: ['web', 'settings'], queryFn: settingsApi.get })
+  const query = useQuery({ queryKey: ['web', 'settings', ownerId], queryFn: settingsApi.get })
 
   const settings = useMemo<PublicSettings | undefined>(() => query.data
     ? { ...EMPTY_SETTINGS, ...query.data, feature_flags: query.data.feature_flags ?? {}, credentials: query.data.credentials ?? EMPTY_SETTINGS.credentials, llm: query.data.llm ?? EMPTY_SETTINGS.llm, configuration: query.data.configuration ?? EMPTY_SETTINGS.configuration, scheduler: query.data.scheduler ?? EMPTY_SETTINGS.scheduler }

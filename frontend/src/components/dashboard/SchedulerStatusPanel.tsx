@@ -5,6 +5,7 @@ import { submitTask } from '../../api/taskApi'
 import { useCurrentUserId } from '../../hooks/useCurrentUserId'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTaskStore } from '../../stores/taskStore'
+import { useAuthStore } from '../../stores/authStore'
 import type { PublicSettings } from '../../types/settings'
 import { TERMINAL_TASK_STATUSES } from '../../types/task'
 import { TaskProgress } from '../tasks/TaskProgress'
@@ -25,6 +26,10 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
   const setTask = useTaskStore((state) => state.setTask)
   const clearTask = useTaskStore((state) => state.clear)
   const queryClient = useQueryClient()
+  const isCurrentOwner = () => {
+    const auth = useAuthStore.getState()
+    return auth.status === 'authed' && auth.user?.user_id === ownerId
+  }
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -44,11 +49,15 @@ export function SchedulerStatusPanel({ settings }: { settings: PublicSettings })
         max_retries: 0,
       })
     },
-    onSuccess: (task) => {
+    onSuccess: async (task) => {
+      if (!isCurrentOwner() || task.owner_id !== ownerId) return
       setTask(task)
       message.success('我的日更任务已提交，可在任务中心查看')
+      await queryClient.invalidateQueries({ queryKey: ['web', 'settings'] })
     },
-    onError: (error) => message.error(`任务提交失败：${String(error)}`),
+    onError: (error) => {
+      if (isCurrentOwner()) message.error(`任务提交失败：${String(error)}`)
+    },
   })
 
   useEffect(() => {
