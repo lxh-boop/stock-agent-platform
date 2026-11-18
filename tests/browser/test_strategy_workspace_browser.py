@@ -268,8 +268,14 @@ def test_strategy_workspace_mobile_keeps_cards_and_report_inside_viewport(worksp
     card.get_by_role('button', name='详情', exact=True).click()
     drawer = page.get_by_role('dialog')
     expect(drawer).to_contain_text('下面展示的是旧版本报告')
+    # Content can appear before the slide-in transition finishes. Wait for the
+    # drawer to enter the viewport and allow subpixel layout rounding.
+    page.wait_for_function('''el => {
+        const box = el.getBoundingClientRect();
+        return box.x >= -1 && box.right <= window.innerWidth + 1;
+    }''', arg=drawer.element_handle())
     box = drawer.bounding_box()
-    assert box and box['width'] <= 390
+    assert box and box['width'] <= 391 and box['x'] >= -1 and box['x'] + box['width'] <= 391
     drawer.get_by_role('tab', name='逐日持仓', exact=True).click()
     expect(drawer).to_contain_text('000001')
     page.screenshot(path='browser-results/strategy-workspace-mobile-report.png', full_page=True)
